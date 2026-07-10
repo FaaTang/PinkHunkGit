@@ -1,3 +1,6 @@
+# Extension build output
+out/
+
 # Logs
 logs
 *.log
@@ -61,6 +64,12 @@ web_modules/
 
 # Output of 'npm pack'
 *.tgz
+
+# VS Code extension package
+*.vsix
+
+# IDE
+.idea/
 
 # Yarn Integrity file
 .yarn-integrity

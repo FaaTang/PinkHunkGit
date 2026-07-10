@@ -1,0 +1,14 @@
+.vscode/**
+.vscode-test/**
+src/**
+node_modules/**
+docs/**
+.idea/**
+.github/**
+.gitignore
+.vscodeignore
+tsconfig.json
+**/*.map
+**/*.ts
+**/*.vsix
+!media/**

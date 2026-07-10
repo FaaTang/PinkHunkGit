@@ -1,0 +1,442 @@
+:root {
+  color-scheme: light dark;
+  --bg: var(--vscode-editor-background);
+  --fg: var(--vscode-foreground);
+  --border: var(--vscode-panel-border, var(--vscode-widget-border, #444));
+  --list-hover: var(--vscode-list-hoverBackground);
+  --list-active: var(--vscode-list-activeSelectionBackground);
+  --list-active-fg: var(--vscode-list-activeSelectionForeground);
+  --input-bg: var(--vscode-input-background);
+  --input-fg: var(--vscode-input-foreground);
+  --input-border: var(--vscode-input-border, var(--border));
+  --btn-bg: var(--vscode-button-secondaryBackground);
+  --btn-fg: var(--vscode-button-secondaryForeground);
+  --btn-primary-bg: var(--vscode-button-background);
+  --btn-primary-fg: var(--vscode-button-foreground);
+  --error: var(--vscode-errorForeground);
+  --added: var(--vscode-gitDecoration-addedResourceForeground, #3fb950);
+  --modified: var(--vscode-gitDecoration-modifiedResourceForeground, #d29922);
+  --deleted: var(--vscode-gitDecoration-deletedResourceForeground, #f85149);
+  --untracked: var(--vscode-gitDecoration-untrackedResourceForeground, #3fb950);
+  --diff-add-bg: color-mix(in srgb, var(--added) 18%, transparent);
+  --diff-del-bg: color-mix(in srgb, var(--deleted) 18%, transparent);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.toolbar-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+}
+
+.panel-toolbar button {
+  min-width: 28px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.banner {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--error) 12%, var(--bg));
+  color: var(--error);
+  font-size: 12px;
+}
+
+.banner.info {
+  background: color-mix(in srgb, var(--modified) 12%, var(--bg));
+  color: var(--fg);
+}
+
+.repo-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.repo-bar label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.repo-bar select {
+  width: 100%;
+  background: var(--input-bg);
+  color: var(--input-fg);
+  border: 1px solid var(--input-border);
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.main {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  min-height: 0;
+  flex: 1;
+}
+
+/* Sidebar activity bar — file list + commit form only */
+body.sidebar-mode .main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+body.sidebar-mode .file-pane {
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+
+body.sidebar-mode .commit-form {
+  flex-shrink: 0;
+}
+
+.file-pane {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  min-height: 0;
+}
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.9;
+}
+
+.pane-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.pane-actions button {
+  min-width: 24px;
+  height: 22px;
+  padding: 0 6px;
+}
+
+.file-list {
+  overflow: auto;
+  flex: 1;
+  padding: 4px 0 12px;
+}
+
+.group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.75;
+  text-transform: uppercase;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns: 18px 16px 1fr;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.file-row:hover {
+  background: var(--list-hover);
+}
+
+.file-row.selected {
+  background: var(--list-active);
+  color: var(--list-active-fg);
+}
+
+.file-row input {
+  margin: 0;
+}
+
+.status {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.status.M { color: var(--modified); }
+.status.A { color: var(--added); }
+.status.D { color: var(--deleted); }
+.status.R,
+.status.C { color: var(--untracked); }
+
+.path {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.file-name {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.file-row.selected .file-name {
+  color: var(--list-active-fg);
+}
+
+.file-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.55;
+  font-weight: 400;
+  font-size: 11px;
+}
+
+.file-unsaved {
+  flex-shrink: 0;
+  opacity: 0.65;
+  font-size: 11px;
+  font-style: italic;
+}
+
+.right-pane {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.diff-view {
+  overflow: auto;
+  padding: 0;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, 12px);
+  line-height: 1.45;
+}
+
+.placeholder {
+  padding: 16px;
+  opacity: 0.7;
+}
+
+.diff-line {
+  white-space: pre;
+  padding: 0 12px;
+}
+
+.diff-line.meta {
+  opacity: 0.65;
+}
+
+.diff-line.hunk {
+  color: var(--vscode-textLink-foreground, #3794ff);
+}
+
+.diff-line.add {
+  background: var(--diff-add-bg);
+}
+
+.diff-line.del {
+  background: var(--diff-del-bg);
+}
+
+.commit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 72px;
+  background: var(--input-bg);
+  color: var(--input-fg);
+  border: 1px solid var(--input-border);
+  padding: 8px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.form-error {
+  color: var(--error);
+  font-size: 12px;
+}
+
+.commit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+button {
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  border: 1px solid transparent;
+  border-radius: 2px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+
+button:hover {
+  filter: brightness(1.08);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+}
+
+button.danger {
+  background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+  color: var(--vscode-inputValidation-errorForeground, #f85149);
+  border-color: var(--vscode-inputValidation-errorBorder, #f85149);
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+}
+
+.modal-card {
+  width: min(420px, calc(100% - 32px));
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.modal-card h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.modal-card p {
+  margin: 0 0 16px;
+  line-height: 1.5;
+  opacity: 0.9;
+  white-space: pre-wrap;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.empty-group {
+  padding: 4px 10px 8px;
+  opacity: 0.55;
+  font-size: 12px;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 30;
+  min-width: 140px;
+  background: var(--vscode-menu-background, var(--bg));
+  color: var(--vscode-menu-foreground, var(--fg));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  padding: 4px 0;
+}
+
+.context-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+  border: none;
+  border-radius: 0;
+  padding: 6px 12px;
+}
+
+.context-menu button:hover {
+  background: var(--vscode-menu-selectionBackground, var(--list-hover));
+  color: var(--vscode-menu-selectionForeground, var(--fg));
+  filter: none;
+}

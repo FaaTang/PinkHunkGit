@@ -1,0 +1,163 @@
+name: Release
+
+# 推送 v* tag 时打包 .vsix 并发布到 GitHub Releases
+# 可选：仓库 Settings → Variables → Actions 设置 RELEASE_BRANCH（默认 main）
+# 仅当 tag 指向的提交在该分支历史上时才发布，避免误触发
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_BRANCH: ${{ vars.RELEASE_BRANCH || 'main' }}
+
+jobs:
+  gate:
+    name: Verify release trigger
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check tag commit is on release branch
+        id: check
+        env:
+          RELEASE_BRANCH: ${{ env.RELEASE_BRANCH }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]]; then
+            echo "Tag ${GITHUB_REF_NAME} is not a semver-like version; skip release"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch origin "${RELEASE_BRANCH}"
+          if ! git rev-parse --verify "origin/${RELEASE_BRANCH}" >/dev/null 2>&1; then
+            echo "Branch ${RELEASE_BRANCH} does not exist on origin; skip release"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git merge-base --is-ancestor "${GITHUB_SHA}" "origin/${RELEASE_BRANCH}"; then
+            echo "Tag commit is on branch ${RELEASE_BRANCH}; proceed with release"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag commit is not on branch ${RELEASE_BRANCH}; skip release"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build VSIX
+    needs: gate
+    if: needs.gate.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync package version from tag
+        run: npm version "${{ needs.gate.outputs.version }}" --no-git-tag-version --allow-same-version
+
+      - name: Compile
+        run: npm run compile
+
+      - name: Package VSIX
+        run: npx @vscode/vsce package --no-dependencies -o "copy-idea-git-ui-${{ needs.gate.outputs.version }}.vsix"
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: copy-idea-git-ui-*.vsix
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs:
+      - gate
+      - build
+    if: needs.gate.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download VSIX
+        uses: actions/download-artifact@v4
+        with:
+          name: vsix
+          path: release-assets
+
+      - name: Generate Changelog
+        id: changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          PREV_TAG=$(git tag --sort=-creatordate | grep -E '^v' | sed -n '2p' || true)
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="$TAG"
+          else
+            RANGE="${PREV_TAG}..${TAG}"
+          fi
+
+          COMMITS=$(git log "$RANGE" --no-merges --pretty=format:'- %s' 2>/dev/null || true)
+          {
+            echo "# Copy IDEA Git UI ${TAG}"
+            echo
+            echo "## 安装方式（手动）"
+            echo
+            echo "1. 下载下方附件 \`copy-idea-git-ui-${{ needs.gate.outputs.version }}.vsix\`"
+            echo "2. 打开 VS Code / Cursor"
+            echo "3. 命令面板运行 \`Extensions: Install from VSIX...\`"
+            echo "4. 选择下载的 \`.vsix\` 文件并安装"
+            echo "5. 如提示，重载窗口"
+            echo
+            echo "## 变更"
+            echo
+            if [ -z "$COMMITS" ]; then
+              echo "暂无提交记录。"
+            else
+              printf '%s\n' "$COMMITS"
+            fi
+            if [ -n "$PREV_TAG" ]; then
+              echo
+              echo "---"
+              echo "**完整变更**: [${PREV_TAG}...${TAG}](${{ github.server_url }}/${{ github.repository }}/compare/${PREV_TAG}...${TAG})"
+            fi
+          } > /tmp/changelog.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Copy IDEA Git UI ${{ github.ref_name }}
+          files: release-assets/*
+          draft: false
+          prerelease: false
+          make_latest: true
+          body_path: /tmp/changelog.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

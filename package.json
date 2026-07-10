@@ -1,0 +1,153 @@
+{
+  "name": "copy-idea-git-ui",
+  "displayName": "Copy IDEA Git UI",
+  "description": "IDEA-like Git commit panel for VS Code",
+  "version": "0.1.0",
+  "publisher": "copyideagitui",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:copyIdeaGitUi.commitView",
+    "onCommand:copyIdeaGitUi.openCommit",
+    "onCommand:copyIdeaGitUi.openPush",
+    "onCommand:copyIdeaGitUi.showDiff",
+    "onCommand:copyIdeaGitUi.openFile",
+    "onCommand:copyIdeaGitUi.revealInExplorer",
+    "onCommand:copyIdeaGitUi.rollback",
+    "onCommand:copyIdeaGitUi.installKeybindings"
+  ],
+  "main": "./out/extension.js",
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "copyIdeaGitUi.openCommit",
+        "title": "Open Commit",
+        "category": "Copy IDEA Git UI"
+      },
+      {
+        "command": "copyIdeaGitUi.openPush",
+        "title": "Open Push",
+        "category": "Copy IDEA Git UI"
+      },
+      {
+        "command": "copyIdeaGitUi.showDiff",
+        "title": "Show Diff",
+        "category": "Copy IDEA Git UI"
+      },
+      {
+        "command": "copyIdeaGitUi.openFile",
+        "title": "Open File",
+        "category": "Copy IDEA Git UI"
+      },
+      {
+        "command": "copyIdeaGitUi.revealInExplorer",
+        "title": "Reveal in Explorer",
+        "category": "Copy IDEA Git UI"
+      },
+      {
+        "command": "copyIdeaGitUi.rollback",
+        "title": "Rollback",
+        "category": "Copy IDEA Git UI"
+      },
+      {
+        "command": "copyIdeaGitUi.openExplorer",
+        "title": "Open Explorer",
+        "category": "Copy IDEA Git UI"
+      },
+      {
+        "command": "copyIdeaGitUi.installKeybindings",
+        "title": "Install IDEA Keybindings",
+        "category": "Copy IDEA Git UI"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "copyIdeaGitUi",
+          "title": "Commit",
+          "icon": "media/commit.svg"
+        }
+      ]
+    },
+    "views": {
+      "copyIdeaGitUi": [
+        {
+          "type": "webview",
+          "id": "copyIdeaGitUi.commitView",
+          "name": "Commit",
+          "icon": "media/commit.svg",
+          "contextualTitle": "Commit"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "copyIdeaGitUi.openExplorer",
+          "when": "view == copyIdeaGitUi.commitView",
+          "group": "navigation@1",
+          "title": "Explorer"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "copyIdeaGitUi.openCommit",
+        "key": "ctrl+k",
+        "mac": "cmd+k"
+      },
+      {
+        "command": "copyIdeaGitUi.openPush",
+        "key": "ctrl+shift+k",
+        "mac": "cmd+shift+k"
+      },
+      {
+        "command": "copyIdeaGitUi.showDiff",
+        "key": "ctrl+d",
+        "mac": "cmd+d",
+        "when": "view == copyIdeaGitUi.commitView && copyIdeaGitUi.hasSelection"
+      },
+      {
+        "command": "copyIdeaGitUi.openFile",
+        "key": "f4",
+        "when": "copyIdeaGitUi.hasSelection"
+      },
+      {
+        "command": "copyIdeaGitUi.rollback",
+        "key": "ctrl+alt+z",
+        "mac": "cmd+alt+z",
+        "when": "view == copyIdeaGitUi.commitView && copyIdeaGitUi.hasSelection"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "tsc --noEmit -p ./",
+    "package": "vsce package --no-dependencies"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FaaTang/CopyIDEAGitUI.git"
+  },
+  "bugs": {
+    "url": "https://github.com/FaaTang/CopyIDEAGitUI/issues"
+  },
+  "homepage": "https://github.com/FaaTang/CopyIDEAGitUI#readme",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "typescript": "^5.3.3"
+  }
+}
