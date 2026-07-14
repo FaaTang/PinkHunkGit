@@ -35,10 +35,19 @@ export type RepoSummary = {
 export type WorkspaceSnapshot = {
 	ok: boolean;
 	error?: string;
+	/** Focused repository (editor / last selection); used for Push / sync defaults. */
 	activeRepoRoot?: string;
-	repositories: RepoSummary[];
+	/** Full per-repository snapshots for grouped Changes UI. */
+	repositories: RepoSnapshot[];
+	/** Focused repository snapshot (compat / push context). */
 	active: RepoSnapshot;
 	busy?: boolean;
+};
+
+export type CommitRepoResult = {
+	rootPath: string;
+	name: string;
+	branch?: string;
 };
 
 export type DiffResult = {
