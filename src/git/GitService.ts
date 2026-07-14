@@ -40,6 +40,8 @@ export class GitService implements vscode.Disposable {
 	private lastKnownFileUri: vscode.Uri | undefined;
 	private contextUri: vscode.Uri | undefined;
 	private activeRepoRoot: string | undefined;
+	/** Manual repo pick from the UI; cleared when the focused editor file maps to a repo. */
+	private pinnedRepoRoot: string | undefined;
 
 	async init(): Promise<{ ok: true } | { ok: false; error: string }> {
 		const extension = vscode.extensions.getExtension<GitExtension>('vscode.git');
@@ -145,6 +147,7 @@ export class GitService implements vscode.Disposable {
 			throw new Error('Repository not found in workspace.');
 		}
 		this.activeRepoRoot = repo.rootUri.fsPath;
+		this.pinnedRepoRoot = repo.rootUri.fsPath;
 	}
 
 	getActiveRepository(): Repository | undefined {
@@ -206,9 +209,6 @@ export class GitService implements vscode.Disposable {
 		});
 
 		const active = this.buildSnapshotForRepo(activeRepo);
-		if (repos.length > 1) {
-			active.hint = `Commit / Push apply to: ${active.name} only. Switch repository above to work with another repo.`;
-		}
 
 		return {
 			ok: true,
@@ -225,6 +225,23 @@ export class GitService implements vscode.Disposable {
 
 	private ensureActiveRepository(): void {
 		if (!this.api?.repositories.length) {
+			return;
+		}
+
+		if (this.pinnedRepoRoot) {
+			const pinned = this.api.repositories.find((r) =>
+				pathsEqual(r.rootUri.fsPath, this.pinnedRepoRoot!)
+			);
+			if (pinned) {
+				this.activeRepoRoot = pinned.rootUri.fsPath;
+				return;
+			}
+			this.pinnedRepoRoot = undefined;
+		}
+
+		const fromEditor = this.repoForUri(vscode.window.activeTextEditor?.document.uri);
+		if (fromEditor) {
+			this.activeRepoRoot = fromEditor.rootUri.fsPath;
 			return;
 		}
 
@@ -247,9 +264,9 @@ export class GitService implements vscode.Disposable {
 		}
 
 		const candidates = [
-			this.contextUri,
 			vscode.window.activeTextEditor?.document.uri,
 			this.lastKnownFileUri,
+			this.contextUri,
 		];
 		for (const uri of candidates) {
 			const repo = this.repoForUri(uri);
@@ -843,9 +860,12 @@ export class GitService implements vscode.Disposable {
 	private rememberFileUri(uri: vscode.Uri): void {
 		this.lastKnownFileUri = uri;
 		const repo = this.api?.getRepository(uri);
-		if (repo) {
-			this.activeRepoRoot = repo.rootUri.fsPath;
+		if (!repo) {
+			return;
 		}
+		// Focusing a workspace file resumes auto-follow for that file's repository.
+		this.pinnedRepoRoot = undefined;
+		this.activeRepoRoot = repo.rootUri.fsPath;
 	}
 
 	private repoForUri(uri: vscode.Uri | undefined): Repository | undefined {

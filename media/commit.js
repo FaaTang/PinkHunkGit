@@ -240,7 +240,7 @@
       const opt = document.createElement('option');
       opt.value = repo.rootPath;
       const branch = repo.branch ? ` · ${repo.branch}` : '';
-      opt.textContent = `${repo.name}${branch} (${repo.changeCount})`;
+      opt.textContent = `${repo.name}${branch}`;
       opt.selected = repo.rootPath === current;
       repoSelect.appendChild(opt);
     }
@@ -665,8 +665,6 @@
           showBanner(workspace.error, 'error');
         } else if (active.hint) {
           showBanner(active.hint, 'info');
-        } else if (workspace.repositories.length > 1) {
-          showBanner(`Working on: ${active.name}`, 'info');
         } else {
           showBanner('');
         }
