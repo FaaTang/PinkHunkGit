@@ -387,6 +387,10 @@ button.danger {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
+.modal-card-wide {
+  width: min(520px, calc(100% - 32px));
+}
+
 .modal-card h2 {
   margin: 0 0 8px;
   font-size: 16px;
@@ -400,9 +404,50 @@ button.danger {
   white-space: pre-wrap;
 }
 
+.conflict-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.conflict-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.conflict-item:last-child {
+  border-bottom: none;
+}
+
+.conflict-item:hover {
+  background: var(--vscode-list-hoverBackground, rgba(127, 127, 127, 0.15));
+}
+
+.conflict-status {
+  flex: 0 0 auto;
+  min-width: 1.2em;
+  font-weight: 600;
+  color: var(--vscode-gitDecoration-conflictingResourceForeground, #e51400);
+}
+
+.conflict-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
 }
 

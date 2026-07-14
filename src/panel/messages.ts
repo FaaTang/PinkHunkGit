@@ -4,6 +4,7 @@ export type ChangeItem = {
 	status: string;
 	staged: boolean;
 	unsaved?: boolean;
+	conflict?: boolean;
 };
 
 export type RepoSnapshot = {
@@ -20,6 +21,8 @@ export type RepoSnapshot = {
 	staged: ChangeItem[];
 	unstaged: ChangeItem[];
 	unversioned: ChangeItem[];
+	conflictFiles?: ChangeItem[];
+	syncMode?: SyncMode;
 };
 
 export type RepoSummary = {
@@ -53,12 +56,44 @@ export type RollbackDialogPayload = {
 	isUntracked: boolean;
 };
 
+export type SyncMode = 'merge' | 'rebase';
+
+export type PushRejectedPayload = {
+	message: string;
+	repoName: string;
+	branch?: string;
+	upstream?: string;
+	behind?: number;
+	ahead?: number;
+};
+
+export type SyncConflictPayload = {
+	mode: SyncMode;
+	message: string;
+	conflicts: ChangeItem[];
+	repoName: string;
+	branch?: string;
+	upstream?: string;
+};
+
+export type AskPushPayload = {
+	repoName: string;
+	branch?: string;
+	upstream?: string;
+	ahead?: number;
+	summary: string;
+};
+
 export type HostToWebview =
 	| { type: 'snapshot'; payload: WorkspaceSnapshot }
 	| { type: 'diff'; payload: DiffResult }
 	| { type: 'error'; message: string }
 	| { type: 'busy'; busy: boolean }
 	| { type: 'showPushDialog'; payload: WorkspaceSnapshot }
+	| { type: 'showPushRejected'; payload: PushRejectedPayload }
+	| { type: 'showSyncConflict'; payload: SyncConflictPayload }
+	| { type: 'showAskPush'; payload: AskPushPayload }
+	| { type: 'closePushDialog' }
 	| { type: 'showRollbackDialog'; payload: RollbackDialogPayload }
 	| { type: 'clearMessage' }
 	| { type: 'focusMessage' };
@@ -78,6 +113,13 @@ export type WebviewToHost =
 	| { type: 'commit'; message: string }
 	| { type: 'commitAndPush'; message: string }
 	| { type: 'push' }
+	| { type: 'pushSync'; mode: SyncMode }
+	| { type: 'syncAbort' }
+	| { type: 'syncContinue' }
+	| { type: 'openConflict'; path: string }
+	| { type: 'askPushConfirm' }
+	| { type: 'askPushCancel' }
+	| { type: 'pushDialogCancel' }
 	| { type: 'refresh' }
 	| { type: 'installKeybindings' }
 	| { type: 'openGitExtension' };

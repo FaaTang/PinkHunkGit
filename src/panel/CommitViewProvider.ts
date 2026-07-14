@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { GitService } from '../git/GitService';
-import { HostToWebview, WebviewToHost } from './messages';
+import { GitService, PushRejectedError } from '../git/GitService';
+import { HostToWebview, SyncMode, WebviewToHost } from './messages';
 
 export class CommitViewProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'copyIdeaGitUi.commitView';
@@ -233,12 +233,37 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'push':
 					await this.withBusy(async () => {
-						const active = this.git.getSnapshot();
-						await this.git.push();
-						vscode.window.showInformationMessage(
-							`Pushed ${active.name}${active.upstream ? ` → ${active.upstream}` : ''}.`
-						);
+						await this.runPush();
 					});
+					break;
+				case 'pushSync':
+					await this.withBusy(async () => {
+						await this.runPushSync(msg.mode);
+					});
+					break;
+				case 'syncAbort':
+					await this.withBusy(async () => {
+						await this.git.abortSync();
+						this.post({ type: 'closePushDialog' });
+						vscode.window.showInformationMessage('已中止 Merge / Rebase。');
+					});
+					break;
+				case 'syncContinue':
+					await this.withBusy(async () => {
+						await this.handleSyncResult(await this.git.continueSync());
+					});
+					break;
+				case 'openConflict':
+					await this.git.openConflictFile(msg.path);
+					break;
+				case 'askPushConfirm':
+					await this.withBusy(async () => {
+						await this.runPush();
+					});
+					break;
+				case 'askPushCancel':
+				case 'pushDialogCancel':
+					this.post({ type: 'closePushDialog' });
 					break;
 				case 'refresh':
 					await this.withBusy(async () => {
@@ -253,12 +278,84 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 			}
 		} catch (err) {
+			if (err instanceof PushRejectedError) {
+				this.postPushRejected(err.message);
+				return;
+			}
 			const message = err instanceof Error ? err.message : String(err);
 			this.post({ type: 'error', message });
 			vscode.window.showErrorMessage(message);
 		} finally {
 			await this.refreshAndPush();
 		}
+	}
+
+	private async runPush(): Promise<void> {
+		const active = this.git.getSnapshot();
+		try {
+			await this.git.push();
+			this.post({ type: 'closePushDialog' });
+			vscode.window.showInformationMessage(
+				`Pushed ${active.name}${active.upstream ? ` → ${active.upstream}` : ''}.`
+			);
+		} catch (err) {
+			if (err instanceof PushRejectedError) {
+				this.postPushRejected(err.message);
+				return;
+			}
+			throw err;
+		}
+	}
+
+	private postPushRejected(message: string): void {
+		const ctx = this.git.getPushContext();
+		this.post({
+			type: 'showPushRejected',
+			payload: {
+				message,
+				repoName: ctx.repoName,
+				branch: ctx.branch,
+				upstream: ctx.upstream,
+				behind: ctx.behind,
+				ahead: ctx.ahead,
+			},
+		});
+	}
+
+	private async runPushSync(mode: SyncMode): Promise<void> {
+		const result = await this.git.syncWithUpstream(mode);
+		await this.handleSyncResult(result);
+	}
+
+	private async handleSyncResult(result: Awaited<ReturnType<GitService['syncWithUpstream']>>): Promise<void> {
+		if (result.status === 'conflict') {
+			const ctx = this.git.getPushContext();
+			this.post({
+				type: 'showSyncConflict',
+				payload: {
+					mode: result.mode,
+					message: result.message,
+					conflicts: result.conflicts,
+					repoName: ctx.repoName,
+					branch: ctx.branch,
+					upstream: ctx.upstream,
+				},
+			});
+			return;
+		}
+
+		const ctx = this.git.getPushContext();
+		const modeLabel = result.mode === 'merge' ? 'Merge' : 'Rebase';
+		this.post({
+			type: 'showAskPush',
+			payload: {
+				repoName: ctx.repoName,
+				branch: ctx.branch,
+				upstream: ctx.upstream,
+				ahead: ctx.ahead,
+				summary: `${modeLabel} 已完成。是否立即 Push 到 ${ctx.upstream || 'remote'}？`,
+			},
+		});
 	}
 
 	private async withBusy(fn: () => Promise<void>): Promise<void> {
@@ -341,12 +438,19 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
   <div id="contextMenu" class="context-menu hidden"></div>
 
   <div id="pushModal" class="modal hidden">
-    <div class="modal-card">
-      <h2>Push</h2>
+    <div class="modal-card modal-card-wide">
+      <h2 id="pushTitle">Push</h2>
       <p id="pushSummary"></p>
-      <div class="modal-actions">
+      <ul id="pushConflictList" class="conflict-list hidden"></ul>
+      <div class="modal-actions" id="pushActions">
         <button id="pushCancel" type="button">Cancel</button>
         <button id="pushConfirm" class="primary" type="button">Push</button>
+        <button id="pushMerge" class="hidden" type="button">Merge</button>
+        <button id="pushRebase" class="hidden" type="button">Rebase</button>
+        <button id="pushAbort" class="hidden" type="button">Abort</button>
+        <button id="pushContinue" class="primary hidden" type="button">Continue</button>
+        <button id="pushAskNo" class="hidden" type="button">稍后</button>
+        <button id="pushAskYes" class="primary hidden" type="button">Push</button>
       </div>
     </div>
   </div>

@@ -5,10 +5,30 @@ import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 
 const execFile = promisify(execFileCb);
-import { API, Change, GitExtension, Repository, Status } from '../git/git';
-import { ChangeItem, DiffResult, RepoSnapshot, RepoSummary, WorkspaceSnapshot } from '../panel/messages';
+import { API, Change, GitErrorCodes, GitExtension, Repository, Status } from '../git/git';
+import {
+	ChangeItem,
+	DiffResult,
+	RepoSnapshot,
+	RepoSummary,
+	SyncMode,
+	WorkspaceSnapshot,
+} from '../panel/messages';
 
 const MAX_DIFF_BYTES = 1_000_000;
+
+export class PushRejectedError extends Error {
+	readonly kind = 'push-rejected' as const;
+
+	constructor(message: string) {
+		super(message);
+		this.name = 'PushRejectedError';
+	}
+}
+
+export type SyncResult =
+	| { status: 'ok'; mode: SyncMode }
+	| { status: 'conflict'; mode: SyncMode; conflicts: ChangeItem[]; message: string };
 
 export class GitService implements vscode.Disposable {
 	private api: API | undefined;
@@ -291,6 +311,9 @@ export class GitService implements vscode.Disposable {
 			hint = 'Unsaved edits (tab dot) are listed; save files before commit.';
 		}
 
+		const conflictFiles = this.getConflictItems(repo);
+		const syncMode = this.detectSyncMode(repo);
+
 		return {
 			ok: true,
 			hint,
@@ -304,6 +327,8 @@ export class GitService implements vscode.Disposable {
 			staged,
 			unstaged: allUnstaged,
 			unversioned,
+			conflictFiles,
+			syncMode,
 		};
 	}
 
@@ -399,7 +424,214 @@ export class GitService implements vscode.Disposable {
 
 	async push(): Promise<void> {
 		const repo = this.requireActiveRepo();
-		await repo.push();
+		try {
+			await repo.push();
+		} catch (err) {
+			if (isPushRejectedError(err)) {
+				throw new PushRejectedError(formatGitError(err));
+			}
+			throw err instanceof Error ? err : new Error(String(err));
+		}
+	}
+
+	getPushContext(): {
+		repoName: string;
+		branch?: string;
+		upstream?: string;
+		ahead?: number;
+		behind?: number;
+	} {
+		const snap = this.getSnapshot();
+		return {
+			repoName: snap.name,
+			branch: snap.branch,
+			upstream: snap.upstream,
+			ahead: snap.ahead,
+			behind: snap.behind,
+		};
+	}
+
+	async syncWithUpstream(mode: SyncMode): Promise<SyncResult> {
+		const repo = this.requireActiveRepo();
+		const upstream = this.requireUpstreamName(repo);
+
+		await this.fetchRepo(repo);
+
+		try {
+			if (mode === 'merge') {
+				await this.mergeUpstream(repo, upstream);
+			} else {
+				await this.rebaseOntoUpstream(repo, upstream);
+			}
+		} catch (err) {
+			await repo.status().catch(() => undefined);
+			const conflicts = this.getConflictItems(repo);
+			if (conflicts.length || isConflictError(err)) {
+				return {
+					status: 'conflict',
+					mode,
+					conflicts: conflicts.length ? conflicts : this.getConflictItems(repo),
+					message: formatGitError(err),
+				};
+			}
+			throw err instanceof Error ? err : new Error(String(err));
+		}
+
+		await repo.status().catch(() => undefined);
+		const conflicts = this.getConflictItems(repo);
+		if (conflicts.length) {
+			return {
+				status: 'conflict',
+				mode,
+				conflicts,
+				message: `${mode === 'merge' ? 'Merge' : 'Rebase'} produced conflicts. Resolve them, then continue.`,
+			};
+		}
+
+		return { status: 'ok', mode };
+	}
+
+	async continueSync(): Promise<SyncResult> {
+		const repo = this.requireActiveRepo();
+		const mode = this.detectSyncMode(repo) ?? 'merge';
+		const remaining = this.getConflictItems(repo);
+		if (remaining.length) {
+			throw new Error(`还有 ${remaining.length} 个未解决的冲突文件。`);
+		}
+
+		const root = repo.rootUri.fsPath;
+		try {
+			if (mode === 'rebase') {
+				await this.execGit(
+					root,
+					['-c', 'core.editor=true', '-c', 'sequence.editor=true', 'rebase', '--continue'],
+					{ GIT_EDITOR: 'true', EDITOR: 'true' }
+				);
+			} else {
+				await this.execGit(root, ['commit', '--no-edit']);
+			}
+		} catch (err) {
+			await repo.status().catch(() => undefined);
+			const conflicts = this.getConflictItems(repo);
+			if (conflicts.length || isConflictError(err)) {
+				return {
+					status: 'conflict',
+					mode,
+					conflicts,
+					message: formatGitError(err),
+				};
+			}
+			throw err instanceof Error ? err : new Error(String(err));
+		}
+
+		await repo.status().catch(() => undefined);
+		const conflicts = this.getConflictItems(repo);
+		if (conflicts.length) {
+			return {
+				status: 'conflict',
+				mode,
+				conflicts,
+				message: 'Conflicts remain after continue. Resolve them, then try again.',
+			};
+		}
+
+		return { status: 'ok', mode };
+	}
+
+	async abortSync(): Promise<void> {
+		const repo = this.requireActiveRepo();
+		const mode = this.detectSyncMode(repo);
+		const root = repo.rootUri.fsPath;
+
+		if (mode === 'rebase' || repo.state.rebaseCommit) {
+			await this.execGit(root, ['rebase', '--abort']);
+			return;
+		}
+
+		if (typeof repo.mergeAbort === 'function') {
+			await repo.mergeAbort();
+			return;
+		}
+
+		await this.execGit(root, ['merge', '--abort']);
+	}
+
+	async openConflictFile(relativePath: string): Promise<void> {
+		const repo = this.requireActiveRepo();
+		const fsPath = path.join(repo.rootUri.fsPath, relativePath);
+		const uri = vscode.Uri.file(fsPath);
+
+		try {
+			await vscode.commands.executeCommand('git.openMergeEditor', uri);
+			return;
+		} catch {
+			// Fall through to plain editor
+		}
+
+		const doc = await vscode.workspace.openTextDocument(uri);
+		await vscode.window.showTextDocument(doc, { preview: false });
+	}
+
+	getConflictSnapshot(): { mode?: SyncMode; conflicts: ChangeItem[] } {
+		const repo = this.requireActiveRepo();
+		return {
+			mode: this.detectSyncMode(repo),
+			conflicts: this.getConflictItems(repo),
+		};
+	}
+
+	private async fetchRepo(repo: Repository): Promise<void> {
+		if (typeof repo.fetch === 'function') {
+			await repo.fetch();
+			return;
+		}
+		await this.execGit(repo.rootUri.fsPath, ['fetch']);
+	}
+
+	private async mergeUpstream(repo: Repository, upstream: string): Promise<void> {
+		if (typeof repo.merge === 'function') {
+			await repo.merge(upstream);
+			return;
+		}
+		await this.execGit(repo.rootUri.fsPath, ['merge', upstream]);
+	}
+
+	private async rebaseOntoUpstream(repo: Repository, upstream: string): Promise<void> {
+		if (typeof repo.rebase === 'function') {
+			await repo.rebase(upstream);
+			return;
+		}
+		await this.execGit(repo.rootUri.fsPath, ['rebase', upstream]);
+	}
+
+	private requireUpstreamName(repo: Repository): string {
+		const head = repo.state.HEAD;
+		if (!head?.upstream) {
+			throw new Error('当前分支没有上游（upstream）。请先设置跟踪分支后再同步。');
+		}
+		return `${head.upstream.remote}/${head.upstream.name}`;
+	}
+
+	private detectSyncMode(repo: Repository): SyncMode | undefined {
+		if (repo.state.rebaseCommit) {
+			return 'rebase';
+		}
+		if (repo.state.mergeChanges.length) {
+			return 'merge';
+		}
+		return undefined;
+	}
+
+	private getConflictItems(repo: Repository): ChangeItem[] {
+		const root = repo.rootUri.fsPath;
+		return dedupeByPath(
+			repo.state.mergeChanges.map((c) => {
+				const item = this.toChangeItem(c, root, false);
+				item.conflict = true;
+				item.status = conflictStatusLetter(c.status);
+				return item;
+			})
+		);
 	}
 
 	async openDiffInEditor(relativePath: string, staged: boolean, repoRoot?: string): Promise<void> {
@@ -464,8 +696,19 @@ export class GitService implements vscode.Disposable {
 		}
 	}
 
-	private async execGit(cwd: string, args: string[]): Promise<void> {
-		await execFile('git', args, { cwd });
+	private async execGit(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<void> {
+		try {
+			await execFile('git', args, {
+				cwd,
+				maxBuffer: 10 * 1024 * 1024,
+				env: env ? { ...process.env, ...env } : process.env,
+			});
+		} catch (err) {
+			const e = err as { stderr?: string | Buffer; stdout?: string | Buffer; message?: string };
+			const stderr = bufferToString(e.stderr).trim();
+			const stdout = bufferToString(e.stdout).trim();
+			throw new Error(stderr || stdout || e.message || String(err));
+		}
 	}
 
 	async openRollbackDiff(relativePath: string, repoRoot: string): Promise<void> {
@@ -696,6 +939,71 @@ function statusLetter(status: Status): string {
 		default:
 			return 'M';
 	}
+}
+
+function conflictStatusLetter(status: Status): string {
+	switch (status) {
+		case Status.BOTH_ADDED:
+		case Status.ADDED_BY_US:
+		case Status.ADDED_BY_THEM:
+			return 'A';
+		case Status.BOTH_DELETED:
+		case Status.DELETED_BY_US:
+		case Status.DELETED_BY_THEM:
+			return 'D';
+		case Status.BOTH_MODIFIED:
+		default:
+			return 'C';
+	}
+}
+
+function isPushRejectedError(err: unknown): boolean {
+	const e = err as { gitErrorCode?: string; message?: string; stderr?: string };
+	if (
+		e.gitErrorCode === GitErrorCodes.PushRejected ||
+		e.gitErrorCode === 'PushRejected' ||
+		e.gitErrorCode === 'ForcePushWithLeaseRejected' ||
+		e.gitErrorCode === 'ForcePushWithLeaseIfIncludesRejected'
+	) {
+		return true;
+	}
+	const text = `${e.message ?? ''} ${e.stderr ?? ''} ${String(err)}`.toLowerCase();
+	return (
+		text.includes('non-fast-forward') ||
+		text.includes('[rejected]') ||
+		text.includes('updates were rejected') ||
+		text.includes('failed to push some refs') ||
+		text.includes('tip of your current branch is behind') ||
+		(text.includes('fetch first') && text.includes('rejected'))
+	);
+}
+
+function isConflictError(err: unknown): boolean {
+	const e = err as { gitErrorCode?: string; message?: string; stderr?: string };
+	if (e.gitErrorCode === GitErrorCodes.Conflict || e.gitErrorCode === 'Conflict') {
+		return true;
+	}
+	const text = `${e.message ?? ''} ${e.stderr ?? ''} ${String(err)}`.toLowerCase();
+	return (
+		text.includes('conflict') ||
+		text.includes('you need to resolve') ||
+		text.includes('fix conflict') ||
+		text.includes('needs merge')
+	);
+}
+
+function formatGitError(err: unknown): string {
+	if (err instanceof Error) {
+		return err.message;
+	}
+	return String(err);
+}
+
+function bufferToString(value: string | Buffer | undefined): string {
+	if (!value) {
+		return '';
+	}
+	return typeof value === 'string' ? value : value.toString('utf8');
 }
 
 function dedupeByPath(items: ChangeItem[]): ChangeItem[] {

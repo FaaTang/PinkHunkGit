@@ -15,9 +15,17 @@
   const locateBtn = document.getElementById('locateBtn');
   const installKeysBtn = document.getElementById('installKeysBtn');
   const pushModal = document.getElementById('pushModal');
+  const pushTitle = document.getElementById('pushTitle');
   const pushSummary = document.getElementById('pushSummary');
+  const pushConflictList = document.getElementById('pushConflictList');
   const pushCancel = document.getElementById('pushCancel');
   const pushConfirm = document.getElementById('pushConfirm');
+  const pushMerge = document.getElementById('pushMerge');
+  const pushRebase = document.getElementById('pushRebase');
+  const pushAbort = document.getElementById('pushAbort');
+  const pushContinue = document.getElementById('pushContinue');
+  const pushAskNo = document.getElementById('pushAskNo');
+  const pushAskYes = document.getElementById('pushAskYes');
   const rollbackModal = document.getElementById('rollbackModal');
   const rollbackTitle = document.getElementById('rollbackTitle');
   const rollbackSummary = document.getElementById('rollbackSummary');
@@ -39,6 +47,8 @@
   let selected = null;
   let lastActiveRepoRoot = '';
   let pendingRollback = null;
+  /** @type {'confirm' | 'rejected' | 'conflict' | 'askPush' | null} */
+  let pushModalState = null;
 
   function activeRepoRoot() {
     return workspace.activeRepoRoot || workspace.active.rootPath;
@@ -73,6 +83,13 @@
     locateBtn.disabled = disabled;
     installKeysBtn.disabled = !!busy;
     pushConfirm.disabled = busy;
+    pushMerge.disabled = busy;
+    pushRebase.disabled = busy;
+    pushAbort.disabled = busy;
+    pushContinue.disabled = busy;
+    pushAskYes.disabled = busy;
+    pushAskNo.disabled = busy;
+    pushCancel.disabled = busy;
     rollbackConfirmBtn.disabled = busy;
     keysConfirm.disabled = busy;
   }
@@ -366,18 +383,131 @@
     return message;
   }
 
+  function setPushActionVisibility(visibleIds) {
+    const buttons = {
+      pushCancel,
+      pushConfirm,
+      pushMerge,
+      pushRebase,
+      pushAbort,
+      pushContinue,
+      pushAskNo,
+      pushAskYes,
+    };
+    Object.entries(buttons).forEach(([id, el]) => {
+      if (!el) {
+        return;
+      }
+      el.classList.toggle('hidden', !visibleIds.includes(id));
+    });
+  }
+
+  function renderConflictList(conflicts) {
+    pushConflictList.innerHTML = '';
+    if (!conflicts || !conflicts.length) {
+      pushConflictList.classList.add('hidden');
+      return;
+    }
+    pushConflictList.classList.remove('hidden');
+    conflicts.forEach((item) => {
+      const li = document.createElement('li');
+      li.className = 'conflict-item';
+      li.title = '在 VS Code 合并编辑器中打开';
+      const status = document.createElement('span');
+      status.className = 'conflict-status';
+      status.textContent = item.status || 'C';
+      const name = document.createElement('span');
+      name.className = 'conflict-path';
+      name.textContent = item.path;
+      li.appendChild(status);
+      li.appendChild(name);
+      li.addEventListener('click', () => post({ type: 'openConflict', path: item.path }));
+      pushConflictList.appendChild(li);
+    });
+  }
+
+  function closePushModal() {
+    pushModalState = null;
+    pushModal.classList.add('hidden');
+    pushConflictList.classList.add('hidden');
+    pushConflictList.innerHTML = '';
+  }
+
   function openPushModal() {
     const active = workspace.active;
     const branch = active.branch || '(detached)';
     const upstream = active.upstream || '(no upstream)';
     const remotes = (active.remotes || []).join(', ') || '(none)';
     const ahead = typeof active.ahead === 'number' ? active.ahead : '?';
-    let note = `Repository: ${active.name}\nBranch: ${branch}\nUpstream: ${upstream}\nRemotes: ${remotes}\nAhead: ${ahead}`;
+    const behind = typeof active.behind === 'number' ? active.behind : '?';
+    let note = `Repository: ${active.name}\nBranch: ${branch}\nUpstream: ${upstream}\nRemotes: ${remotes}\nAhead: ${ahead}\nBehind: ${behind}`;
     if (typeof active.ahead === 'number' && active.ahead === 0) {
       note += '\n\nNo local commits to push (ahead = 0). You can still try Push.';
     }
+    if (typeof active.behind === 'number' && active.behind > 0) {
+      note += `\n\nRemote is ahead by ${active.behind} commit(s). Push may be rejected — Merge or Rebase first.`;
+    }
+    pushModalState = 'confirm';
+    pushTitle.textContent = 'Push';
     pushSummary.textContent = note;
+    renderConflictList([]);
+    setPushActionVisibility(['pushCancel', 'pushConfirm']);
     pushModal.classList.remove('hidden');
+  }
+
+  function openPushRejectedModal(payload) {
+    pushModalState = 'rejected';
+    pushTitle.textContent = 'Push Rejected';
+    const behind =
+      typeof payload.behind === 'number' ? `Behind remote: ${payload.behind}` : 'Remote has commits you do not have locally.';
+    pushSummary.textContent =
+      `${payload.message}\n\n` +
+      `Repository: ${payload.repoName}\n` +
+      `Branch: ${payload.branch || '(detached)'}\n` +
+      `Upstream: ${payload.upstream || '(none)'}\n` +
+      `${behind}\n\n` +
+      `选择 Merge 或 Rebase 同步远程后再 Push。`;
+    renderConflictList([]);
+    setPushActionVisibility(['pushCancel', 'pushMerge', 'pushRebase']);
+    pushModal.classList.remove('hidden');
+  }
+
+  function openSyncConflictModal(payload) {
+    pushModalState = 'conflict';
+    const modeLabel = payload.mode === 'rebase' ? 'Rebase' : 'Merge';
+    pushTitle.textContent = `${modeLabel} Conflicts`;
+    pushSummary.textContent =
+      `${payload.message}\n\n` +
+      `点击下方冲突文件，在 VS Code 合并编辑器中解决。全部解决后点 Continue；或 Abort 中止。`;
+    renderConflictList(payload.conflicts || []);
+    setPushActionVisibility(['pushAbort', 'pushContinue']);
+    pushModal.classList.remove('hidden');
+  }
+
+  function openAskPushModal(payload) {
+    pushModalState = 'askPush';
+    pushTitle.textContent = 'Push？';
+    pushSummary.textContent =
+      `${payload.summary}\n\n` +
+      `Repository: ${payload.repoName}\n` +
+      `Branch: ${payload.branch || '(detached)'}\n` +
+      `Upstream: ${payload.upstream || '(none)'}\n` +
+      `Ahead: ${typeof payload.ahead === 'number' ? payload.ahead : '?'}`;
+    renderConflictList([]);
+    setPushActionVisibility(['pushAskNo', 'pushAskYes']);
+    pushModal.classList.remove('hidden');
+  }
+
+  function syncConflictListFromSnapshot() {
+    if (pushModalState !== 'conflict') {
+      return;
+    }
+    const conflicts = workspace.active.conflictFiles || [];
+    renderConflictList(conflicts);
+    if (!conflicts.length && workspace.active.syncMode) {
+      pushSummary.textContent =
+        '冲突文件已全部解决。点击 Continue 完成 Merge / Rebase；或 Abort 中止。';
+    }
   }
 
   function closeRollbackModal() {
@@ -442,11 +572,22 @@
     keysModal.classList.add('hidden');
     post({ type: 'installKeybindings' });
   });
-  pushCancel.addEventListener('click', () => pushModal.classList.add('hidden'));
+  pushCancel.addEventListener('click', () => {
+    closePushModal();
+    post({ type: 'pushDialogCancel' });
+  });
   pushConfirm.addEventListener('click', () => {
-    pushModal.classList.add('hidden');
     post({ type: 'push' });
   });
+  pushMerge.addEventListener('click', () => post({ type: 'pushSync', mode: 'merge' }));
+  pushRebase.addEventListener('click', () => post({ type: 'pushSync', mode: 'rebase' }));
+  pushAbort.addEventListener('click', () => post({ type: 'syncAbort' }));
+  pushContinue.addEventListener('click', () => post({ type: 'syncContinue' }));
+  pushAskNo.addEventListener('click', () => {
+    closePushModal();
+    post({ type: 'askPushCancel' });
+  });
+  pushAskYes.addEventListener('click', () => post({ type: 'askPushConfirm' }));
   rollbackCancelBtn.addEventListener('click', () => {
     closeRollbackModal();
     post({ type: 'rollbackCancel' });
@@ -540,10 +681,14 @@
           }
         }
         renderFiles();
+        syncConflictListFromSnapshot();
         break;
       }
       case 'error':
         showFormError(msg.message);
+        if (pushModalState && !pushModal.classList.contains('hidden')) {
+          pushSummary.textContent = msg.message;
+        }
         break;
       case 'busy':
         setBusy(msg.busy);
@@ -553,6 +698,18 @@
         renderRepoSelector();
         renderFiles();
         openPushModal();
+        break;
+      case 'showPushRejected':
+        openPushRejectedModal(msg.payload);
+        break;
+      case 'showSyncConflict':
+        openSyncConflictModal(msg.payload);
+        break;
+      case 'showAskPush':
+        openAskPushModal(msg.payload);
+        break;
+      case 'closePushDialog':
+        closePushModal();
         break;
       case 'showRollbackDialog':
         openRollbackModal(msg.payload);

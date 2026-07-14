@@ -139,8 +139,14 @@ export interface Repository {
 	diffIndexWithHEAD(path: string): Promise<string>;
 	diffWithHEAD(path: string): Promise<string>;
 	status(): Promise<void>;
+	fetch(options?: { remote?: string; ref?: string; all?: boolean; prune?: boolean; depth?: number }): Promise<void>;
+	fetch(remote?: string, ref?: string, depth?: number): Promise<void>;
+	pull(unshallow?: boolean): Promise<void>;
 	push(remoteName?: string, branchName?: string, setUpstream?: boolean, force?: ForcePushMode): Promise<void>;
 	commit(message: string, opts?: CommitOptions): Promise<void>;
+	merge(ref: string): Promise<void>;
+	mergeAbort(): Promise<void>;
+	rebase(branch: string): Promise<void>;
 }
 
 export type APIState = 'uninitialized' | 'initialized';
@@ -166,4 +172,7 @@ export const enum GitErrorCodes {
 	AuthenticationFailed = 'AuthenticationFailed',
 	NoUpstreamBranch = 'NoUpstreamBranch',
 	NotAGitRepository = 'NotAGitRepository',
+	Conflict = 'Conflict',
+	PushRejected = 'PushRejected',
+	DirtyWorkTree = 'DirtyWorkTree',
 }
