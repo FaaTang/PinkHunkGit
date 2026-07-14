@@ -8,9 +8,9 @@ const execFile = promisify(execFileCb);
 import { API, Change, GitErrorCodes, GitExtension, Repository, Status } from '../git/git';
 import {
 	ChangeItem,
+	CommitRepoResult,
 	DiffResult,
 	RepoSnapshot,
-	RepoSummary,
 	SyncMode,
 	WorkspaceSnapshot,
 } from '../panel/messages';
@@ -198,22 +198,15 @@ export class GitService implements vscode.Disposable {
 			};
 		}
 
-		const summaries: RepoSummary[] = repos.map((repo) => {
-			const snap = this.buildSnapshotForRepo(repo);
-			return {
-				rootPath: snap.rootPath,
-				name: snap.name,
-				branch: snap.branch,
-				changeCount: snap.staged.length + snap.unstaged.length + snap.unversioned.length,
-			};
-		});
-
-		const active = this.buildSnapshotForRepo(activeRepo);
+		const repositories = repos.map((repo) => this.buildSnapshotForRepo(repo));
+		const active =
+			repositories.find((r) => pathsEqual(r.rootPath, activeRepo.rootUri.fsPath)) ??
+			this.buildSnapshotForRepo(activeRepo);
 
 		return {
 			ok: true,
 			activeRepoRoot: active.rootPath,
-			repositories: summaries,
+			repositories,
 			active,
 		};
 	}
@@ -403,48 +396,72 @@ export class GitService implements vscode.Disposable {
 	}
 
 	async stageAll(stage: boolean): Promise<void> {
-		const snap = this.getSnapshot();
-		if (!snap.ok) {
-			throw new Error(snap.error ?? 'Repository unavailable');
+		const workspace = this.getWorkspaceSnapshot();
+		if (!workspace.ok) {
+			throw new Error(workspace.error ?? 'Repository unavailable');
 		}
-		const repo = this.requireActiveRepo();
-		if (stage) {
-			for (const item of [...snap.unstaged, ...snap.unversioned]) {
-				if (item.unsaved) {
-					await this.ensureSaved(item.fsPath);
+
+		for (const snap of workspace.repositories) {
+			if (!snap.ok) {
+				continue;
+			}
+			const repo = this.requireRepoByRoot(snap.rootPath);
+			if (stage) {
+				for (const item of [...snap.unstaged, ...snap.unversioned]) {
+					if (item.unsaved) {
+						await this.ensureSaved(item.fsPath);
+					}
 				}
-			}
-			const paths = [...snap.unstaged, ...snap.unversioned].map((c) => c.fsPath);
-			if (paths.length) {
-				await repo.add(paths);
-			}
-		} else {
-			const paths = snap.staged.map((c) => c.fsPath);
-			if (paths.length) {
-				await repo.revert(paths);
+				const paths = [...snap.unstaged, ...snap.unversioned].map((c) => c.fsPath);
+				if (paths.length) {
+					await repo.add(paths);
+				}
+			} else if (snap.staged.length) {
+				await repo.revert(snap.staged.map((c) => c.fsPath));
 			}
 		}
 	}
 
-	async commit(message: string): Promise<void> {
-		const repo = this.requireActiveRepo();
-		const snap = this.getSnapshot();
-		if (!snap.staged.length) {
-			throw new Error('No staged changes. Check files to include in the commit.');
-		}
+	/**
+	 * Commit staged changes in every repo that has checked files (same message).
+	 */
+	async commitAllStaged(message: string): Promise<CommitRepoResult[]> {
 		const trimmed = message.trim();
 		if (!trimmed) {
 			throw new Error('Commit message cannot be empty.');
 		}
-		await repo.commit(trimmed, { postCommitCommand: null });
+
+		const workspace = this.getWorkspaceSnapshot();
+		if (!workspace.ok) {
+			throw new Error(workspace.error ?? 'Repository unavailable');
+		}
+
+		const targets = workspace.repositories.filter((r) => r.ok && r.staged.length > 0);
+		if (!targets.length) {
+			throw new Error('No staged changes. Check files to include in the commit.');
+		}
+
+		const committed: CommitRepoResult[] = [];
+		for (const snap of targets) {
+			const repo = this.requireRepoByRoot(snap.rootPath);
+			await repo.commit(trimmed, { postCommitCommand: null });
+			committed.push({ name: snap.name, rootPath: snap.rootPath, branch: snap.branch });
+		}
+		return committed;
 	}
 
-	async push(): Promise<void> {
-		const repo = this.requireActiveRepo();
+	async commit(message: string): Promise<CommitRepoResult[]> {
+		return this.commitAllStaged(message);
+	}
+
+	async push(repoRoot?: string): Promise<void> {
+		const repo = repoRoot ? this.requireRepoByRoot(repoRoot) : this.requireActiveRepo();
 		try {
 			await repo.push();
 		} catch (err) {
 			if (isPushRejectedError(err)) {
+				this.activeRepoRoot = repo.rootUri.fsPath;
+				this.pinnedRepoRoot = undefined;
 				throw new PushRejectedError(formatGitError(err));
 			}
 			throw err instanceof Error ? err : new Error(String(err));

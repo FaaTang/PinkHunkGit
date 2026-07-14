@@ -51,7 +51,28 @@
   let pushModalState = null;
 
   function activeRepoRoot() {
-    return workspace.activeRepoRoot || workspace.active.rootPath;
+    return workspace.activeRepoRoot || workspace.active?.rootPath || '';
+  }
+
+  function allRepos() {
+    const repos = workspace.repositories || [];
+    if (repos.length && repos[0] && Array.isArray(repos[0].staged)) {
+      return repos.filter((r) => r && r.ok !== false);
+    }
+    // Legacy fallback: only active snapshot
+    return workspace.active?.ok ? [workspace.active] : [];
+  }
+
+  function totalStagedCount() {
+    return allRepos().reduce((n, r) => n + (r.staged?.length || 0), 0);
+  }
+
+  function findRepo(root) {
+    if (!root) {
+      return undefined;
+    }
+    const key = String(root).replace(/\\/g, '/').toLowerCase();
+    return allRepos().find((r) => String(r.rootPath).replace(/\\/g, '/').toLowerCase() === key);
   }
 
   function post(message) {
@@ -59,22 +80,16 @@
   }
 
   function saveMessageDraft() {
-    const root = lastActiveRepoRoot || activeRepoRoot();
-    if (root) {
-      commitMessages[root] = messageEl.value;
-    }
+    commitMessages.workspace = messageEl.value;
   }
 
   function loadMessageDraft() {
-    const root = activeRepoRoot();
-    messageEl.value = commitMessages[root] || '';
-    lastActiveRepoRoot = root;
+    messageEl.value = commitMessages.workspace || messageEl.value || '';
   }
 
   function setBusy(busy) {
     workspace.busy = busy;
-    const active = workspace.active;
-    const disabled = !!busy || !workspace.ok || !active.ok;
+    const disabled = !!busy || !workspace.ok;
     commitBtn.disabled = disabled;
     commitPushBtn.disabled = disabled;
     stageAllBtn.disabled = disabled;
@@ -167,12 +182,16 @@
     );
   }
 
-  function selectionStillExists(active, selectedRef) {
+  function selectionStillExists(selectedRef) {
     if (!selectedRef) {
       return false;
     }
-    const tracked = getMergedChanges(active);
-    const unversioned = getUnversioned(active);
+    const repo = findRepo(selectedRef.repoRoot);
+    if (!repo) {
+      return false;
+    }
+    const tracked = getMergedChanges(repo);
+    const unversioned = getUnversioned(repo);
     if (tracked.some((i) => i.path === selectedRef.path && i.staged === selectedRef.staged)) {
       return true;
     }
@@ -228,27 +247,12 @@
   }
 
   function renderRepoSelector() {
-    const repos = workspace.repositories || [];
-    if (repos.length <= 1) {
-      repoBar.classList.add('hidden');
-      return;
-    }
-    repoBar.classList.remove('hidden');
-    const current = activeRepoRoot();
-    repoSelect.innerHTML = '';
-    for (const repo of repos) {
-      const opt = document.createElement('option');
-      opt.value = repo.rootPath;
-      const branch = repo.branch ? ` · ${repo.branch}` : '';
-      opt.textContent = `${repo.name}${branch}`;
-      opt.selected = repo.rootPath === current;
-      repoSelect.appendChild(opt);
-    }
+    // Multi-repo Changes are shown grouped below; no top-level switcher.
+    repoBar.classList.add('hidden');
   }
 
   function renderFiles() {
     fileList.innerHTML = '';
-    const active = workspace.active;
 
     if (!workspace.ok) {
       const empty = document.createElement('div');
@@ -258,19 +262,58 @@
       return;
     }
 
-    if (!active.ok) {
+    const repos = allRepos();
+    if (!repos.length) {
       const empty = document.createElement('div');
       empty.className = 'placeholder';
-      empty.textContent = active.error || 'Repository unavailable';
+      empty.textContent = workspace.active?.error || 'Repository unavailable';
       fileList.appendChild(empty);
       return;
     }
 
-    const repoRoot = active.rootPath;
-    const tracked = getMergedChanges(active);
-    const unversioned = getUnversioned(active);
-    fileList.appendChild(renderChangeList('Changes', tracked, repoRoot));
-    fileList.appendChild(renderChangeList('Unversioned Files', unversioned, repoRoot, true));
+    const multi = repos.length > 1;
+    const focused = activeRepoRoot();
+    let rendered = 0;
+
+    for (const repo of repos) {
+      const tracked = getMergedChanges(repo);
+      const unversioned = getUnversioned(repo);
+      if (multi && !tracked.length && !unversioned.length) {
+        continue;
+      }
+
+      rendered += 1;
+      const group = document.createElement('div');
+      group.className = 'repo-group';
+      if (
+        multi &&
+        focused &&
+        String(repo.rootPath).replace(/\\/g, '/').toLowerCase() ===
+          String(focused).replace(/\\/g, '/').toLowerCase()
+      ) {
+        group.classList.add('focused');
+      }
+
+      if (multi) {
+        const title = document.createElement('div');
+        title.className = 'repo-group-title';
+        const branch = repo.branch ? ` · ${repo.branch}` : '';
+        const count = tracked.length + unversioned.length;
+        title.innerHTML = `<span class="repo-group-name">${repo.name}${branch}</span><span class="repo-group-count">${count}</span>`;
+        group.appendChild(title);
+      }
+
+      group.appendChild(renderChangeList('Changes', tracked, repo.rootPath));
+      group.appendChild(renderChangeList('Unversioned Files', unversioned, repo.rootPath, true));
+      fileList.appendChild(group);
+    }
+
+    if (!rendered) {
+      const empty = document.createElement('div');
+      empty.className = 'placeholder';
+      empty.textContent = 'No local changes';
+      fileList.appendChild(empty);
+    }
   }
 
   function renderChangeList(title, items, repoRoot, unversionedGroup = false) {
@@ -370,12 +413,11 @@
 
   function validateBeforeCommit() {
     const message = messageEl.value.trim();
-    const active = workspace.active;
     if (!message) {
       showFormError('Commit message cannot be empty.');
       return null;
     }
-    if (!active.staged.length) {
+    if (!totalStagedCount()) {
       showFormError('请勾选要提交的文件。');
       return null;
     }
@@ -434,22 +476,50 @@
   }
 
   function openPushModal() {
-    const active = workspace.active;
+    const repos = allRepos();
+    const active = findRepo(activeRepoRoot()) || workspace.active || repos[0] || {};
+    const lines = [];
+    if (repos.length > 1) {
+      lines.push('将 Push 当前聚焦仓库（高亮分组）。其它仓库概况：');
+      for (const repo of repos) {
+        const ahead = typeof repo.ahead === 'number' ? repo.ahead : '?';
+        const behind = typeof repo.behind === 'number' ? repo.behind : '?';
+        const mark =
+          String(repo.rootPath).replace(/\\/g, '/').toLowerCase() ===
+          String(active.rootPath || '').replace(/\\/g, '/').toLowerCase()
+            ? '→ '
+            : '  ';
+        lines.push(
+          `${mark}${repo.name}${repo.branch ? ` (${repo.branch})` : ''}  ahead ${ahead} / behind ${behind}`
+        );
+      }
+      lines.push('');
+    }
     const branch = active.branch || '(detached)';
     const upstream = active.upstream || '(no upstream)';
     const remotes = (active.remotes || []).join(', ') || '(none)';
     const ahead = typeof active.ahead === 'number' ? active.ahead : '?';
     const behind = typeof active.behind === 'number' ? active.behind : '?';
-    let note = `Repository: ${active.name}\nBranch: ${branch}\nUpstream: ${upstream}\nRemotes: ${remotes}\nAhead: ${ahead}\nBehind: ${behind}`;
+    lines.push(
+      `Repository: ${active.name || '(unknown)'}`,
+      `Branch: ${branch}`,
+      `Upstream: ${upstream}`,
+      `Remotes: ${remotes}`,
+      `Ahead: ${ahead}`,
+      `Behind: ${behind}`
+    );
     if (typeof active.ahead === 'number' && active.ahead === 0) {
-      note += '\n\nNo local commits to push (ahead = 0). You can still try Push.';
+      lines.push('', 'No local commits to push (ahead = 0). You can still try Push.');
     }
     if (typeof active.behind === 'number' && active.behind > 0) {
-      note += `\n\nRemote is ahead by ${active.behind} commit(s). Push may be rejected — Merge or Rebase first.`;
+      lines.push(
+        '',
+        `Remote is ahead by ${active.behind} commit(s). Push may be rejected — Merge or Rebase first.`
+      );
     }
     pushModalState = 'confirm';
     pushTitle.textContent = 'Push';
-    pushSummary.textContent = note;
+    pushSummary.textContent = lines.join('\n');
     renderConflictList([]);
     setPushActionVisibility(['pushCancel', 'pushConfirm']);
     pushModal.classList.remove('hidden');
@@ -529,9 +599,11 @@
   }
 
   repoSelect.addEventListener('change', () => {
-    saveMessageDraft();
+    // Kept for compatibility; selector is hidden in grouped multi-repo mode.
     const repoRoot = repoSelect.value;
-    post({ type: 'switchRepo', repoRoot });
+    if (repoRoot) {
+      post({ type: 'switchRepo', repoRoot });
+    }
   });
 
   commitBtn.addEventListener('click', () => {
@@ -650,17 +722,13 @@
     const msg = event.data;
     switch (msg.type) {
       case 'snapshot': {
-        const prevRoot = activeRepoRoot();
         workspace = msg.payload;
-        const nextRoot = activeRepoRoot();
-        if (prevRoot && prevRoot !== nextRoot) {
-          saveMessageDraft();
-        }
-        if (nextRoot !== lastActiveRepoRoot) {
+        if (!commitMessages.workspaceInitialized) {
           loadMessageDraft();
+          commitMessages.workspaceInitialized = true;
         }
 
-        const active = workspace.active;
+        const active = workspace.active || {};
         if (workspace.error) {
           showBanner(workspace.error, 'error');
         } else if (active.hint) {
@@ -672,11 +740,9 @@
         setBusy(!!workspace.busy);
         renderRepoSelector();
 
-        if (selected) {
-          if (selected.repoRoot !== nextRoot || !selectionStillExists(active, selected)) {
-            selected = null;
-            post({ type: 'updateSelection', repoRoot: nextRoot, path: null, staged: false });
-          }
+        if (selected && !selectionStillExists(selected)) {
+          selected = null;
+          post({ type: 'updateSelection', repoRoot: activeRepoRoot(), path: null, staged: false });
         }
         renderFiles();
         syncConflictListFromSnapshot();

@@ -194,6 +194,44 @@ body.sidebar-mode .commit-form {
   text-transform: uppercase;
 }
 
+.repo-group {
+  margin-bottom: 4px;
+}
+
+.repo-group + .repo-group {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 2px;
+}
+
+.repo-group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 2px;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.92;
+}
+
+.repo-group.focused .repo-group-title {
+  color: var(--vscode-gitDecoration-modifiedResourceForeground, var(--modified));
+}
+
+.repo-group-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-group-count {
+  flex-shrink: 0;
+  font-weight: 500;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
 .file-row {
   display: grid;
   grid-template-columns: 18px 16px 1fr;

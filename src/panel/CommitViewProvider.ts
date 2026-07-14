@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { GitService, PushRejectedError } from '../git/GitService';
-import { HostToWebview, SyncMode, WebviewToHost } from './messages';
+import { CommitRepoResult, HostToWebview, SyncMode, WebviewToHost } from './messages';
 
 export class CommitViewProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'copyIdeaGitUi.commitView';
@@ -212,24 +212,23 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'commit':
 					await this.withBusy(async () => {
-						const active = this.git.getSnapshot();
-						await this.git.commit(msg.message);
-						vscode.window.showInformationMessage(
-							`Committed to ${active.name}${active.branch ? ` (${active.branch})` : ''}.`
-						);
+						const committed = await this.git.commitAllStaged(msg.message);
+						vscode.window.showInformationMessage(formatCommittedMessage(committed));
 						this.post({ type: 'clearMessage' });
 					});
 					break;
 				case 'commitAndPush':
 					await this.withBusy(async () => {
-						const active = this.git.getSnapshot();
-						await this.git.commit(msg.message);
-						vscode.window.showInformationMessage(
-							`Committed to ${active.name}${active.branch ? ` (${active.branch})` : ''}.`
-						);
+						const committed = await this.git.commitAllStaged(msg.message);
+						vscode.window.showInformationMessage(formatCommittedMessage(committed));
 						this.post({ type: 'clearMessage' });
+						for (const repo of committed) {
+							const pushed = await this.runPush(repo.rootPath);
+							if (!pushed) {
+								return;
+							}
+						}
 					});
-					await this.reveal(true);
 					break;
 				case 'push':
 					await this.withBusy(async () => {
@@ -290,18 +289,26 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	private async runPush(): Promise<void> {
-		const active = this.git.getSnapshot();
+	private async runPush(repoRoot?: string): Promise<boolean> {
+		const workspace = this.git.getWorkspaceSnapshot();
+		const snap = repoRoot
+			? workspace.repositories.find((r) =>
+					r.rootPath.replace(/\\/g, '/').toLowerCase() === repoRoot.replace(/\\/g, '/').toLowerCase()
+				)
+			: workspace.active;
+		const label = snap?.name ?? 'repository';
+		const upstream = snap?.upstream;
 		try {
-			await this.git.push();
+			await this.git.push(repoRoot);
 			this.post({ type: 'closePushDialog' });
 			vscode.window.showInformationMessage(
-				`Pushed ${active.name}${active.upstream ? ` → ${active.upstream}` : ''}.`
+				`Pushed ${label}${upstream ? ` → ${upstream}` : ''}.`
 			);
+			return true;
 		} catch (err) {
 			if (err instanceof PushRejectedError) {
 				this.postPushRejected(err.message);
-				return;
+				return false;
 			}
 			throw err;
 		}
@@ -489,4 +496,13 @@ function getNonce(): string {
 		text += chars.charAt(Math.floor(Math.random() * chars.length));
 	}
 	return text;
+}
+
+function formatCommittedMessage(committed: CommitRepoResult[]): string {
+	if (committed.length === 1) {
+		const repo = committed[0];
+		return `Committed to ${repo.name}${repo.branch ? ` (${repo.branch})` : ''}.`;
+	}
+	const names = committed.map((r) => r.name).join(', ');
+	return `Committed to ${committed.length} repositories: ${names}.`;
 }
