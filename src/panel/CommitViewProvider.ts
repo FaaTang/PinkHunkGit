@@ -410,8 +410,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
     </div>
     <div id="banner" class="banner hidden"></div>
     <div id="repoBar" class="repo-bar hidden">
-      <label for="repoSelect">Repository</label>
-      <select id="repoSelect" title="Switch Git repository"></select>
+      <select id="repoSelect" title="默认跟随当前编辑文件所在仓库；也可手动切换" aria-label="当前仓库"></select>
     </div>
     <div class="main">
       <aside class="file-pane">
