@@ -47,9 +47,12 @@
     activeRepoRoot: '',
     busy: false,
   };
-  const commitMessages = {};
-  const collapsedRepos = new Set((vscode.getState() || {}).collapsedRepos || []);
-  const collapsedGroups = new Set((vscode.getState() || {}).collapsedGroups || []);
+  const webviewState = vscode.getState() || {};
+  const collapsedRepos = new Set(webviewState.collapsedRepos || []);
+  const collapsedGroups = new Set(webviewState.collapsedGroups || []);
+  let lastCommitMessage = webviewState.lastCommitMessage || '';
+  let messageDraft = webviewState.messageDraft || '';
+  let messageDraftInitialized = false;
   let selected = null;
   let lastActiveRepoRoot = '';
   let pendingRollback = null;
@@ -85,10 +88,13 @@
     return allRepos().find((r) => repoKey(r.rootPath) === key);
   }
 
-  function saveCollapsedRepos() {
-    const state = vscode.getState() || {};
-    state.collapsedRepos = Array.from(collapsedRepos);
+  function saveWebviewState(patch) {
+    const state = { ...vscode.getState(), ...patch };
     vscode.setState(state);
+  }
+
+  function saveCollapsedRepos() {
+    saveWebviewState({ collapsedRepos: Array.from(collapsedRepos) });
   }
 
   function toggleRepoCollapsed(root) {
@@ -107,9 +113,7 @@
   }
 
   function saveCollapsedGroups() {
-    const state = vscode.getState() || {};
-    state.collapsedGroups = Array.from(collapsedGroups);
-    vscode.setState(state);
+    saveWebviewState({ collapsedGroups: Array.from(collapsedGroups) });
   }
 
   function toggleGroupCollapsed(root, group) {
@@ -128,11 +132,18 @@
   }
 
   function saveMessageDraft() {
-    commitMessages.workspace = messageEl.value;
+    messageDraft = messageEl.value;
+    saveWebviewState({ messageDraft, lastCommitMessage });
   }
 
   function loadMessageDraft() {
-    messageEl.value = commitMessages.workspace || messageEl.value || '';
+    messageEl.value = messageDraft || lastCommitMessage || '';
+  }
+
+  function cacheLastCommitMessage(message) {
+    lastCommitMessage = message;
+    messageDraft = message;
+    saveWebviewState({ lastCommitMessage, messageDraft });
   }
 
   function setBusy(busy) {
@@ -677,6 +688,7 @@
     if (!message) {
       return;
     }
+    cacheLastCommitMessage(message);
     post({ type: 'commit', message });
   });
 
@@ -685,7 +697,12 @@
     if (!message) {
       return;
     }
+    cacheLastCommitMessage(message);
     post({ type: 'commitAndPush', message });
+  });
+
+  messageEl.addEventListener('input', () => {
+    saveMessageDraft();
   });
 
   stageAllBtn.addEventListener('click', () => post({ type: 'stageAll', staged: true }));
@@ -807,9 +824,9 @@
     switch (msg.type) {
       case 'snapshot': {
         workspace = msg.payload;
-        if (!commitMessages.workspaceInitialized) {
+        if (!messageDraftInitialized) {
           loadMessageDraft();
-          commitMessages.workspaceInitialized = true;
+          messageDraftInitialized = true;
         }
 
         const active = workspace.active || {};
@@ -866,9 +883,9 @@
         openUpdateAllModal(msg.payload);
         break;
       case 'clearMessage': {
-        const root = activeRepoRoot();
-        commitMessages[root] = '';
-        messageEl.value = '';
+        messageEl.value = lastCommitMessage || '';
+        messageDraft = messageEl.value;
+        saveWebviewState({ messageDraft, lastCommitMessage });
         showFormError('');
         break;
       }
