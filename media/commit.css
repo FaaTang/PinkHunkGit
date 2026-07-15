@@ -186,12 +186,41 @@ body.sidebar-mode .commit-form {
 .group-title {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   padding: 8px 10px 4px;
   font-size: 11px;
   font-weight: 600;
   opacity: 0.75;
   text-transform: uppercase;
+}
+
+.group-title.collapsible {
+  cursor: pointer;
+  user-select: none;
+}
+
+.group-title.collapsible:hover {
+  background: var(--list-hover);
+}
+
+.group-title-chevron {
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+  opacity: 0.8;
+  font-size: 10px;
+}
+
+.group-title-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-title-count {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .repo-group {

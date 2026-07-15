@@ -49,6 +49,7 @@
   };
   const commitMessages = {};
   const collapsedRepos = new Set((vscode.getState() || {}).collapsedRepos || []);
+  const collapsedGroups = new Set((vscode.getState() || {}).collapsedGroups || []);
   let selected = null;
   let lastActiveRepoRoot = '';
   let pendingRollback = null;
@@ -98,6 +99,27 @@
       collapsedRepos.add(key);
     }
     saveCollapsedRepos();
+    renderFiles();
+  }
+
+  function groupKey(root, group) {
+    return repoKey(root) + '::' + group;
+  }
+
+  function saveCollapsedGroups() {
+    const state = vscode.getState() || {};
+    state.collapsedGroups = Array.from(collapsedGroups);
+    vscode.setState(state);
+  }
+
+  function toggleGroupCollapsed(root, group) {
+    const key = groupKey(root, group);
+    if (collapsedGroups.has(key)) {
+      collapsedGroups.delete(key);
+    } else {
+      collapsedGroups.add(key);
+    }
+    saveCollapsedGroups();
     renderFiles();
   }
 
@@ -331,8 +353,10 @@
       }
 
       if (!collapsed) {
-        group.appendChild(renderChangeList('Changes', tracked, repo.rootPath));
-        group.appendChild(renderChangeList('Unversioned Files', unversioned, repo.rootPath, true));
+        group.appendChild(renderChangeList('Changes', tracked, repo.rootPath, false, 'changes'));
+        group.appendChild(
+          renderChangeList('Unversioned Files', unversioned, repo.rootPath, true, 'unversioned')
+        );
       } else {
         group.classList.add('collapsed');
       }
@@ -347,12 +371,23 @@
     }
   }
 
-  function renderChangeList(title, items, repoRoot, unversionedGroup = false) {
+  function renderChangeList(title, items, repoRoot, unversionedGroup = false, groupId = '') {
     const wrap = document.createElement('div');
+    const collapsed = groupId ? collapsedGroups.has(groupKey(repoRoot, groupId)) : false;
     const head = document.createElement('div');
-    head.className = 'group-title';
-    head.innerHTML = `<span>${title}</span><span>${items.length}</span>`;
+    head.className = 'group-title collapsible';
+    head.innerHTML =
+      `<span class="group-title-chevron">${collapsed ? '▸' : '▾'}</span>` +
+      `<span class="group-title-name">${title}</span><span class="group-title-count">${items.length}</span>`;
+    if (groupId) {
+      head.title = collapsed ? '点击展开' : '点击折叠';
+      head.addEventListener('click', () => toggleGroupCollapsed(repoRoot, groupId));
+    }
     wrap.appendChild(head);
+
+    if (collapsed) {
+      return wrap;
+    }
 
     if (!items.length) {
       const empty = document.createElement('div');
