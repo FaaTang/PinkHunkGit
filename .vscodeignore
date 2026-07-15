@@ -11,4 +11,5 @@ tsconfig.json
 **/*.map
 **/*.ts
 **/*.vsix
+**/*.code-workspace
 !media/**

@@ -368,7 +368,8 @@ export class GitService implements vscode.Disposable {
 			return;
 		}
 
-		await vscode.commands.executeCommand('git.refresh').then(undefined, () => undefined);
+		// Note: do NOT call the built-in 'git.refresh' command here. Without a repository
+		// argument it opens a "Choose a repository" quick pick in multi-repo workspaces.
 		await Promise.all(this.api.repositories.map((repo) => repo.status().catch(() => undefined)));
 
 		this.bindRepositoryEvents();

@@ -2,7 +2,7 @@
   "name": "copy-idea-git-ui",
   "displayName": "Copy IDEA Git UI",
   "description": "IDEA-like Git commit panel for VS Code",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "copyideagitui",
   "license": "MIT",
   "engines": {

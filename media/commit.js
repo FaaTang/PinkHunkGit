@@ -44,6 +44,7 @@
     busy: false,
   };
   const commitMessages = {};
+  const collapsedRepos = new Set((vscode.getState() || {}).collapsedRepos || []);
   let selected = null;
   let lastActiveRepoRoot = '';
   let pendingRollback = null;
@@ -67,12 +68,33 @@
     return allRepos().reduce((n, r) => n + (r.staged?.length || 0), 0);
   }
 
+  function repoKey(root) {
+    return String(root || '').replace(/\\/g, '/').toLowerCase();
+  }
+
   function findRepo(root) {
     if (!root) {
       return undefined;
     }
-    const key = String(root).replace(/\\/g, '/').toLowerCase();
-    return allRepos().find((r) => String(r.rootPath).replace(/\\/g, '/').toLowerCase() === key);
+    const key = repoKey(root);
+    return allRepos().find((r) => repoKey(r.rootPath) === key);
+  }
+
+  function saveCollapsedRepos() {
+    const state = vscode.getState() || {};
+    state.collapsedRepos = Array.from(collapsedRepos);
+    vscode.setState(state);
+  }
+
+  function toggleRepoCollapsed(root) {
+    const key = repoKey(root);
+    if (collapsedRepos.has(key)) {
+      collapsedRepos.delete(key);
+    } else {
+      collapsedRepos.add(key);
+    }
+    saveCollapsedRepos();
+    renderFiles();
   }
 
   function post(message) {
@@ -285,26 +307,31 @@
       rendered += 1;
       const group = document.createElement('div');
       group.className = 'repo-group';
-      if (
-        multi &&
-        focused &&
-        String(repo.rootPath).replace(/\\/g, '/').toLowerCase() ===
-          String(focused).replace(/\\/g, '/').toLowerCase()
-      ) {
+      if (multi && focused && repoKey(repo.rootPath) === repoKey(focused)) {
         group.classList.add('focused');
       }
 
+      const collapsed = multi && collapsedRepos.has(repoKey(repo.rootPath));
+
       if (multi) {
         const title = document.createElement('div');
-        title.className = 'repo-group-title';
+        title.className = 'repo-group-title collapsible';
         const branch = repo.branch ? ` · ${repo.branch}` : '';
         const count = tracked.length + unversioned.length;
-        title.innerHTML = `<span class="repo-group-name">${repo.name}${branch}</span><span class="repo-group-count">${count}</span>`;
+        title.innerHTML =
+          `<span class="repo-group-chevron">${collapsed ? '▸' : '▾'}</span>` +
+          `<span class="repo-group-name">${repo.name}${branch}</span><span class="repo-group-count">${count}</span>`;
+        title.title = collapsed ? '点击展开' : '点击折叠';
+        title.addEventListener('click', () => toggleRepoCollapsed(repo.rootPath));
         group.appendChild(title);
       }
 
-      group.appendChild(renderChangeList('Changes', tracked, repo.rootPath));
-      group.appendChild(renderChangeList('Unversioned Files', unversioned, repo.rootPath, true));
+      if (!collapsed) {
+        group.appendChild(renderChangeList('Changes', tracked, repo.rootPath));
+        group.appendChild(renderChangeList('Unversioned Files', unversioned, repo.rootPath, true));
+      } else {
+        group.classList.add('collapsed');
+      }
       fileList.appendChild(group);
     }
 
