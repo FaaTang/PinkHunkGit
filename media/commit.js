@@ -361,9 +361,9 @@
     for (const repo of repos) {
       const tracked = getMergedChanges(repo);
       const unversioned = getUnversioned(repo);
-      if (multi && !tracked.length && !unversioned.length) {
-        continue;
-      }
+      // Always list every Git repository in multi-root workspaces, including
+      // clean ones (no local changes). Skipping them made it look like the
+      // panel was missing repos (e.g. 3 folders open, only 2 shown).
 
       rendered += 1;
       const group = document.createElement('div');
