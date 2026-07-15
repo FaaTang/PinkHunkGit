@@ -69,6 +69,7 @@ export type SyncMode = 'merge' | 'rebase';
 
 export type PushRejectedPayload = {
 	message: string;
+	repoRoot?: string;
 	repoName: string;
 	branch?: string;
 	upstream?: string;
@@ -80,16 +81,19 @@ export type SyncConflictPayload = {
 	mode: SyncMode;
 	message: string;
 	conflicts: ChangeItem[];
+	repoRoot?: string;
 	repoName: string;
 	branch?: string;
 	upstream?: string;
 };
 
 export type AskPushPayload = {
+	repoRoot?: string;
 	repoName: string;
 	branch?: string;
 	upstream?: string;
 	ahead?: number;
+	behind?: number;
 	summary: string;
 };
 
@@ -122,12 +126,12 @@ export type WebviewToHost =
 	| { type: 'rollbackCancel' }
 	| { type: 'commit'; message: string }
 	| { type: 'commitAndPush'; message: string }
-	| { type: 'push' }
-	| { type: 'pushSync'; mode: SyncMode }
-	| { type: 'syncAbort' }
-	| { type: 'syncContinue' }
+	| { type: 'push'; repoRoot?: string }
+	| { type: 'pushSync'; mode: SyncMode; repoRoot?: string }
+	| { type: 'syncAbort'; repoRoot?: string }
+	| { type: 'syncContinue'; repoRoot?: string }
 	| { type: 'openConflict'; path: string }
-	| { type: 'askPushConfirm' }
+	| { type: 'askPushConfirm'; repoRoot?: string }
 	| { type: 'askPushCancel' }
 	| { type: 'pushDialogCancel' }
 	| { type: 'updateAllConfirm' }

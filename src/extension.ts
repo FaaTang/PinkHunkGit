@@ -46,6 +46,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				}
 			}
 			gitService.rememberEditorContext();
+			try {
+				await gitService.stageTrackedChanges();
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				vscode.window.showWarningMessage(`自动勾选 Changes 失败：${message}`);
+			}
 			await commitViewProvider.reveal(false, true);
 		}),
 		vscode.commands.registerCommand('copyIdeaGitUi.openPush', async () => {

@@ -58,6 +58,8 @@
   let pendingRollback = null;
   /** @type {'confirm' | 'rejected' | 'conflict' | 'askPush' | null} */
   let pushModalState = null;
+  /** Repo root for the in-progress Push / Merge / Rebase dialog. */
+  let pushRepoRoot = null;
 
   function activeRepoRoot() {
     return workspace.activeRepoRoot || workspace.active?.rootPath || '';
@@ -547,6 +549,7 @@
 
   function closePushModal() {
     pushModalState = null;
+    pushRepoRoot = null;
     pushModal.classList.add('hidden');
     pushConflictList.classList.add('hidden');
     pushConflictList.innerHTML = '';
@@ -555,6 +558,7 @@
   function openPushModal() {
     const repos = allRepos();
     const active = findRepo(activeRepoRoot()) || workspace.active || repos[0] || {};
+    pushRepoRoot = active.rootPath || null;
     const lines = [];
     if (repos.length > 1) {
       lines.push('将 Push 当前聚焦仓库（高亮分组）。其它仓库概况：');
@@ -604,6 +608,7 @@
 
   function openPushRejectedModal(payload) {
     pushModalState = 'rejected';
+    pushRepoRoot = payload.repoRoot || pushRepoRoot || activeRepoRoot() || null;
     pushTitle.textContent = 'Push Rejected';
     const behind =
       typeof payload.behind === 'number' ? `Behind remote: ${payload.behind}` : 'Remote has commits you do not have locally.';
@@ -621,6 +626,7 @@
 
   function openSyncConflictModal(payload) {
     pushModalState = 'conflict';
+    pushRepoRoot = payload.repoRoot || pushRepoRoot || activeRepoRoot() || null;
     const modeLabel = payload.mode === 'rebase' ? 'Rebase' : 'Merge';
     pushTitle.textContent = `${modeLabel} Conflicts`;
     pushSummary.textContent =
@@ -633,13 +639,17 @@
 
   function openAskPushModal(payload) {
     pushModalState = 'askPush';
+    pushRepoRoot = payload.repoRoot || pushRepoRoot || activeRepoRoot() || null;
     pushTitle.textContent = 'Push？';
+    const behindLine =
+      typeof payload.behind === 'number' ? `\nBehind: ${payload.behind}` : '';
     pushSummary.textContent =
       `${payload.summary}\n\n` +
       `Repository: ${payload.repoName}\n` +
       `Branch: ${payload.branch || '(detached)'}\n` +
       `Upstream: ${payload.upstream || '(none)'}\n` +
-      `Ahead: ${typeof payload.ahead === 'number' ? payload.ahead : '?'}`;
+      `Ahead: ${typeof payload.ahead === 'number' ? payload.ahead : '?'}` +
+      behindLine;
     renderConflictList([]);
     setPushActionVisibility(['pushAskNo', 'pushAskYes']);
     pushModal.classList.remove('hidden');
@@ -750,17 +760,27 @@
     post({ type: 'pushDialogCancel' });
   });
   pushConfirm.addEventListener('click', () => {
-    post({ type: 'push' });
+    post({ type: 'push', repoRoot: pushRepoRoot || undefined });
   });
-  pushMerge.addEventListener('click', () => post({ type: 'pushSync', mode: 'merge' }));
-  pushRebase.addEventListener('click', () => post({ type: 'pushSync', mode: 'rebase' }));
-  pushAbort.addEventListener('click', () => post({ type: 'syncAbort' }));
-  pushContinue.addEventListener('click', () => post({ type: 'syncContinue' }));
+  pushMerge.addEventListener('click', () =>
+    post({ type: 'pushSync', mode: 'merge', repoRoot: pushRepoRoot || undefined })
+  );
+  pushRebase.addEventListener('click', () =>
+    post({ type: 'pushSync', mode: 'rebase', repoRoot: pushRepoRoot || undefined })
+  );
+  pushAbort.addEventListener('click', () =>
+    post({ type: 'syncAbort', repoRoot: pushRepoRoot || undefined })
+  );
+  pushContinue.addEventListener('click', () =>
+    post({ type: 'syncContinue', repoRoot: pushRepoRoot || undefined })
+  );
   pushAskNo.addEventListener('click', () => {
     closePushModal();
     post({ type: 'askPushCancel' });
   });
-  pushAskYes.addEventListener('click', () => post({ type: 'askPushConfirm' }));
+  pushAskYes.addEventListener('click', () =>
+    post({ type: 'askPushConfirm', repoRoot: pushRepoRoot || undefined })
+  );
   rollbackCancelBtn.addEventListener('click', () => {
     closeRollbackModal();
     post({ type: 'rollbackCancel' });

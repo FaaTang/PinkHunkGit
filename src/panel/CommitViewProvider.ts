@@ -265,24 +265,24 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'push':
 					await this.withBusy(async () => {
-						await this.runPush();
+						await this.runPush(msg.repoRoot);
 					});
 					break;
 				case 'pushSync':
 					await this.withBusy(async () => {
-						await this.runPushSync(msg.mode);
+						await this.runPushSync(msg.mode, msg.repoRoot);
 					});
 					break;
 				case 'syncAbort':
 					await this.withBusy(async () => {
-						await this.git.abortSync();
+						await this.git.abortSync(msg.repoRoot);
 						this.post({ type: 'closePushDialog' });
 						vscode.window.showInformationMessage('已中止 Merge / Rebase。');
 					});
 					break;
 				case 'syncContinue':
 					await this.withBusy(async () => {
-						await this.handleSyncResult(await this.git.continueSync());
+						await this.handleSyncResult(await this.git.continueSync(msg.repoRoot), msg.repoRoot);
 					});
 					break;
 				case 'openConflict':
@@ -290,7 +290,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'askPushConfirm':
 					await this.withBusy(async () => {
-						await this.runPush();
+						await this.runPush(msg.repoRoot);
 					});
 					break;
 				case 'askPushCancel':
@@ -346,19 +346,28 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			return true;
 		} catch (err) {
 			if (err instanceof PushRejectedError) {
-				this.postPushRejected(err.message);
+				this.postPushRejected(err.message, repoRoot);
 				return false;
 			}
 			throw err;
 		}
 	}
 
-	private postPushRejected(message: string): void {
+	private postPushRejected(message: string, repoRoot?: string): void {
+		if (repoRoot) {
+			try {
+				this.git.setActiveRepository(repoRoot);
+			} catch {
+				// Keep current active repo if root is stale.
+			}
+		}
 		const ctx = this.git.getPushContext();
+		const snap = this.git.getWorkspaceSnapshot().active;
 		this.post({
 			type: 'showPushRejected',
 			payload: {
 				message,
+				repoRoot: snap.rootPath || repoRoot,
 				repoName: ctx.repoName,
 				branch: ctx.branch,
 				upstream: ctx.upstream,
@@ -368,20 +377,27 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		});
 	}
 
-	private async runPushSync(mode: SyncMode): Promise<void> {
-		const result = await this.git.syncWithUpstream(mode);
-		await this.handleSyncResult(result);
+	private async runPushSync(mode: SyncMode, repoRoot?: string): Promise<void> {
+		const result = await this.git.syncWithUpstream(mode, repoRoot);
+		await this.handleSyncResult(result, repoRoot);
 	}
 
-	private async handleSyncResult(result: Awaited<ReturnType<GitService['syncWithUpstream']>>): Promise<void> {
+	private async handleSyncResult(
+		result: Awaited<ReturnType<GitService['syncWithUpstream']>>,
+		repoRoot?: string
+	): Promise<void> {
+		const ctx = this.git.getPushContext();
+		const snap = this.git.getWorkspaceSnapshot().active;
+		const resolvedRoot = snap.rootPath || repoRoot;
+
 		if (result.status === 'conflict') {
-			const ctx = this.git.getPushContext();
 			this.post({
 				type: 'showSyncConflict',
 				payload: {
 					mode: result.mode,
 					message: result.message,
 					conflicts: result.conflicts,
+					repoRoot: resolvedRoot,
 					repoName: ctx.repoName,
 					branch: ctx.branch,
 					upstream: ctx.upstream,
@@ -390,15 +406,22 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		const ctx = this.git.getPushContext();
+		if (result.status === 'failed') {
+			vscode.window.showErrorMessage(result.message);
+			this.postPushRejected(result.message, resolvedRoot);
+			return;
+		}
+
 		const modeLabel = result.mode === 'merge' ? 'Merge' : 'Rebase';
 		this.post({
 			type: 'showAskPush',
 			payload: {
+				repoRoot: resolvedRoot,
 				repoName: ctx.repoName,
 				branch: ctx.branch,
 				upstream: ctx.upstream,
 				ahead: ctx.ahead,
+				behind: ctx.behind,
 				summary: `${modeLabel} 已完成。是否立即 Push 到 ${ctx.upstream || 'remote'}？`,
 			},
 		});

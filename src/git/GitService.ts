@@ -28,7 +28,8 @@ export class PushRejectedError extends Error {
 
 export type SyncResult =
 	| { status: 'ok'; mode: SyncMode }
-	| { status: 'conflict'; mode: SyncMode; conflicts: ChangeItem[]; message: string };
+	| { status: 'conflict'; mode: SyncMode; conflicts: ChangeItem[]; message: string }
+	| { status: 'failed'; mode: SyncMode; message: string };
 
 export type PullAllResult = {
 	succeeded: string[];
@@ -458,6 +459,27 @@ export class GitService implements vscode.Disposable {
 		}
 	}
 
+	/** Stage tracked Changes only (exclude Unversioned Files). Used by Ctrl+K open. */
+	async stageTrackedChanges(): Promise<void> {
+		const workspace = this.getWorkspaceSnapshot();
+		if (!workspace.ok) {
+			return;
+		}
+
+		for (const snap of workspace.repositories) {
+			if (!snap.ok || !snap.unstaged.length) {
+				continue;
+			}
+			const repo = this.requireRepoByRoot(snap.rootPath);
+			for (const item of snap.unstaged) {
+				if (item.unsaved) {
+					await this.ensureSaved(item.fsPath);
+				}
+			}
+			await repo.add(snap.unstaged.map((c) => c.fsPath));
+		}
+	}
+
 	/**
 	 * Commit staged changes in every repo that has checked files (same message).
 	 */
@@ -492,12 +514,13 @@ export class GitService implements vscode.Disposable {
 
 	async push(repoRoot?: string): Promise<void> {
 		const repo = repoRoot ? this.requireRepoByRoot(repoRoot) : this.requireActiveRepo();
+		// Keep the rejected repo pinned so Merge / Rebase / retry Push stay on the same repo.
+		this.setActiveRepository(repo.rootUri.fsPath);
 		try {
 			await repo.push();
 		} catch (err) {
 			if (isPushRejectedError(err)) {
-				this.activeRepoRoot = repo.rootUri.fsPath;
-				this.pinnedRepoRoot = undefined;
+				this.setActiveRepository(repo.rootUri.fsPath);
 				throw new PushRejectedError(formatGitError(err));
 			}
 			throw err instanceof Error ? err : new Error(String(err));
@@ -521,18 +544,13 @@ export class GitService implements vscode.Disposable {
 		};
 	}
 
-	async syncWithUpstream(mode: SyncMode): Promise<SyncResult> {
-		const repo = this.requireActiveRepo();
-		const upstream = this.requireUpstreamName(repo);
-
-		await this.fetchRepo(repo);
+	async syncWithUpstream(mode: SyncMode, repoRoot?: string): Promise<SyncResult> {
+		const repo = repoRoot ? this.requireRepoByRoot(repoRoot) : this.requireActiveRepo();
+		this.setActiveRepository(repo.rootUri.fsPath);
+		this.requireUpstreamName(repo);
 
 		try {
-			if (mode === 'merge') {
-				await this.mergeUpstream(repo, upstream);
-			} else {
-				await this.rebaseOntoUpstream(repo, upstream);
-			}
+			await this.pullUpstream(repo, mode);
 		} catch (err) {
 			await repo.status().catch(() => undefined);
 			const conflicts = this.getConflictItems(repo);
@@ -547,22 +565,12 @@ export class GitService implements vscode.Disposable {
 			throw err instanceof Error ? err : new Error(String(err));
 		}
 
-		await repo.status().catch(() => undefined);
-		const conflicts = this.getConflictItems(repo);
-		if (conflicts.length) {
-			return {
-				status: 'conflict',
-				mode,
-				conflicts,
-				message: `${mode === 'merge' ? 'Merge' : 'Rebase'} produced conflicts. Resolve them, then continue.`,
-			};
-		}
-
-		return { status: 'ok', mode };
+		return this.finalizeSyncResult(repo, mode);
 	}
 
-	async continueSync(): Promise<SyncResult> {
-		const repo = this.requireActiveRepo();
+	async continueSync(repoRoot?: string): Promise<SyncResult> {
+		const repo = repoRoot ? this.requireRepoByRoot(repoRoot) : this.requireActiveRepo();
+		this.setActiveRepository(repo.rootUri.fsPath);
 		const mode = this.detectSyncMode(repo) ?? 'merge';
 		const remaining = this.getConflictItems(repo);
 		if (remaining.length) {
@@ -594,22 +602,12 @@ export class GitService implements vscode.Disposable {
 			throw err instanceof Error ? err : new Error(String(err));
 		}
 
-		await repo.status().catch(() => undefined);
-		const conflicts = this.getConflictItems(repo);
-		if (conflicts.length) {
-			return {
-				status: 'conflict',
-				mode,
-				conflicts,
-				message: 'Conflicts remain after continue. Resolve them, then try again.',
-			};
-		}
-
-		return { status: 'ok', mode };
+		return this.finalizeSyncResult(repo, mode);
 	}
 
-	async abortSync(): Promise<void> {
-		const repo = this.requireActiveRepo();
+	async abortSync(repoRoot?: string): Promise<void> {
+		const repo = repoRoot ? this.requireRepoByRoot(repoRoot) : this.requireActiveRepo();
+		this.setActiveRepository(repo.rootUri.fsPath);
 		const mode = this.detectSyncMode(repo);
 		const root = repo.rootUri.fsPath;
 
@@ -624,6 +622,34 @@ export class GitService implements vscode.Disposable {
 		}
 
 		await this.execGit(root, ['merge', '--abort']);
+	}
+
+	private async finalizeSyncResult(repo: Repository, mode: SyncMode): Promise<SyncResult> {
+		await repo.status().catch(() => undefined);
+		const conflicts = this.getConflictItems(repo);
+		if (conflicts.length) {
+			return {
+				status: 'conflict',
+				mode,
+				conflicts,
+				message:
+					mode === 'merge'
+						? 'Merge produced conflicts. Resolve them, then continue.'
+						: 'Rebase produced conflicts. Resolve them, then continue.',
+			};
+		}
+
+		const behind = repo.state.HEAD?.behind;
+		if (typeof behind === 'number' && behind > 0) {
+			const modeLabel = mode === 'merge' ? 'Merge' : 'Rebase';
+			return {
+				status: 'failed',
+				mode,
+				message: `${modeLabel} 后仍落后远程 ${behind} 个提交，无法 Push。请检查上游分支或网络后重试。`,
+			};
+		}
+
+		return { status: 'ok', mode };
 	}
 
 	async openConflictFile(relativePath: string): Promise<void> {
@@ -650,28 +676,23 @@ export class GitService implements vscode.Disposable {
 		};
 	}
 
-	private async fetchRepo(repo: Repository): Promise<void> {
-		if (typeof repo.fetch === 'function') {
-			await repo.fetch();
-			return;
+	/**
+	 * Pull from the tracked upstream with an explicit merge/rebase strategy.
+	 * Prefer `git pull` over separate fetch+merge so remote-tracking refs and
+	 * ahead/behind stay consistent (avoids false "already up to date").
+	 */
+	private async pullUpstream(repo: Repository, mode: SyncMode): Promise<void> {
+		const head = repo.state.HEAD;
+		if (!head?.upstream) {
+			throw new Error('当前分支没有上游（upstream）。请先设置跟踪分支后再同步。');
 		}
-		await this.execGit(repo.rootUri.fsPath, ['fetch']);
-	}
-
-	private async mergeUpstream(repo: Repository, upstream: string): Promise<void> {
-		if (typeof repo.merge === 'function') {
-			await repo.merge(upstream);
-			return;
-		}
-		await this.execGit(repo.rootUri.fsPath, ['merge', upstream]);
-	}
-
-	private async rebaseOntoUpstream(repo: Repository, upstream: string): Promise<void> {
-		if (typeof repo.rebase === 'function') {
-			await repo.rebase(upstream);
-			return;
-		}
-		await this.execGit(repo.rootUri.fsPath, ['rebase', upstream]);
+		const remote = head.upstream.remote;
+		const remoteBranch = head.upstream.name;
+		const args =
+			mode === 'rebase'
+				? ['pull', '--rebase', remote, remoteBranch]
+				: ['pull', '--no-rebase', remote, remoteBranch];
+		await this.execGit(repo.rootUri.fsPath, args);
 	}
 
 	private requireUpstreamName(repo: Repository): string {
