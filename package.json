@@ -2,7 +2,7 @@
   "name": "copy-idea-git-ui",
   "displayName": "Copy IDEA Git UI",
   "description": "IDEA-like Git commit panel for VS Code",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "copyideagitui",
   "license": "MIT",
   "engines": {
@@ -16,6 +16,7 @@
     "onView:copyIdeaGitUi.commitView",
     "onCommand:copyIdeaGitUi.openCommit",
     "onCommand:copyIdeaGitUi.openPush",
+    "onCommand:copyIdeaGitUi.updateAllRepositories",
     "onCommand:copyIdeaGitUi.showDiff",
     "onCommand:copyIdeaGitUi.openFile",
     "onCommand:copyIdeaGitUi.revealInExplorer",
@@ -37,6 +38,12 @@
         "command": "copyIdeaGitUi.openPush",
         "title": "Open Push",
         "category": "Copy IDEA Git UI"
+      },
+      {
+        "command": "copyIdeaGitUi.updateAllRepositories",
+        "title": "更新所有 Git 仓库",
+        "category": "Copy IDEA Git UI",
+        "icon": "$(sync)"
       },
       {
         "command": "copyIdeaGitUi.showDiff",
@@ -92,6 +99,12 @@
     "menus": {
       "view/title": [
         {
+          "command": "copyIdeaGitUi.updateAllRepositories",
+          "when": "view == copyIdeaGitUi.commitView",
+          "group": "navigation@0",
+          "title": "更新所有 Git 仓库"
+        },
+        {
           "command": "copyIdeaGitUi.openExplorer",
           "when": "view == copyIdeaGitUi.commitView",
           "group": "navigation@1",
@@ -109,6 +122,11 @@
         "command": "copyIdeaGitUi.openPush",
         "key": "ctrl+shift+k",
         "mac": "cmd+shift+k"
+      },
+      {
+        "command": "copyIdeaGitUi.updateAllRepositories",
+        "key": "ctrl+t",
+        "mac": "cmd+t"
       },
       {
         "command": "copyIdeaGitUi.showDiff",

@@ -10,6 +10,7 @@ const RECOMMENDED_BINDINGS: KeybindingEntry[] = [
 	{ key: 'ctrl+k', command: 'copyIdeaGitUi.openCommit', mac: 'cmd+k' },
 	{ key: 'ctrl+shift+k', command: 'copyIdeaGitUi.openPush', mac: 'cmd+shift+k' },
 	{ key: 'ctrl+shift+k', command: '-editor.action.deleteLines' },
+	{ key: 'ctrl+t', command: 'copyIdeaGitUi.updateAllRepositories', mac: 'cmd+t' },
 	{ key: 'ctrl+d', command: 'copyIdeaGitUi.showDiff', mac: 'cmd+d', when: SHOW_DIFF_WHEN },
 	{ key: 'f4', command: 'copyIdeaGitUi.openFile', when: 'copyIdeaGitUi.hasSelection' },
 	{ key: 'ctrl+alt+z', command: 'copyIdeaGitUi.rollback', mac: 'cmd+alt+z', when: SHOW_DIFF_WHEN },
@@ -21,7 +22,7 @@ export async function promptInstallKeybindings(context: vscode.ExtensionContext)
 	}
 
 	const choice = await vscode.window.showInformationMessage(
-		'Copy IDEA Git UI：Ctrl+K / Ctrl+Shift+K 会被 VS Code 内置快捷键占用。是否写入用户快捷键配置以仿 IDEA？',
+		'Copy IDEA Git UI：Ctrl+K / Ctrl+Shift+K / Ctrl+T 会被 VS Code 内置快捷键占用。是否写入用户快捷键配置以仿 IDEA？',
 		'安装',
 		'稍后'
 	);

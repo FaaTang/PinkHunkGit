@@ -30,6 +30,11 @@ export type SyncResult =
 	| { status: 'ok'; mode: SyncMode }
 	| { status: 'conflict'; mode: SyncMode; conflicts: ChangeItem[]; message: string };
 
+export type PullAllResult = {
+	succeeded: string[];
+	failed: Array<{ repository: string; error: string }>;
+};
+
 export class GitService implements vscode.Disposable {
 	private api: API | undefined;
 	private readonly disposables: vscode.Disposable[] = [];
@@ -126,6 +131,36 @@ export class GitService implements vscode.Disposable {
 
 	getRepositoryCount(): number {
 		return this.api?.repositories.length ?? 0;
+	}
+
+	async pullAllRepositories(
+		onProgress?: (repository: string, index: number, total: number) => void
+	): Promise<PullAllResult> {
+		if (!this.api) {
+			throw new Error('VS Code Git extension is not available.');
+		}
+
+		const repositories = [...this.api.repositories];
+		if (!repositories.length) {
+			throw new Error('Current workspace does not contain a Git repository.');
+		}
+
+		const result: PullAllResult = { succeeded: [], failed: [] };
+		for (const [index, repo] of repositories.entries()) {
+			const name = this.repoDisplayName(repo.rootUri.fsPath);
+			onProgress?.(name, index + 1, repositories.length);
+			try {
+				await repo.pull();
+				await repo.status().catch(() => undefined);
+				result.succeeded.push(name);
+			} catch (err) {
+				result.failed.push({ repository: name, error: formatGitError(err) });
+			}
+		}
+
+		this.bindRepositoryEvents();
+		this._onDidChange.fire();
+		return result;
 	}
 
 	/** Call before opening Commit so we keep the repo for the file being edited. */

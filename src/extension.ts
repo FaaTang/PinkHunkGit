@@ -59,6 +59,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			gitService.rememberEditorContext();
 			await commitViewProvider.reveal(true);
 		}),
+		vscode.commands.registerCommand('copyIdeaGitUi.updateAllRepositories', async () => {
+			if (!gitService || !gitReady) {
+				vscode.window.showErrorMessage(gitInitError);
+				return;
+			}
+			if (!gitService.getRepositoryCount()) {
+				vscode.window.showWarningMessage('当前工作区没有已识别的 Git 仓库。');
+				return;
+			}
+
+			const result = await vscode.window.withProgress(
+				{
+					location: vscode.ProgressLocation.Notification,
+					title: '正在更新所有 Git 仓库',
+					cancellable: false,
+				},
+				async (progress) =>
+					gitService!.pullAllRepositories((repository, index, total) => {
+						progress.report({ message: `${repository}（${index}/${total}）` });
+					})
+			);
+
+			if (!result.failed.length) {
+				vscode.window.showInformationMessage(
+					`已更新 ${result.succeeded.length} 个 Git 仓库。`
+				);
+				return;
+			}
+
+			const details = result.failed
+				.map(({ repository, error }) => `${repository}: ${error}`)
+				.join('\n');
+			vscode.window.showWarningMessage(
+				`仓库更新完成：成功 ${result.succeeded.length} 个，失败 ${result.failed.length} 个。\n${details}`,
+				{ modal: true }
+			);
+		}),
 		vscode.commands.registerCommand('copyIdeaGitUi.openExplorer', async () => {
 			await vscode.commands.executeCommand('workbench.view.explorer');
 			await vscode.commands.executeCommand('workbench.files.action.focusFilesExplorer');
@@ -89,7 +126,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 		vscode.commands.registerCommand('copyIdeaGitUi.installKeybindings', async () => {
 			const choice = await vscode.window.showWarningMessage(
-				'安装本插件快捷键会写入用户 keybindings.json，并可能覆盖已有快捷键（如 Ctrl+K、Ctrl+Shift+K、Ctrl+D、F4、Ctrl+Alt+Z）。是否继续？',
+				'安装本插件快捷键会写入用户 keybindings.json，并可能覆盖已有快捷键（如 Ctrl+K、Ctrl+Shift+K、Ctrl+T、Ctrl+D、F4、Ctrl+Alt+Z）。是否继续？',
 				{ modal: true },
 				'安装',
 				'取消'

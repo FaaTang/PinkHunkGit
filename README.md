@@ -44,7 +44,21 @@ npm run package
 - Changes / Unversioned Files 分组（仿 IDEA）
 - 勾选纳入提交；右键 Diff / 回滚 / 打开文件 / 定位资源管理器
 - Commit / Commit and Push；多仓库切换
+- 一次拉取并更新当前工作区内的所有 Git 仓库
 - 快捷键安装按钮（写入用户 `keybindings.json`）
+
+### 更新所有仓库
+
+运行 **Copy IDEA Git UI: 更新所有 Git 仓库** 会依次对 VS Code / Cursor
+当前已识别的每个 Git 仓库执行 `git pull`。可以通过以下任一方式手动运行：
+
+- 按 `Ctrl+T`（macOS 为 `Cmd+T`）
+- 点击 Commit 面板标题栏中的同步按钮
+- 从命令面板运行 **Copy IDEA Git UI: 更新所有 Git 仓库**
+
+更新过程中会显示当前仓库和总体进度。某个仓库更新失败时，插件会继续更新其余仓库，
+最后汇总成功数量以及失败原因。仓库需要已配置上游分支；本地改动、合并冲突、认证失败等
+情况仍按 Git 的规则处理，不会自动丢弃或覆盖本地修改。
 
 ### 快捷键（安装后）
 
@@ -52,11 +66,14 @@ npm run package
 |--------|------|
 | `Ctrl+K` | 打开 / 聚焦 Commit 面板 |
 | `Ctrl+Shift+K` | Push 弹窗 |
+| `Ctrl+T` | 拉取并更新工作区内的所有 Git 仓库 |
 | `Ctrl+D` | Show Diff（需选中文件） |
 | `F4` | 打开选中文件 |
 | `Ctrl+Alt+Z` | 回滚选中文件 |
 
 面板顶部 **⌨** 可一键安装上述快捷键（会提示可能覆盖现有绑定）。
+`Ctrl+T` / `Cmd+T` 与编辑器原有快捷键可能冲突；如需保留原绑定，可在 Keyboard
+Shortcuts 中删除或修改 `Copy IDEA Git UI: 更新所有 Git 仓库` 的快捷键，手动入口仍可使用。
 
 ## 要求
 
