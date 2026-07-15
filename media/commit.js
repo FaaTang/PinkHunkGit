@@ -34,6 +34,10 @@
   const keysModal = document.getElementById('keysModal');
   const keysCancel = document.getElementById('keysCancel');
   const keysConfirm = document.getElementById('keysConfirm');
+  const updateAllModal = document.getElementById('updateAllModal');
+  const updateAllSummary = document.getElementById('updateAllSummary');
+  const updateAllCancel = document.getElementById('updateAllCancel');
+  const updateAllConfirmBtn = document.getElementById('updateAllConfirm');
   const contextMenu = document.getElementById('contextMenu');
 
   let workspace = {
@@ -671,6 +675,24 @@
     keysModal.classList.add('hidden');
     post({ type: 'installKeybindings' });
   });
+  function closeUpdateAllModal(confirmed) {
+    updateAllModal.classList.add('hidden');
+    post({ type: confirmed ? 'updateAllConfirm' : 'updateAllCancel' });
+  }
+  function openUpdateAllModal(payload) {
+    const count = payload && payload.repoCount != null ? payload.repoCount : 0;
+    updateAllSummary.textContent = `将对工作区内 ${count} 个 Git 仓库执行 pull 更新。是否继续？`;
+    updateAllModal.classList.remove('hidden');
+    updateAllConfirmBtn.focus();
+  }
+  updateAllCancel.addEventListener('click', () => closeUpdateAllModal(false));
+  updateAllConfirmBtn.addEventListener('click', () => closeUpdateAllModal(true));
+  updateAllModal.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeUpdateAllModal(false);
+    }
+  });
   pushCancel.addEventListener('click', () => {
     closePushModal();
     post({ type: 'pushDialogCancel' });
@@ -804,6 +826,9 @@
         break;
       case 'showRollbackDialog':
         openRollbackModal(msg.payload);
+        break;
+      case 'showUpdateAllDialog':
+        openUpdateAllModal(msg.payload);
         break;
       case 'clearMessage': {
         const root = activeRepoRoot();

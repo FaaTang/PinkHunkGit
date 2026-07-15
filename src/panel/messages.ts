@@ -104,6 +104,7 @@ export type HostToWebview =
 	| { type: 'showAskPush'; payload: AskPushPayload }
 	| { type: 'closePushDialog' }
 	| { type: 'showRollbackDialog'; payload: RollbackDialogPayload }
+	| { type: 'showUpdateAllDialog'; payload: { repoCount: number } }
 	| { type: 'clearMessage' }
 	| { type: 'focusMessage' };
 
@@ -129,6 +130,8 @@ export type WebviewToHost =
 	| { type: 'askPushConfirm' }
 	| { type: 'askPushCancel' }
 	| { type: 'pushDialogCancel' }
+	| { type: 'updateAllConfirm' }
+	| { type: 'updateAllCancel' }
 	| { type: 'refresh' }
 	| { type: 'installKeybindings' }
 	| { type: 'openGitExtension' };
