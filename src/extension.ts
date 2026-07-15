@@ -64,8 +64,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				vscode.window.showErrorMessage(gitInitError);
 				return;
 			}
-			if (!gitService.getRepositoryCount()) {
+			const repoCount = gitService.getRepositoryCount();
+			if (!repoCount) {
 				vscode.window.showWarningMessage('当前工作区没有已识别的 Git 仓库。');
+				return;
+			}
+
+			const choice = await vscode.window.showWarningMessage(
+				`将对工作区内 ${repoCount} 个 Git 仓库执行 pull 更新。是否继续？`,
+				{ modal: true },
+				'更新',
+				'取消'
+			);
+			if (choice !== '更新') {
 				return;
 			}
 
