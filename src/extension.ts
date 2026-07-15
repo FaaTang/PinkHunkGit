@@ -60,7 +60,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await commitViewProvider.reveal(true);
 		}),
 		vscode.commands.registerCommand('copyIdeaGitUi.updateAllRepositories', async () => {
-			if (!gitService || !gitReady) {
+			if (!gitService || !gitReady || !commitViewProvider) {
 				vscode.window.showErrorMessage(gitInitError);
 				return;
 			}
@@ -70,13 +70,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				return;
 			}
 
-			const choice = await vscode.window.showWarningMessage(
-				`将对工作区内 ${repoCount} 个 Git 仓库执行 pull 更新。是否继续？`,
-				{ modal: true },
-				'更新',
-				'取消'
-			);
-			if (choice !== '更新') {
+			const confirmed = await commitViewProvider.confirmUpdateAll(repoCount);
+			if (!confirmed) {
 				return;
 			}
 
@@ -139,8 +134,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			const choice = await vscode.window.showWarningMessage(
 				'安装本插件快捷键会写入用户 keybindings.json，并可能覆盖已有快捷键（如 Ctrl+K、Ctrl+Shift+K、Ctrl+T、Ctrl+D、F4、Ctrl+Alt+Z）。是否继续？',
 				{ modal: true },
-				'安装',
-				'取消'
+				'安装'
 			);
 			if (choice !== '安装') {
 				return;

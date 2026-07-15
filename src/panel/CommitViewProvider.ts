@@ -12,6 +12,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private busy = false;
 	private selected?: { repoRoot: string; path: string; staged: boolean };
 	private pendingFocusMessage = false;
+	private pendingUpdateAllRepoCount?: number;
+	private updateAllResolver?: (confirmed: boolean) => void;
 
 	constructor(
 		private readonly extensionUri: vscode.Uri,
@@ -22,7 +24,37 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	dispose(): void {
+		this.resolveUpdateAll(false);
 		this.disposables.forEach((d) => d.dispose());
+	}
+
+	/** Show a Cursor-themed confirm dialog in the Commit panel before pull-all. */
+	async confirmUpdateAll(repoCount: number): Promise<boolean> {
+		this.resolveUpdateAll(false);
+		const confirmed = new Promise<boolean>((resolve) => {
+			this.updateAllResolver = resolve;
+		});
+		this.pendingUpdateAllRepoCount = repoCount;
+		await this.reveal(false, false);
+		this.tryShowUpdateAllDialog();
+		return confirmed;
+	}
+
+	private tryShowUpdateAllDialog(): void {
+		if (this.pendingUpdateAllRepoCount == null || !this.view || !this.updateAllResolver) {
+			return;
+		}
+		this.post({
+			type: 'showUpdateAllDialog',
+			payload: { repoCount: this.pendingUpdateAllRepoCount },
+		});
+	}
+
+	private resolveUpdateAll(confirmed: boolean): void {
+		const resolve = this.updateAllResolver;
+		this.updateAllResolver = undefined;
+		this.pendingUpdateAllRepoCount = undefined;
+		resolve?.(confirmed);
 	}
 
 	resolveWebviewView(
@@ -168,6 +200,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 						this.pendingFocusMessage = false;
 						this.focusCommitMessage();
 					}
+					this.tryShowUpdateAllDialog();
 					break;
 				case 'switchRepo':
 					this.git.setActiveRepository(msg.repoRoot);
@@ -263,6 +296,12 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				case 'askPushCancel':
 				case 'pushDialogCancel':
 					this.post({ type: 'closePushDialog' });
+					break;
+				case 'updateAllConfirm':
+					this.resolveUpdateAll(true);
+					break;
+				case 'updateAllCancel':
+					this.resolveUpdateAll(false);
 					break;
 				case 'refresh':
 					await this.withBusy(async () => {
@@ -479,6 +518,17 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
       <div class="modal-actions">
         <button id="keysCancel" type="button">取消</button>
         <button id="keysConfirm" class="primary" type="button">安装</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="updateAllModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>更新所有仓库</h2>
+      <p id="updateAllSummary"></p>
+      <div class="modal-actions">
+        <button id="updateAllCancel" type="button">取消</button>
+        <button id="updateAllConfirm" class="primary" type="button">更新</button>
       </div>
     </div>
   </div>
