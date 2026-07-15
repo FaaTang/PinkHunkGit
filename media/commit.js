@@ -129,6 +129,28 @@
     renderFiles();
   }
 
+  /** Expand all repo groups and their Changes groups (used on Ctrl+K auto-check). */
+  function expandChangesGroups() {
+    let changed = false;
+    for (const repo of allRepos()) {
+      const rKey = repoKey(repo.rootPath);
+      if (collapsedRepos.has(rKey)) {
+        collapsedRepos.delete(rKey);
+        changed = true;
+      }
+      const gKey = groupKey(repo.rootPath, 'changes');
+      if (collapsedGroups.has(gKey)) {
+        collapsedGroups.delete(gKey);
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveCollapsedRepos();
+      saveCollapsedGroups();
+      renderFiles();
+    }
+  }
+
   function post(message) {
     vscode.postMessage(message);
   }
@@ -913,6 +935,9 @@
         messageEl.focus();
         const end = messageEl.value.length;
         messageEl.setSelectionRange(end, end);
+        break;
+      case 'expandChanges':
+        expandChangesGroups();
         break;
     }
   });

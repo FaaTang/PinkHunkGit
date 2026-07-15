@@ -12,6 +12,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private busy = false;
 	private selected?: { repoRoot: string; path: string; staged: boolean };
 	private pendingFocusMessage = false;
+	private pendingExpandChanges = false;
 	private pendingUpdateAllRepoCount?: number;
 	private updateAllResolver?: (confirmed: boolean) => void;
 
@@ -84,7 +85,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	async reveal(focusPushDialog = false, focusMessage = false): Promise<void> {
+	async reveal(focusPushDialog = false, focusMessage = false, expandChanges = false): Promise<void> {
 		await vscode.commands.executeCommand('workbench.action.focusSideBar');
 		await vscode.commands.executeCommand(CommitViewProvider.activityBarId);
 		if (this.view) {
@@ -97,6 +98,9 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			const snapshot = this.git.getWorkspaceSnapshot();
 			this.post({ type: 'showPushDialog', payload: { ...snapshot, busy: this.busy } });
 		}
+		if (expandChanges) {
+			this.expandChangesGroups();
+		}
 		if (focusMessage) {
 			this.focusCommitMessage();
 		}
@@ -107,6 +111,14 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			this.post({ type: 'focusMessage' });
 		} else {
 			this.pendingFocusMessage = true;
+		}
+	}
+
+	private expandChangesGroups(): void {
+		if (this.view) {
+			this.post({ type: 'expandChanges' });
+		} else {
+			this.pendingExpandChanges = true;
 		}
 	}
 
@@ -196,6 +208,10 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			switch (msg.type) {
 				case 'ready':
 					await this.refreshAndPush();
+					if (this.pendingExpandChanges) {
+						this.pendingExpandChanges = false;
+						this.expandChangesGroups();
+					}
 					if (this.pendingFocusMessage) {
 						this.pendingFocusMessage = false;
 						this.focusCommitMessage();

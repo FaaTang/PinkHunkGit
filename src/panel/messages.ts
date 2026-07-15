@@ -110,7 +110,8 @@ export type HostToWebview =
 	| { type: 'showRollbackDialog'; payload: RollbackDialogPayload }
 	| { type: 'showUpdateAllDialog'; payload: { repoCount: number } }
 	| { type: 'clearMessage' }
-	| { type: 'focusMessage' };
+	| { type: 'focusMessage' }
+	| { type: 'expandChanges' };
 
 export type WebviewToHost =
 	| { type: 'ready' }
