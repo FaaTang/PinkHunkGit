@@ -736,6 +736,13 @@ export class GitService implements vscode.Disposable {
 		const fileUri = vscode.Uri.file(fsPath);
 		await this.ensureSaved(fsPath);
 
+		// Untracked files have no HEAD/index side — show file content instead of an empty vs working-tree diff.
+		if (this.isUntracked(relativePath, root)) {
+			const doc = await vscode.workspace.openTextDocument(fileUri);
+			await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+			return;
+		}
+
 		const title = `${relativePath}${staged ? ' (Staged)' : ' (Changes)'}`;
 		if (staged) {
 			const head = this.api.toGitUri(fileUri, 'HEAD');
