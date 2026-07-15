@@ -207,12 +207,32 @@ body.sidebar-mode .commit-form {
 .repo-group-title {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   padding: 8px 10px 2px;
   font-size: 12px;
   font-weight: 600;
   opacity: 0.92;
+}
+
+.repo-group-title.collapsible {
+  cursor: pointer;
+  user-select: none;
+}
+
+.repo-group-title.collapsible:hover {
+  background: var(--list-hover);
+}
+
+.repo-group-chevron {
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+  opacity: 0.8;
+  font-size: 10px;
+}
+
+.repo-group.collapsed {
+  padding-bottom: 4px;
 }
 
 .repo-group.focused .repo-group-title {
@@ -220,6 +240,7 @@ body.sidebar-mode .commit-form {
 }
 
 .repo-group-name {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
