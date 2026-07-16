@@ -194,6 +194,11 @@ body.sidebar-mode .commit-form {
   text-transform: uppercase;
 }
 
+.group-title .group-select-all {
+  margin: 0;
+  flex-shrink: 0;
+}
+
 .group-title.collapsible {
   cursor: pointer;
   user-select: none;

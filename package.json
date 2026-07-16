@@ -2,7 +2,7 @@
   "name": "copy-idea-git-ui",
   "displayName": "Copy IDEA Git UI",
   "description": "IDEA-like Git commit panel for VS Code",
-  "version": "0.1.16",
+  "version": "0.1.18",
   "publisher": "copyideagitui",
   "license": "MIT",
   "engines": {
@@ -22,6 +22,7 @@
     "onCommand:copyIdeaGitUi.openFile",
     "onCommand:copyIdeaGitUi.revealInExplorer",
     "onCommand:copyIdeaGitUi.rollback",
+    "onCommand:copyIdeaGitUi.addToGit",
     "onCommand:copyIdeaGitUi.installKeybindings"
   ],
   "main": "./out/extension.js",
@@ -65,6 +66,11 @@
       {
         "command": "copyIdeaGitUi.rollback",
         "title": "Rollback",
+        "category": "Copy IDEA Git UI"
+      },
+      {
+        "command": "copyIdeaGitUi.addToGit",
+        "title": "Add to Git",
         "category": "Copy IDEA Git UI"
       },
       {
@@ -146,6 +152,12 @@
         "key": "ctrl+alt+z",
         "mac": "cmd+alt+z",
         "when": "view == copyIdeaGitUi.commitView && copyIdeaGitUi.hasSelection"
+      },
+      {
+        "command": "copyIdeaGitUi.addToGit",
+        "key": "ctrl+alt+a",
+        "mac": "cmd+alt+a",
+        "when": "view == copyIdeaGitUi.commitView"
       }
     ]
   },

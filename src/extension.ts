@@ -5,10 +5,12 @@ import {
 	promptInstallKeybindings,
 } from './keybindings/installRecommendedKeybindings';
 import { CommitViewProvider } from './panel/CommitViewProvider';
+import { PushDialogProvider } from './panel/PushDialogProvider';
 import { initGitOutput, logExtension } from './git/gitOutput';
 
 let gitService: GitService | undefined;
 let commitViewProvider: CommitViewProvider | undefined;
+let pushDialogProvider: PushDialogProvider | undefined;
 let gitReady = false;
 let gitInitError = 'Git service is not initialized.';
 let gitInitPromise: Promise<void> | undefined;
@@ -21,14 +23,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	try {
 		gitService = new GitService();
-		commitViewProvider = new CommitViewProvider(context.extensionUri, gitService, async () => {
+		pushDialogProvider = new PushDialogProvider(context.extensionUri, gitService);
+		commitViewProvider = new CommitViewProvider(
+			context.extensionUri,
+			gitService,
+			pushDialogProvider,
+			async () => {
 			const result = await installRecommendedKeybindings(context);
 			if (!result.ok) {
 				vscode.window.showErrorMessage(result.error);
 			}
-		});
+		}
+		);
 
-		context.subscriptions.push(gitService, commitViewProvider);
+		context.subscriptions.push(gitService, pushDialogProvider, commitViewProvider);
 
 		void vscode.commands.executeCommand('setContext', 'copyIdeaGitUi.hasSelection', false);
 
@@ -53,17 +61,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					const message = err instanceof Error ? err.message : String(err);
 					vscode.window.showWarningMessage(`Failed to auto-stage Changes: ${message}`);
 				}
-				await commitViewProvider.reveal(false, true, true);
+				await commitViewProvider.reveal(true, true);
 			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.openPush', async () => {
 				if (!(await ensureGitReady(true))) {
 					return;
 				}
-				if (!gitService || !commitViewProvider) {
+				if (!gitService || !pushDialogProvider) {
 					return;
 				}
 				gitService.rememberEditorContext();
-				await commitViewProvider.reveal(true);
+				await pushDialogProvider.show();
 			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.updateAllRepositories', async () => {
 				if (!(await ensureGitReady(true)) || !gitService || !commitViewProvider) {
@@ -134,6 +142,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					return;
 				}
 				await commitViewProvider.rollbackForSelection();
+			}),
+			vscode.commands.registerCommand('copyIdeaGitUi.addToGit', async () => {
+				if (!commitViewProvider) {
+					return;
+				}
+				await commitViewProvider.addToGit();
 			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.installKeybindings', async () => {
 				const choice = await vscode.window.showWarningMessage(
@@ -210,5 +224,6 @@ async function ensureGitReady(showError: boolean): Promise<boolean> {
 export function deactivate(): void {
 	gitService = undefined;
 	commitViewProvider = undefined;
+	pushDialogProvider = undefined;
 	gitInitPromise = undefined;
 }

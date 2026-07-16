@@ -14,6 +14,7 @@ const RECOMMENDED_BINDINGS: KeybindingEntry[] = [
 	{ key: 'ctrl+d', command: 'copyIdeaGitUi.showDiff', mac: 'cmd+d', when: SHOW_DIFF_WHEN },
 	{ key: 'f4', command: 'copyIdeaGitUi.openFile', when: 'copyIdeaGitUi.hasSelection' },
 	{ key: 'ctrl+alt+z', command: 'copyIdeaGitUi.rollback', mac: 'cmd+alt+z', when: SHOW_DIFF_WHEN },
+	{ key: 'ctrl+alt+a', command: 'copyIdeaGitUi.addToGit', mac: 'cmd+alt+a', when: 'view == copyIdeaGitUi.commitView' },
 ];
 
 export async function promptInstallKeybindings(context: vscode.ExtensionContext): Promise<void> {

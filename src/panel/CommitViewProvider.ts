@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { GitService, PushRejectedError } from '../git/GitService';
-import { CommitRepoResult, HostToWebview, SyncMode, WebviewToHost } from './messages';
+import { GitService } from '../git/GitService';
+import { CommitRepoResult, HostToWebview, WebviewToHost } from './messages';
+import { PushDialogProvider } from './PushDialogProvider';
 
 export class CommitViewProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'copyIdeaGitUi.commitView';
@@ -15,12 +16,11 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private pendingExpandChanges = false;
 	private pendingUpdateAllRepoCount?: number;
 	private updateAllResolver?: (confirmed: boolean) => void;
-	/** After Commit and Push, wait for Push dialog confirm before pushing these roots. */
-	private pendingPushRoots?: string[];
 
 	constructor(
 		private readonly extensionUri: vscode.Uri,
 		private readonly git: GitService,
+		private readonly pushDialog: PushDialogProvider,
 		private readonly onInstallKeybindings: () => Promise<void>
 	) {
 		this.disposables.push(this.git.onDidChange(() => void this.pushSnapshot()));
@@ -94,7 +94,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	async reveal(focusPushDialog = false, focusMessage = false, expandChanges = false): Promise<void> {
+	async reveal(focusMessage = false, expandChanges = false): Promise<void> {
 		await vscode.commands.executeCommand('workbench.action.focusSideBar');
 		await vscode.commands.executeCommand(CommitViewProvider.activityBarId);
 		if (this.view) {
@@ -103,10 +103,6 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			await vscode.commands.executeCommand(`${CommitViewProvider.viewType}.focus`);
 		}
 		await this.refreshAndPush();
-		if (focusPushDialog) {
-			const snapshot = this.git.getWorkspaceSnapshot();
-			this.post({ type: 'showPushDialog', payload: { ...snapshot, busy: this.busy } });
-		}
 		if (expandChanges) {
 			this.expandChangesGroups();
 		}
@@ -178,6 +174,22 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		await this.startRollbackFlow(this.selected);
 	}
 
+	async addToGit(): Promise<void> {
+		await this.reveal();
+		this.post({ type: 'triggerAddToGit' });
+	}
+
+	private async stageUnversionedPaths(
+		paths?: Array<{ repoRoot: string; path: string }>
+	): Promise<void> {
+		if (!paths?.length) {
+			return;
+		}
+		for (const { repoRoot, path } of paths) {
+			await this.git.stage(this.toFsPath(repoRoot, path));
+		}
+	}
+
 	private async startRollbackFlow(msg: {
 		repoRoot: string;
 		path: string;
@@ -241,6 +253,25 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 						}
 					});
 					break;
+				case 'setGroupStaged':
+					await this.withBusy(async () => {
+						for (const relativePath of msg.paths) {
+							const fsPath = this.toFsPath(msg.repoRoot, relativePath);
+							if (msg.staged) {
+								await this.git.stage(fsPath);
+							} else {
+								await this.git.unstage(fsPath);
+							}
+						}
+					});
+					break;
+				case 'addToGit':
+					await this.withBusy(async () => {
+						for (const { repoRoot, path } of msg.paths) {
+							await this.git.stage(this.toFsPath(repoRoot, path));
+						}
+					});
+					break;
 				case 'stageAll':
 					await this.withBusy(async () => {
 						await this.git.stageAll(msg.staged);
@@ -270,6 +301,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'commit':
 					await this.withBusy(async () => {
+						await this.stageUnversionedPaths(msg.unversionedPaths);
 						const committed = await this.git.commitAllStaged(msg.message);
 						vscode.window.showInformationMessage(formatCommittedMessage(committed));
 						this.post({ type: 'clearMessage' });
@@ -277,47 +309,14 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'commitAndPush':
 					await this.withBusy(async () => {
+						await this.stageUnversionedPaths(msg.unversionedPaths);
 						const committed = await this.git.commitAllStaged(msg.message);
 						vscode.window.showInformationMessage(formatCommittedMessage(committed));
 						this.post({ type: 'clearMessage' });
-						this.pendingPushRoots = committed.map((repo) => repo.rootPath);
+						await this.pushDialog.show({
+							pendingPushRoots: committed.map((repo) => repo.rootPath),
+						});
 					});
-					await this.showPushConfirmDialog();
-					break;
-				case 'push':
-					await this.withBusy(async () => {
-						await this.runPendingOrSinglePush(msg.repoRoot, !!msg.pushTags);
-					});
-					break;
-				case 'pushSync':
-					await this.withBusy(async () => {
-						await this.runPushSync(msg.mode, msg.repoRoot);
-					});
-					break;
-				case 'syncAbort':
-					await this.withBusy(async () => {
-						await this.git.abortSync(msg.repoRoot);
-						this.post({ type: 'closePushDialog' });
-						vscode.window.showInformationMessage('Merge / Rebase aborted.');
-					});
-					break;
-				case 'syncContinue':
-					await this.withBusy(async () => {
-						await this.handleSyncResult(await this.git.continueSync(msg.repoRoot), msg.repoRoot);
-					});
-					break;
-				case 'openConflict':
-					await this.git.openConflictFile(msg.path);
-					break;
-				case 'askPushConfirm':
-					await this.withBusy(async () => {
-						await this.runPendingOrSinglePush(msg.repoRoot, !!msg.pushTags);
-					});
-					break;
-				case 'askPushCancel':
-				case 'pushDialogCancel':
-					this.pendingPushRoots = undefined;
-					this.post({ type: 'closePushDialog' });
 					break;
 				case 'updateAllConfirm':
 					this.resolveUpdateAll(true);
@@ -338,134 +337,12 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 			}
 		} catch (err) {
-			if (err instanceof PushRejectedError) {
-				this.postPushRejected(err.message);
-				return;
-			}
 			const message = err instanceof Error ? err.message : String(err);
 			this.post({ type: 'error', message });
 			vscode.window.showErrorMessage(message);
 		} finally {
 			await this.refreshAndPush();
 		}
-	}
-
-	private async showPushConfirmDialog(): Promise<void> {
-		const snapshot = this.git.getWorkspaceSnapshot();
-		this.post({ type: 'showPushDialog', payload: { ...snapshot, busy: this.busy } });
-	}
-
-	private async runPendingOrSinglePush(repoRoot?: string, pushTags = false): Promise<void> {
-		const roots = this.pendingPushRoots?.length
-			? [...this.pendingPushRoots]
-			: [repoRoot];
-		this.pendingPushRoots = undefined;
-		for (const root of roots) {
-			const pushed = await this.runPush(root, pushTags);
-			if (!pushed) {
-				return;
-			}
-		}
-	}
-
-	private async runPush(repoRoot?: string, pushTags = false): Promise<boolean> {
-		const workspace = this.git.getWorkspaceSnapshot();
-		const snap = repoRoot
-			? workspace.repositories.find((r) =>
-					r.rootPath.replace(/\\/g, '/').toLowerCase() === repoRoot.replace(/\\/g, '/').toLowerCase()
-				)
-			: workspace.active;
-		const label = snap?.name ?? 'repository';
-		const upstream = snap?.upstream;
-		try {
-			await this.git.push(repoRoot, { pushTags });
-			this.post({ type: 'closePushDialog' });
-			const tagsNote = pushTags ? ' (with tags)' : '';
-			vscode.window.showInformationMessage(
-				`Pushed ${label}${upstream ? ` → ${upstream}` : ''}${tagsNote}.`
-			);
-			return true;
-		} catch (err) {
-			if (err instanceof PushRejectedError) {
-				this.postPushRejected(err.message, repoRoot);
-				return false;
-			}
-			throw err;
-		}
-	}
-
-	private postPushRejected(message: string, repoRoot?: string): void {
-		if (repoRoot) {
-			try {
-				this.git.setActiveRepository(repoRoot);
-			} catch {
-				// Keep current active repo if root is stale.
-			}
-		}
-		const ctx = this.git.getPushContext();
-		const snap = this.git.getWorkspaceSnapshot().active;
-		this.post({
-			type: 'showPushRejected',
-			payload: {
-				message,
-				repoRoot: snap.rootPath || repoRoot,
-				repoName: ctx.repoName,
-				branch: ctx.branch,
-				upstream: ctx.upstream,
-				behind: ctx.behind,
-				ahead: ctx.ahead,
-			},
-		});
-	}
-
-	private async runPushSync(mode: SyncMode, repoRoot?: string): Promise<void> {
-		const result = await this.git.syncWithUpstream(mode, repoRoot);
-		await this.handleSyncResult(result, repoRoot);
-	}
-
-	private async handleSyncResult(
-		result: Awaited<ReturnType<GitService['syncWithUpstream']>>,
-		repoRoot?: string
-	): Promise<void> {
-		const ctx = this.git.getPushContext();
-		const snap = this.git.getWorkspaceSnapshot().active;
-		const resolvedRoot = snap.rootPath || repoRoot;
-
-		if (result.status === 'conflict') {
-			this.post({
-				type: 'showSyncConflict',
-				payload: {
-					mode: result.mode,
-					message: result.message,
-					conflicts: result.conflicts,
-					repoRoot: resolvedRoot,
-					repoName: ctx.repoName,
-					branch: ctx.branch,
-					upstream: ctx.upstream,
-				},
-			});
-			return;
-		}
-
-		if (result.status === 'failed') {
-			vscode.window.showErrorMessage(result.message);
-			this.postPushRejected(result.message, resolvedRoot);
-			return;
-		}
-
-		const modeLabel = result.mode === 'merge' ? 'Merge' : 'Rebase';
-		this.post({
-			type: 'showAskPush',
-			payload: {
-				repoRoot: resolvedRoot,
-				repoName: ctx.repoName,
-				branch: ctx.branch,
-				upstream: ctx.upstream,
-				ahead: ctx.ahead,
-				behind: ctx.behind,
-				summary: `${modeLabel} completed. Push to ${ctx.upstream || 'remote'} now?`,
-			},
-		});
 	}
 
 	private async withBusy(fn: () => Promise<void>): Promise<void> {
@@ -545,30 +422,6 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
   </div>
 
   <div id="contextMenu" class="context-menu hidden"></div>
-
-  <div id="pushModal" class="modal hidden">
-    <div class="modal-card modal-card-wide">
-      <h2 id="pushTitle">Push</h2>
-      <p id="pushSummary"></p>
-      <ul id="pushConflictList" class="conflict-list hidden"></ul>
-      <div id="pushTagsOption" class="push-options hidden">
-        <label class="push-option" for="pushTagsCheckbox">
-          <input id="pushTagsCheckbox" type="checkbox" />
-          <span>Push tags to remote</span>
-        </label>
-      </div>
-      <div class="modal-actions" id="pushActions">
-        <button id="pushCancel" type="button">Cancel</button>
-        <button id="pushConfirm" class="primary" type="button">Push</button>
-        <button id="pushMerge" class="hidden" type="button">Merge</button>
-        <button id="pushRebase" class="hidden" type="button">Rebase</button>
-        <button id="pushAbort" class="hidden" type="button">Abort</button>
-        <button id="pushContinue" class="primary hidden" type="button">Continue</button>
-        <button id="pushAskNo" class="hidden" type="button">Later</button>
-        <button id="pushAskYes" class="primary hidden" type="button">Push</button>
-      </div>
-    </div>
-  </div>
 
   <div id="rollbackModal" class="modal hidden">
     <div class="modal-card">

@@ -111,12 +111,14 @@ export type HostToWebview =
 	| { type: 'showUpdateAllDialog'; payload: { repoCount: number } }
 	| { type: 'clearMessage' }
 	| { type: 'focusMessage' }
-	| { type: 'expandChanges' };
+	| { type: 'expandChanges' }
+	| { type: 'triggerAddToGit' };
 
 export type WebviewToHost =
 	| { type: 'ready' }
 	| { type: 'switchRepo'; repoRoot: string }
 	| { type: 'toggleStage'; repoRoot: string; path: string; staged: boolean; currentlyStaged: boolean }
+	| { type: 'setGroupStaged'; repoRoot: string; paths: string[]; staged: boolean }
 	| { type: 'stageAll'; staged: boolean }
 	| { type: 'updateSelection'; repoRoot: string; path: string | null; staged: boolean }
 	| { type: 'openDiff'; repoRoot: string; path: string; staged: boolean }
@@ -125,8 +127,9 @@ export type WebviewToHost =
 	| { type: 'rollback'; repoRoot: string; path: string; staged: boolean }
 	| { type: 'rollbackConfirm'; repoRoot: string; path: string; staged: boolean }
 	| { type: 'rollbackCancel' }
-	| { type: 'commit'; message: string }
-	| { type: 'commitAndPush'; message: string }
+	| { type: 'addToGit'; paths: Array<{ repoRoot: string; path: string }> }
+	| { type: 'commit'; message: string; unversionedPaths?: Array<{ repoRoot: string; path: string }> }
+	| { type: 'commitAndPush'; message: string; unversionedPaths?: Array<{ repoRoot: string; path: string }> }
 	| { type: 'push'; repoRoot?: string; pushTags?: boolean }
 	| { type: 'pushSync'; mode: SyncMode; repoRoot?: string }
 	| { type: 'syncAbort'; repoRoot?: string }
