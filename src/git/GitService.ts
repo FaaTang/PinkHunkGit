@@ -48,6 +48,9 @@ export class GitService implements vscode.Disposable {
 	private activeRepoRoot: string | undefined;
 	/** Manual repo pick from the UI; cleared when the focused editor file maps to a repo. */
 	private pinnedRepoRoot: string | undefined;
+	private fileWatchersSetup = false;
+	private editorListenersSetup = false;
+	private pendingFolderWatch = false;
 
 	async init(): Promise<{ ok: true } | { ok: false; error: string }> {
 		const extension = vscode.extensions.getExtension<GitExtension>('vscode.git');
@@ -83,33 +86,63 @@ export class GitService implements vscode.Disposable {
 		await this.waitForGitApiInitialized();
 
 		this.bindRepositoryEvents();
-
-		const watcher = vscode.workspace.createFileSystemWatcher('**/*');
-		this.disposables.push(
-			watcher,
-			watcher.onDidChange(() => this.scheduleRefresh()),
-			watcher.onDidCreate(() => this.scheduleRefresh()),
-			watcher.onDidDelete(() => this.scheduleRefresh()),
-			vscode.window.onDidChangeActiveTextEditor((editor) => {
-				if (editor?.document.uri.scheme === 'file') {
-					this.rememberFileUri(editor.document.uri);
-				}
-				this.scheduleRefresh();
-			}),
-			vscode.workspace.onDidChangeTextDocument((event) => {
-				if (event.document.uri.scheme === 'file') {
-					this.rememberFileUri(event.document.uri);
-					this.scheduleRefresh();
-				}
-			}),
-			vscode.workspace.onDidSaveTextDocument((doc) => {
-				if (doc.uri.scheme === 'file') {
-					this.scheduleRefresh();
-				}
-			})
-		);
+		this.setupWorkspaceWatchers();
 
 		return { ok: true };
+	}
+
+	private setupWorkspaceWatchers(): void {
+		if (!this.editorListenersSetup) {
+			this.editorListenersSetup = true;
+			this.disposables.push(
+				vscode.window.onDidChangeActiveTextEditor((editor) => {
+					if (editor?.document.uri.scheme === 'file') {
+						this.rememberFileUri(editor.document.uri);
+					}
+					this.scheduleRefresh();
+				}),
+				vscode.workspace.onDidChangeTextDocument((event) => {
+					if (event.document.uri.scheme === 'file') {
+						this.rememberFileUri(event.document.uri);
+						this.scheduleRefresh();
+					}
+				}),
+				vscode.workspace.onDidSaveTextDocument((doc) => {
+					if (doc.uri.scheme === 'file') {
+						this.scheduleRefresh();
+					}
+				})
+			);
+		}
+
+		if (this.fileWatchersSetup) {
+			return;
+		}
+
+		const folders = vscode.workspace.workspaceFolders;
+		if (!folders?.length) {
+			if (!this.pendingFolderWatch) {
+				this.pendingFolderWatch = true;
+				this.disposables.push(
+					vscode.workspace.onDidChangeWorkspaceFolders(() => {
+						this.setupWorkspaceWatchers();
+					})
+				);
+			}
+			return;
+		}
+
+		this.fileWatchersSetup = true;
+		for (const folder of folders) {
+			const pattern = new vscode.RelativePattern(folder, '**/*');
+			const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+			this.disposables.push(
+				watcher,
+				watcher.onDidChange(() => this.scheduleRefresh()),
+				watcher.onDidCreate(() => this.scheduleRefresh()),
+				watcher.onDidDelete(() => this.scheduleRefresh())
+			);
+		}
 	}
 
 	/**
@@ -147,11 +180,12 @@ export class GitService implements vscode.Disposable {
 			});
 
 			const timer = setTimeout(() => {
-				finish(
-					new Error(
-						'Timed out waiting for the VS Code Git extension to initialize.'
-					)
+				// Continue with best-effort Git API access; blocking init leaves the
+				// Commit webview blank because the extension never finishes activating.
+				console.warn(
+					'Copy IDEA Git UI: timed out waiting for Git API initialization; continuing anyway.'
 				);
+				finish();
 			}, timeoutMs);
 
 			// Race: state may have flipped to initialized before the listener ran.

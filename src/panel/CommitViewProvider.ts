@@ -71,7 +71,13 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			enableScripts: true,
 			localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'media')],
 		};
-		webviewView.webview.html = this.getHtml(webviewView.webview);
+
+		try {
+			webviewView.webview.html = this.getHtml(webviewView.webview);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			webviewView.webview.html = `<!DOCTYPE html><html><body><p>Copy IDEA Git UI failed to load: ${message}</p></body></html>`;
+		}
 
 		this.disposables.push(
 			webviewView.webview.onDidReceiveMessage((msg: WebviewToHost) => this.onMessage(msg)),
@@ -82,6 +88,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			})
 		);
 
+		void this.pushSnapshot();
 		if (webviewView.visible) {
 			void this.refreshAndPush();
 		}
