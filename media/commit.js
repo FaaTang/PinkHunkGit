@@ -39,6 +39,7 @@
   const collapsedRepos = new Set(webviewState.collapsedRepos || []);
   const collapsedGroups = new Set(webviewState.collapsedGroups || []);
   const checkedUnversioned = new Set(webviewState.checkedUnversioned || []);
+  const changeIncludeState = new Map(Object.entries(webviewState.changeIncludeState || {}));
   let lastCommitMessage = webviewState.lastCommitMessage || '';
   let messageDraft = webviewState.messageDraft || '';
   let messageDraftInitialized = false;
@@ -59,12 +60,8 @@
     return workspace.active?.ok ? [workspace.active] : [];
   }
 
-  function totalStagedCount() {
-    return allRepos().reduce((n, r) => n + (r.staged?.length || 0), 0);
-  }
-
   function totalIncludableCount() {
-    return totalStagedCount() + collectCheckedUnversionedPaths().length;
+    return collectCheckedChangesPaths().length + collectCheckedUnversionedPaths().length;
   }
 
   function repoKey(root) {
@@ -142,6 +139,55 @@
     if (changed) {
       saveWebviewState({ checkedUnversioned: Array.from(checkedUnversioned) });
     }
+  }
+
+  /** Changes group: local include-in-commit state (IDEA-style; Git runs on commit). */
+  function changeCheckKey(repoRoot, path) {
+    return `${repoKey(repoRoot)}|${path}`;
+  }
+
+  function isChangeChecked(repoRoot, path) {
+    const key = changeCheckKey(repoRoot, path);
+    if (changeIncludeState.has(key)) {
+      return changeIncludeState.get(key);
+    }
+    return true;
+  }
+
+  function setChangeChecked(repoRoot, path, checked) {
+    changeIncludeState.set(changeCheckKey(repoRoot, path), checked);
+    saveWebviewState({ changeIncludeState: Object.fromEntries(changeIncludeState) });
+  }
+
+  function pruneChangeIncludeState() {
+    const valid = new Set();
+    for (const repo of allRepos()) {
+      for (const item of getMergedChanges(repo)) {
+        valid.add(changeCheckKey(repo.rootPath, item.path));
+      }
+    }
+    let changed = false;
+    for (const key of changeIncludeState.keys()) {
+      if (!valid.has(key)) {
+        changeIncludeState.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveWebviewState({ changeIncludeState: Object.fromEntries(changeIncludeState) });
+    }
+  }
+
+  function collectCheckedChangesPaths() {
+    const paths = [];
+    for (const repo of allRepos()) {
+      for (const item of getMergedChanges(repo)) {
+        if (isChangeChecked(repo.rootPath, item.path)) {
+          paths.push({ repoRoot: repo.rootPath, path: item.path });
+        }
+      }
+    }
+    return paths;
   }
 
   function isSelectedUnversioned(sel) {
@@ -259,16 +305,10 @@
     refreshBtn.disabled = disabled;
     locateBtn.disabled = disabled;
     installKeysBtn.disabled = !!busy;
-    pushConfirm.disabled = busy;
-    pushMerge.disabled = busy;
-    pushRebase.disabled = busy;
-    pushAbort.disabled = busy;
-    pushContinue.disabled = busy;
-    pushAskYes.disabled = busy;
-    pushAskNo.disabled = busy;
-    pushCancel.disabled = busy;
     rollbackConfirmBtn.disabled = busy;
     keysConfirm.disabled = busy;
+    updateAllConfirmBtn.disabled = busy;
+    updateAllCancel.disabled = busy;
   }
 
   function showBanner(text, kind) {
@@ -354,7 +394,7 @@
     }
     const tracked = getMergedChanges(repo);
     const unversioned = getUnversioned(repo);
-    if (tracked.some((i) => i.path === selectedRef.path && i.staged === selectedRef.staged)) {
+    if (tracked.some((i) => i.path === selectedRef.path)) {
       return true;
     }
     return unversioned.some((i) => i.path === selectedRef.path);
@@ -370,13 +410,7 @@
       addToGit.textContent = 'Add to Git (Ctrl+Alt+A)';
       addToGit.addEventListener('click', () => {
         hideContextMenu();
-        post({
-          type: 'toggleStage',
-          repoRoot,
-          path: item.path,
-          staged: true,
-          currentlyStaged: false,
-        });
+        post({ type: 'addToGit', paths: [{ repoRoot, path: item.path }] });
       });
       contextMenu.appendChild(addToGit);
     }
@@ -433,6 +467,14 @@
   function renderFiles() {
     fileList.innerHTML = '';
 
+    if (workspace.loading) {
+      const empty = document.createElement('div');
+      empty.className = 'placeholder';
+      empty.textContent = workspace.hint || 'Loading Git...';
+      fileList.appendChild(empty);
+      return;
+    }
+
     if (!workspace.ok) {
       const empty = document.createElement('div');
       empty.className = 'placeholder';
@@ -475,7 +517,7 @@
         title.className = 'repo-group-title collapsible';
         const branch = repo.branch ? ` · ${repo.branch}` : '';
         const selectedCount =
-          tracked.filter((i) => i.staged).length +
+          tracked.filter((i) => isChangeChecked(repo.rootPath, i.path)).length +
           unversioned.filter((i) => isUnversionedChecked(repo.rootPath, i.path)).length;
         const total = tracked.length + unversioned.length;
         title.innerHTML =
@@ -510,7 +552,7 @@
     const collapsed = groupId ? collapsedGroups.has(groupKey(repoRoot, groupId)) : false;
     const selectedCount = unversionedGroup
       ? items.filter((i) => isUnversionedChecked(repoRoot, i.path)).length
-      : items.filter((i) => i.staged).length;
+      : items.filter((i) => isChangeChecked(repoRoot, i.path)).length;
 
     const head = document.createElement('div');
     head.className = 'group-title collapsible';
@@ -518,7 +560,7 @@
     const selectAll = document.createElement('input');
     selectAll.type = 'checkbox';
     selectAll.className = 'group-select-all';
-    selectAll.title = unversionedGroup ? 'Select all' : 'Stage all';
+    selectAll.title = unversionedGroup ? 'Select all' : 'Include all in commit';
     selectAll.disabled = !items.length;
     selectAll.checked = items.length > 0 && selectedCount === items.length;
     selectAll.indeterminate = selectedCount > 0 && selectedCount < items.length;
@@ -535,10 +577,10 @@
         renderFiles();
         return;
       }
-      const toToggle = items.filter((item) => item.staged !== checked).map((item) => item.path);
-      if (toToggle.length) {
-        post({ type: 'setGroupStaged', repoRoot, paths: toToggle, staged: checked });
+      for (const item of items) {
+        setChangeChecked(repoRoot, item.path, checked);
       }
+      renderFiles();
     });
 
     const chevron = document.createElement('span');
@@ -582,10 +624,11 @@
     }
 
     for (const item of items) {
-      const staged = unversionedGroup ? false : item.staged;
+      const gitStaged = item.staged;
+      const included = unversionedGroup ? false : isChangeChecked(repoRoot, item.path);
       const row = document.createElement('div');
-      row.className = 'file-row';
-      if (isSelectedItem(null, repoRoot, item, staged)) {
+      row.className = 'file-row ' + (unversionedGroup ? 'group-unversioned' : 'group-changes');
+      if (isSelectedItem(null, repoRoot, item, gitStaged)) {
         row.classList.add('selected');
       }
 
@@ -601,17 +644,12 @@
           renderFiles();
         });
       } else {
-        checkbox.checked = staged;
-        checkbox.title = staged ? 'Included in commit' : 'Not included in commit';
+        checkbox.checked = included;
+        checkbox.title = included ? 'Included in commit' : 'Excluded from commit';
         checkbox.addEventListener('click', (e) => {
           e.stopPropagation();
-          post({
-            type: 'toggleStage',
-            repoRoot,
-            path: item.path,
-            staged: !staged,
-            currentlyStaged: staged,
-          });
+          setChangeChecked(repoRoot, item.path, checkbox.checked);
+          renderFiles();
         });
       }
       row.appendChild(checkbox);
@@ -654,16 +692,16 @@
       row.appendChild(status);
       row.appendChild(pathEl);
       row.addEventListener('click', () => {
-        selected = { repoRoot, path: item.path, staged };
+        selected = { repoRoot, path: item.path, staged: gitStaged };
         hideContextMenu();
         renderFiles();
-        post({ type: 'updateSelection', repoRoot, path: item.path, staged });
+        post({ type: 'updateSelection', repoRoot, path: item.path, staged: gitStaged });
       });
       row.addEventListener('contextmenu', (e) => {
         e.preventDefault();
-        selected = { repoRoot, path: item.path, staged };
+        selected = { repoRoot, path: item.path, staged: gitStaged };
         renderFiles();
-        post({ type: 'updateSelection', repoRoot, path: item.path, staged });
+        post({ type: 'updateSelection', repoRoot, path: item.path, staged: gitStaged });
         showContextMenu(e.clientX, e.clientY, item, repoRoot, unversionedGroup);
       });
       wrap.appendChild(row);
@@ -717,9 +755,10 @@
       return;
     }
     const unversionedPaths = collectCheckedUnversionedPaths();
+    const checkedChanges = collectCheckedChangesPaths();
     clearUnversionedChecks(unversionedPaths);
     cacheLastCommitMessage(message);
-    post({ type: 'commit', message, unversionedPaths });
+    post({ type: 'commit', message, checkedChanges, unversionedPaths });
   });
 
   commitPushBtn.addEventListener('click', () => {
@@ -728,9 +767,10 @@
       return;
     }
     const unversionedPaths = collectCheckedUnversionedPaths();
+    const checkedChanges = collectCheckedChangesPaths();
     clearUnversionedChecks(unversionedPaths);
     cacheLastCommitMessage(message);
-    post({ type: 'commitAndPush', message, unversionedPaths });
+    post({ type: 'commitAndPush', message, checkedChanges, unversionedPaths });
   });
 
   messageEl.addEventListener('input', () => {
@@ -851,7 +891,9 @@
         }
 
         const active = workspace.active || {};
-        if (workspace.error) {
+        if (workspace.loading) {
+          showBanner(workspace.hint || 'Loading Git...', 'info');
+        } else if (workspace.error) {
           showBanner(workspace.error, 'error');
         } else if (active.hint) {
           showBanner(active.hint, 'info');
@@ -862,6 +904,7 @@
         setBusy(!!workspace.busy);
         renderRepoSelector();
         pruneCheckedUnversioned();
+        pruneChangeIncludeState();
 
         if (selected && !selectionStillExists(selected)) {
           selected = null;

@@ -23,6 +23,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	try {
 		gitService = new GitService();
+		gitInitPromise = initializeGit(context);
 		pushDialogProvider = new PushDialogProvider(context.extensionUri, gitService);
 		commitViewProvider = new CommitViewProvider(
 			context.extensionUri,
@@ -33,7 +34,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			if (!result.ok) {
 				vscode.window.showErrorMessage(result.error);
 			}
-		}
+		},
+			() => gitInitPromise ?? Promise.resolve()
 		);
 
 		context.subscriptions.push(gitService, pushDialogProvider, commitViewProvider);
@@ -165,7 +167,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			})
 		);
 
-		gitInitPromise = initializeGit(context);
 		logExtension(`Activated v${context.extension.packageJSON.version ?? 'unknown'}`);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
@@ -190,6 +191,7 @@ async function initializeGit(context: vscode.ExtensionContext): Promise<void> {
 	} catch (err) {
 		gitReady = false;
 		gitInitError = err instanceof Error ? err.message : String(err);
+		gitService.markInitFailed(gitInitError);
 		logExtension(`Git init error: ${gitInitError}`);
 	}
 

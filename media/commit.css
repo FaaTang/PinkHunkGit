@@ -18,6 +18,11 @@
   --modified: var(--vscode-gitDecoration-modifiedResourceForeground, #d29922);
   --deleted: var(--vscode-gitDecoration-deletedResourceForeground, #f85149);
   --untracked: var(--vscode-gitDecoration-untrackedResourceForeground, #3fb950);
+  /* IDEA Commit panel (Darcula): lighter blue / coral, medium-blue selection */
+  --changes-file-name: #6dabf5;
+  --unversioned-file-name: #da8870;
+  --file-row-selected-bg: #3f6794;
+  --file-row-hover-bg: color-mix(in srgb, var(--fg) 6%, transparent);
   --diff-add-bg: color-mix(in srgb, var(--added) 18%, transparent);
   --diff-del-bg: color-mix(in srgb, var(--deleted) 18%, transparent);
   font-family: var(--vscode-font-family);
@@ -121,7 +126,7 @@ body {
 
 .main {
   display: grid;
-  grid-template-columns: minmax(220px, 280px) 1fr;
+  grid-template-columns: minmax(270px, 330px) 1fr;
   min-height: 0;
   flex: 1;
 }
@@ -292,18 +297,23 @@ body.sidebar-mode .commit-form {
   grid-template-columns: 18px 16px 1fr;
   gap: 6px;
   align-items: center;
-  padding: 4px 10px;
+  margin: 1px 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
   cursor: pointer;
   user-select: none;
 }
 
-.file-row:hover {
-  background: var(--list-hover);
+.file-row:hover:not(.selected) {
+  background: var(--file-row-hover-bg);
 }
 
 .file-row.selected {
-  background: var(--list-active);
-  color: var(--list-active-fg);
+  background: var(--file-row-selected-bg);
+}
+
+.file-row.selected:hover {
+  background: var(--file-row-selected-bg);
 }
 
 .file-row input {
@@ -345,8 +355,16 @@ body.sidebar-mode .commit-form {
   color: var(--fg);
 }
 
-.file-row.selected .file-name {
-  color: var(--list-active-fg);
+.file-row.group-changes .file-name {
+  color: var(--changes-file-name);
+}
+
+.file-row.group-unversioned .file-name {
+  color: var(--unversioned-file-name);
+}
+
+.file-row.selected .file-dir {
+  opacity: 0.72;
 }
 
 .file-dir {
@@ -433,8 +451,13 @@ textarea {
 
 .commit-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.commit-actions button {
+  white-space: nowrap;
 }
 
 button {

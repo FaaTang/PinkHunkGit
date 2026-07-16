@@ -58,11 +58,16 @@ export class GitService implements vscode.Disposable {
 	private fileWatchersSetup = false;
 	private editorListenersSetup = false;
 	private pendingFolderWatch = false;
+	private initState: 'pending' | 'ready' | 'failed' = 'pending';
+	private initError = '';
 
 	async init(): Promise<{ ok: true } | { ok: false; error: string }> {
 		const extension = vscode.extensions.getExtension<GitExtension>('vscode.git');
 		if (!extension) {
-			return { ok: false, error: 'VS Code Git extension is not available.' };
+			this.initState = 'failed';
+			this.initError = 'VS Code Git extension is not available.';
+			this._onDidChange.fire();
+			return { ok: false, error: this.initError };
 		}
 
 		if (!extension.isActive) {
@@ -71,7 +76,10 @@ export class GitService implements vscode.Disposable {
 
 		const gitExtension = extension.exports;
 		if (!gitExtension.enabled) {
-			return { ok: false, error: 'VS Code Git extension is disabled. Please enable it to use this panel.' };
+			this.initState = 'failed';
+			this.initError = 'VS Code Git extension is disabled. Please enable it to use this panel.';
+			this._onDidChange.fire();
+			return { ok: false, error: this.initError };
 		}
 
 		this.api = gitExtension.getAPI(1);
@@ -95,7 +103,15 @@ export class GitService implements vscode.Disposable {
 		this.bindRepositoryEvents();
 		this.setupWorkspaceWatchers();
 
+		this.initState = 'ready';
+		this._onDidChange.fire();
 		return { ok: true };
+	}
+
+	markInitFailed(error: string): void {
+		this.initState = 'failed';
+		this.initError = error;
+		this._onDidChange.fire();
 	}
 
 	private setupWorkspaceWatchers(): void {
@@ -286,9 +302,18 @@ export class GitService implements vscode.Disposable {
 		};
 
 		if (!this.api) {
+			if (this.initState === 'pending') {
+				return {
+					ok: false,
+					loading: true,
+					hint: 'Loading Git...',
+					repositories: [],
+					active: emptyActive,
+				};
+			}
 			return {
 				ok: false,
-				error: 'VS Code Git extension is not available.',
+				error: this.initError || 'VS Code Git extension is not available.',
 				repositories: [],
 				active: emptyActive,
 			};
@@ -515,6 +540,67 @@ export class GitService implements vscode.Disposable {
 		);
 	}
 
+	/** Apply Commit-panel checkboxes to the Git index right before committing. */
+	async applyCommitSelection(
+		checked: Array<{ repoRoot: string; path: string }>
+	): Promise<void> {
+		const workspace = this.getWorkspaceSnapshot();
+		if (!workspace.ok) {
+			throw new Error(workspace.error ?? 'Repository unavailable');
+		}
+
+		for (const snap of workspace.repositories) {
+			if (!snap.ok) {
+				continue;
+			}
+
+			const checkedSet = new Set(
+				checked
+					.filter((entry) => pathsEqual(entry.repoRoot, snap.rootPath))
+					.map((entry) => entry.path.toLowerCase())
+			);
+			const changes = this.getTrackedChangeItems(snap);
+			const repo = this.requireRepoByRoot(snap.rootPath);
+			const toStage: string[] = [];
+			const toUnstage: string[] = [];
+
+			for (const item of changes) {
+				const include = checkedSet.has(item.path.toLowerCase());
+				if (include && !item.staged) {
+					toStage.push(item.fsPath);
+				} else if (!include && item.staged) {
+					toUnstage.push(item.fsPath);
+				}
+			}
+
+			if (toStage.length) {
+				for (const fsPath of toStage) {
+					await this.ensureSaved(fsPath);
+				}
+				await this.runGitApi(repo, 'add', this.formatPaths(toStage), () => repo.add(toStage));
+			}
+			if (toUnstage.length) {
+				await this.runGitApi(repo, 'revert (unstage)', this.formatPaths(toUnstage), () =>
+					repo.revert(toUnstage)
+				);
+			}
+		}
+	}
+
+	private getTrackedChangeItems(snap: RepoSnapshot): ChangeItem[] {
+		const map = new Map<string, ChangeItem>();
+		for (const item of snap.unstaged) {
+			if (item.status === '?') {
+				continue;
+			}
+			map.set(item.path.toLowerCase(), { ...item, staged: false });
+		}
+		for (const item of snap.staged) {
+			map.set(item.path.toLowerCase(), { ...item, staged: true });
+		}
+		return [...map.values()];
+	}
+
 	async stageAll(stage: boolean): Promise<void> {
 		const workspace = this.getWorkspaceSnapshot();
 		if (!workspace.ok) {
@@ -588,7 +674,7 @@ export class GitService implements vscode.Disposable {
 
 		const targets = workspace.repositories.filter((r) => r.ok && r.staged.length > 0);
 		if (!targets.length) {
-			throw new Error('No staged changes. Check files to include in the commit.');
+			throw new Error('No files selected for commit.');
 		}
 
 		const committed: CommitRepoResult[] = [];

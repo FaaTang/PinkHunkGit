@@ -12,6 +12,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private readonly disposables: vscode.Disposable[] = [];
 	private busy = false;
 	private selected?: { repoRoot: string; path: string; staged: boolean };
+	private operationChain: Promise<void> = Promise.resolve();
 	private pendingFocusMessage = false;
 	private pendingExpandChanges = false;
 	private pendingUpdateAllRepoCount?: number;
@@ -21,7 +22,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		private readonly extensionUri: vscode.Uri,
 		private readonly git: GitService,
 		private readonly pushDialog: PushDialogProvider,
-		private readonly onInstallKeybindings: () => Promise<void>
+		private readonly onInstallKeybindings: () => Promise<void>,
+		private readonly waitForGitInit: () => Promise<void>
 	) {
 		this.disposables.push(this.git.onDidChange(() => void this.pushSnapshot()));
 	}
@@ -88,10 +90,14 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			})
 		);
 
-		void this.pushSnapshot();
-		if (webviewView.visible) {
-			void this.refreshAndPush();
-		}
+		void (async () => {
+			await this.waitForGitInit();
+			if (webviewView.visible) {
+				await this.refreshAndPush();
+			} else {
+				await this.pushSnapshot();
+			}
+		})();
 	}
 
 	async reveal(focusMessage = false, expandChanges = false): Promise<void> {
@@ -220,6 +226,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async refreshAndPush(): Promise<void> {
+		await this.waitForGitInit();
 		await this.git.refresh();
 		await this.pushSnapshot();
 	}
@@ -242,28 +249,6 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				case 'switchRepo':
 					this.git.setActiveRepository(msg.repoRoot);
 					this.setSelection(msg.repoRoot, null, false);
-					break;
-				case 'toggleStage':
-					await this.withBusy(async () => {
-						const fsPath = this.toFsPath(msg.repoRoot, msg.path);
-						if (msg.currentlyStaged) {
-							await this.git.unstage(fsPath);
-						} else {
-							await this.git.stage(fsPath);
-						}
-					});
-					break;
-				case 'setGroupStaged':
-					await this.withBusy(async () => {
-						for (const relativePath of msg.paths) {
-							const fsPath = this.toFsPath(msg.repoRoot, relativePath);
-							if (msg.staged) {
-								await this.git.stage(fsPath);
-							} else {
-								await this.git.unstage(fsPath);
-							}
-						}
-					});
 					break;
 				case 'addToGit':
 					await this.withBusy(async () => {
@@ -301,6 +286,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'commit':
 					await this.withBusy(async () => {
+						await this.git.applyCommitSelection(msg.checkedChanges ?? []);
 						await this.stageUnversionedPaths(msg.unversionedPaths);
 						const committed = await this.git.commitAllStaged(msg.message);
 						vscode.window.showInformationMessage(formatCommittedMessage(committed));
@@ -309,6 +295,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'commitAndPush':
 					await this.withBusy(async () => {
+						await this.git.applyCommitSelection(msg.checkedChanges ?? []);
 						await this.stageUnversionedPaths(msg.unversionedPaths);
 						const committed = await this.git.commitAllStaged(msg.message);
 						vscode.window.showInformationMessage(formatCommittedMessage(committed));
@@ -346,14 +333,18 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async withBusy(fn: () => Promise<void>): Promise<void> {
-		this.busy = true;
-		this.post({ type: 'busy', busy: true });
-		try {
-			await fn();
-		} finally {
-			this.busy = false;
-			this.post({ type: 'busy', busy: false });
-		}
+		const run = this.operationChain.then(async () => {
+			this.busy = true;
+			this.post({ type: 'busy', busy: true });
+			try {
+				await fn();
+			} finally {
+				this.busy = false;
+				this.post({ type: 'busy', busy: false });
+			}
+		});
+		this.operationChain = run.catch(() => undefined);
+		await run;
 	}
 
 	private async pushSnapshot(): Promise<void> {
@@ -415,7 +406,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
         <div id="formError" class="form-error hidden"></div>
         <div class="commit-actions">
           <button id="commitBtn" class="primary" type="button">Commit</button>
-          <button id="commitPushBtn" type="button">Commit and Push…</button>
+          <button id="commitPushBtn" type="button">Commit and Push</button>
         </div>
       </div>
     </div>

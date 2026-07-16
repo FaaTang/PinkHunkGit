@@ -35,6 +35,9 @@ export type RepoSummary = {
 export type WorkspaceSnapshot = {
 	ok: boolean;
 	error?: string;
+	/** Git service is still initializing; show a loading state instead of an error. */
+	loading?: boolean;
+	hint?: string;
 	/** Focused repository (editor / last selection); used for Push / sync defaults. */
 	activeRepoRoot?: string;
 	/** Full per-repository snapshots for grouped Changes UI. */
@@ -117,8 +120,6 @@ export type HostToWebview =
 export type WebviewToHost =
 	| { type: 'ready' }
 	| { type: 'switchRepo'; repoRoot: string }
-	| { type: 'toggleStage'; repoRoot: string; path: string; staged: boolean; currentlyStaged: boolean }
-	| { type: 'setGroupStaged'; repoRoot: string; paths: string[]; staged: boolean }
 	| { type: 'stageAll'; staged: boolean }
 	| { type: 'updateSelection'; repoRoot: string; path: string | null; staged: boolean }
 	| { type: 'openDiff'; repoRoot: string; path: string; staged: boolean }
@@ -128,8 +129,18 @@ export type WebviewToHost =
 	| { type: 'rollbackConfirm'; repoRoot: string; path: string; staged: boolean }
 	| { type: 'rollbackCancel' }
 	| { type: 'addToGit'; paths: Array<{ repoRoot: string; path: string }> }
-	| { type: 'commit'; message: string; unversionedPaths?: Array<{ repoRoot: string; path: string }> }
-	| { type: 'commitAndPush'; message: string; unversionedPaths?: Array<{ repoRoot: string; path: string }> }
+	| {
+			type: 'commit';
+			message: string;
+			checkedChanges?: Array<{ repoRoot: string; path: string }>;
+			unversionedPaths?: Array<{ repoRoot: string; path: string }>;
+	  }
+	| {
+			type: 'commitAndPush';
+			message: string;
+			checkedChanges?: Array<{ repoRoot: string; path: string }>;
+			unversionedPaths?: Array<{ repoRoot: string; path: string }>;
+	  }
 	| { type: 'push'; repoRoot?: string; pushTags?: boolean }
 	| { type: 'pushSync'; mode: SyncMode; repoRoot?: string }
 	| { type: 'syncAbort'; repoRoot?: string }
