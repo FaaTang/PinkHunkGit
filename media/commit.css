@@ -346,12 +346,13 @@ body.sidebar-mode .commit-form {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .file-name {
   flex-shrink: 0;
   font-weight: 600;
+  font-size: 14px;
   color: var(--fg);
 }
 
