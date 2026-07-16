@@ -14,20 +14,6 @@
   const refreshBtn = document.getElementById('refreshBtn');
   const locateBtn = document.getElementById('locateBtn');
   const installKeysBtn = document.getElementById('installKeysBtn');
-  const pushModal = document.getElementById('pushModal');
-  const pushTitle = document.getElementById('pushTitle');
-  const pushSummary = document.getElementById('pushSummary');
-  const pushConflictList = document.getElementById('pushConflictList');
-  const pushCancel = document.getElementById('pushCancel');
-  const pushConfirm = document.getElementById('pushConfirm');
-  const pushMerge = document.getElementById('pushMerge');
-  const pushRebase = document.getElementById('pushRebase');
-  const pushAbort = document.getElementById('pushAbort');
-  const pushContinue = document.getElementById('pushContinue');
-  const pushAskNo = document.getElementById('pushAskNo');
-  const pushAskYes = document.getElementById('pushAskYes');
-  const pushTagsOption = document.getElementById('pushTagsOption');
-  const pushTagsCheckbox = document.getElementById('pushTagsCheckbox');
   const rollbackModal = document.getElementById('rollbackModal');
   const rollbackTitle = document.getElementById('rollbackTitle');
   const rollbackSummary = document.getElementById('rollbackSummary');
@@ -52,16 +38,13 @@
   const webviewState = vscode.getState() || {};
   const collapsedRepos = new Set(webviewState.collapsedRepos || []);
   const collapsedGroups = new Set(webviewState.collapsedGroups || []);
+  const checkedUnversioned = new Set(webviewState.checkedUnversioned || []);
   let lastCommitMessage = webviewState.lastCommitMessage || '';
   let messageDraft = webviewState.messageDraft || '';
   let messageDraftInitialized = false;
   let selected = null;
   let lastActiveRepoRoot = '';
   let pendingRollback = null;
-  /** @type {'confirm' | 'rejected' | 'conflict' | 'askPush' | null} */
-  let pushModalState = null;
-  /** Repo root for the in-progress Push / Merge / Rebase dialog. */
-  let pushRepoRoot = null;
 
   function activeRepoRoot() {
     return workspace.activeRepoRoot || workspace.active?.rootPath || '';
@@ -78,6 +61,10 @@
 
   function totalStagedCount() {
     return allRepos().reduce((n, r) => n + (r.staged?.length || 0), 0);
+  }
+
+  function totalIncludableCount() {
+    return totalStagedCount() + collectCheckedUnversionedPaths().length;
   }
 
   function repoKey(root) {
@@ -118,6 +105,96 @@
 
   function saveCollapsedGroups() {
     saveWebviewState({ collapsedGroups: Array.from(collapsedGroups) });
+  }
+
+  function unversionedCheckKey(repoRoot, path) {
+    return `${repoKey(repoRoot)}|${path}`;
+  }
+
+  function isUnversionedChecked(repoRoot, path) {
+    return checkedUnversioned.has(unversionedCheckKey(repoRoot, path));
+  }
+
+  function toggleUnversionedChecked(repoRoot, path, checked) {
+    const key = unversionedCheckKey(repoRoot, path);
+    if (checked) {
+      checkedUnversioned.add(key);
+    } else {
+      checkedUnversioned.delete(key);
+    }
+    saveWebviewState({ checkedUnversioned: Array.from(checkedUnversioned) });
+  }
+
+  function pruneCheckedUnversioned() {
+    const valid = new Set();
+    for (const repo of allRepos()) {
+      for (const item of getUnversioned(repo)) {
+        valid.add(unversionedCheckKey(repo.rootPath, item.path));
+      }
+    }
+    let changed = false;
+    for (const key of checkedUnversioned) {
+      if (!valid.has(key)) {
+        checkedUnversioned.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveWebviewState({ checkedUnversioned: Array.from(checkedUnversioned) });
+    }
+  }
+
+  function isSelectedUnversioned(sel) {
+    const repo = findRepo(sel.repoRoot);
+    if (!repo) {
+      return false;
+    }
+    return getUnversioned(repo).some((i) => i.path === sel.path);
+  }
+
+  function collectCheckedUnversionedPaths() {
+    const paths = [];
+    for (const repo of allRepos()) {
+      for (const item of getUnversioned(repo)) {
+        if (isUnversionedChecked(repo.rootPath, item.path)) {
+          paths.push({ repoRoot: repo.rootPath, path: item.path });
+        }
+      }
+    }
+    return paths;
+  }
+
+  function collectAddToGitPaths() {
+    const paths = collectCheckedUnversionedPaths();
+    if (selected && isSelectedUnversioned(selected)) {
+      const entry = { repoRoot: selected.repoRoot, path: selected.path };
+      if (!paths.some((p) => p.repoRoot === entry.repoRoot && p.path === entry.path)) {
+        paths.push(entry);
+      }
+    }
+    return paths;
+  }
+
+  function clearUnversionedChecks(paths) {
+    for (const { repoRoot, path } of paths) {
+      checkedUnversioned.delete(unversionedCheckKey(repoRoot, path));
+    }
+    saveWebviewState({ checkedUnversioned: Array.from(checkedUnversioned) });
+  }
+
+  function performAddToGit() {
+    const paths = collectAddToGitPaths();
+    if (!paths.length) {
+      showFormError('Select unversioned files to add to Git.');
+      return;
+    }
+    showFormError('');
+    clearUnversionedChecks(paths);
+    post({ type: 'addToGit', paths });
+  }
+
+  function formatGroupCount(selected, total) {
+    return `${selected}/${total}`;
   }
 
   function toggleGroupCollapsed(root, group) {
@@ -290,7 +367,7 @@
     if (unversionedGroup) {
       const addToGit = document.createElement('button');
       addToGit.type = 'button';
-      addToGit.textContent = 'Add to Git';
+      addToGit.textContent = 'Add to Git (Ctrl+Alt+A)';
       addToGit.addEventListener('click', () => {
         hideContextMenu();
         post({
@@ -397,10 +474,13 @@
         const title = document.createElement('div');
         title.className = 'repo-group-title collapsible';
         const branch = repo.branch ? ` · ${repo.branch}` : '';
-        const count = tracked.length + unversioned.length;
+        const selectedCount =
+          tracked.filter((i) => i.staged).length +
+          unversioned.filter((i) => isUnversionedChecked(repo.rootPath, i.path)).length;
+        const total = tracked.length + unversioned.length;
         title.innerHTML =
           `<span class="repo-group-chevron">${collapsed ? '▸' : '▾'}</span>` +
-          `<span class="repo-group-name">${repo.name}${branch}</span><span class="repo-group-count">${count}</span>`;
+          `<span class="repo-group-name">${repo.name}${branch}</span><span class="repo-group-count">${formatGroupCount(selectedCount, total)}</span>`;
         title.title = collapsed ? 'Click to expand' : 'Click to collapse';
         title.addEventListener('click', () => toggleRepoCollapsed(repo.rootPath));
         group.appendChild(title);
@@ -428,14 +508,64 @@
   function renderChangeList(title, items, repoRoot, unversionedGroup = false, groupId = '') {
     const wrap = document.createElement('div');
     const collapsed = groupId ? collapsedGroups.has(groupKey(repoRoot, groupId)) : false;
+    const selectedCount = unversionedGroup
+      ? items.filter((i) => isUnversionedChecked(repoRoot, i.path)).length
+      : items.filter((i) => i.staged).length;
+
     const head = document.createElement('div');
     head.className = 'group-title collapsible';
-    head.innerHTML =
-      `<span class="group-title-chevron">${collapsed ? '▸' : '▾'}</span>` +
-      `<span class="group-title-name">${title}</span><span class="group-title-count">${items.length}</span>`;
+
+    const selectAll = document.createElement('input');
+    selectAll.type = 'checkbox';
+    selectAll.className = 'group-select-all';
+    selectAll.title = unversionedGroup ? 'Select all' : 'Stage all';
+    selectAll.disabled = !items.length;
+    selectAll.checked = items.length > 0 && selectedCount === items.length;
+    selectAll.indeterminate = selectedCount > 0 && selectedCount < items.length;
+    selectAll.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!items.length) {
+        return;
+      }
+      const checked = selectAll.checked;
+      if (unversionedGroup) {
+        for (const item of items) {
+          toggleUnversionedChecked(repoRoot, item.path, checked);
+        }
+        renderFiles();
+        return;
+      }
+      const toToggle = items.filter((item) => item.staged !== checked).map((item) => item.path);
+      if (toToggle.length) {
+        post({ type: 'setGroupStaged', repoRoot, paths: toToggle, staged: checked });
+      }
+    });
+
+    const chevron = document.createElement('span');
+    chevron.className = 'group-title-chevron';
+    chevron.textContent = collapsed ? '▸' : '▾';
+
+    const name = document.createElement('span');
+    name.className = 'group-title-name';
+    name.textContent = title;
+
+    const count = document.createElement('span');
+    count.className = 'group-title-count';
+    count.textContent = formatGroupCount(selectedCount, items.length);
+
+    head.appendChild(selectAll);
+    head.appendChild(chevron);
+    head.appendChild(name);
+    head.appendChild(count);
+
     if (groupId) {
       head.title = collapsed ? 'Click to expand' : 'Click to collapse';
-      head.addEventListener('click', () => toggleGroupCollapsed(repoRoot, groupId));
+      head.addEventListener('click', (e) => {
+        if (e.target === selectAll) {
+          return;
+        }
+        toggleGroupCollapsed(repoRoot, groupId);
+      });
     }
     wrap.appendChild(head);
 
@@ -459,14 +589,18 @@
         row.classList.add('selected');
       }
 
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
       if (unversionedGroup) {
-        const spacer = document.createElement('span');
-        spacer.className = 'file-row-spacer';
-        spacer.title = 'Right-click → Add to Git';
-        row.appendChild(spacer);
+        const checked = isUnversionedChecked(repoRoot, item.path);
+        checkbox.checked = checked;
+        checkbox.title = checked ? 'Selected to add to Git' : 'Not selected';
+        checkbox.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleUnversionedChecked(repoRoot, item.path, checkbox.checked);
+          renderFiles();
+        });
       } else {
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
         checkbox.checked = staged;
         checkbox.title = staged ? 'Included in commit' : 'Not included in commit';
         checkbox.addEventListener('click', (e) => {
@@ -479,8 +613,8 @@
             currentlyStaged: staged,
           });
         });
-        row.appendChild(checkbox);
       }
+      row.appendChild(checkbox);
 
       const status = document.createElement('span');
       status.className = 'status ' + (item.status === '?' ? 'A' : item.status);
@@ -493,11 +627,14 @@
       const nameEl = document.createElement('span');
       nameEl.className = 'file-name';
       nameEl.textContent = name;
-
       pathEl.appendChild(nameEl);
-      if (dir) {
-        const dirEl = document.createElement('span');
-        dirEl.className = 'file-dir';
+
+      const dirEl = document.createElement('span');
+      dirEl.className = 'file-dir';
+      if (unversionedGroup) {
+        dirEl.textContent = item.path;
+        pathEl.appendChild(dirEl);
+      } else if (dir) {
         dirEl.textContent = dir;
         pathEl.appendChild(dirEl);
       }
@@ -511,7 +648,7 @@
       pathEl.title = item.unsaved
         ? `${item.path} — unsaved`
         : unversionedGroup
-          ? `${item.path} — right-click Add to Git`
+          ? `${item.path} — checked = add to Git (Ctrl+Alt+A); right-click for more`
           : `${item.path} — checked = commit; right-click for more`;
 
       row.appendChild(status);
@@ -540,191 +677,12 @@
       showFormError('Commit message cannot be empty.');
       return null;
     }
-    if (!totalStagedCount()) {
+    if (!totalIncludableCount()) {
       showFormError('Select files to include in the commit.');
       return null;
     }
     showFormError('');
     return message;
-  }
-
-  function setPushActionVisibility(visibleIds) {
-    const buttons = {
-      pushCancel,
-      pushConfirm,
-      pushMerge,
-      pushRebase,
-      pushAbort,
-      pushContinue,
-      pushAskNo,
-      pushAskYes,
-    };
-    Object.entries(buttons).forEach(([id, el]) => {
-      if (!el) {
-        return;
-      }
-      el.classList.toggle('hidden', !visibleIds.includes(id));
-    });
-  }
-
-  function renderConflictList(conflicts) {
-    pushConflictList.innerHTML = '';
-    if (!conflicts || !conflicts.length) {
-      pushConflictList.classList.add('hidden');
-      return;
-    }
-    pushConflictList.classList.remove('hidden');
-    conflicts.forEach((item) => {
-      const li = document.createElement('li');
-      li.className = 'conflict-item';
-      li.title = 'Open in VS Code merge editor';
-      const status = document.createElement('span');
-      status.className = 'conflict-status';
-      status.textContent = item.status || 'C';
-      const name = document.createElement('span');
-      name.className = 'conflict-path';
-      name.textContent = item.path;
-      li.appendChild(status);
-      li.appendChild(name);
-      li.addEventListener('click', () => post({ type: 'openConflict', path: item.path }));
-      pushConflictList.appendChild(li);
-    });
-  }
-
-  function closePushModal() {
-    pushModalState = null;
-    pushRepoRoot = null;
-    pushModal.classList.add('hidden');
-    pushConflictList.classList.add('hidden');
-    pushConflictList.innerHTML = '';
-    setPushTagsOptionVisible(false);
-  }
-
-  function setPushTagsOptionVisible(visible) {
-    if (!pushTagsOption) {
-      return;
-    }
-    pushTagsOption.classList.toggle('hidden', !visible);
-  }
-
-  function isPushTagsChecked() {
-    return !!(pushTagsCheckbox && pushTagsCheckbox.checked);
-  }
-
-  function openPushModal() {
-    const repos = allRepos();
-    const active = findRepo(activeRepoRoot()) || workspace.active || repos[0] || {};
-    pushRepoRoot = active.rootPath || null;
-    const lines = [];
-    if (repos.length > 1) {
-      lines.push('Will push the focused repository (highlighted group). Other repositories:');
-      for (const repo of repos) {
-        const ahead = typeof repo.ahead === 'number' ? repo.ahead : '?';
-        const behind = typeof repo.behind === 'number' ? repo.behind : '?';
-        const mark =
-          String(repo.rootPath).replace(/\\/g, '/').toLowerCase() ===
-          String(active.rootPath || '').replace(/\\/g, '/').toLowerCase()
-            ? '→ '
-            : '  ';
-        lines.push(
-          `${mark}${repo.name}${repo.branch ? ` (${repo.branch})` : ''}  ahead ${ahead} / behind ${behind}`
-        );
-      }
-      lines.push('');
-    }
-    const branch = active.branch || '(detached)';
-    const upstream = active.upstream || '(no upstream)';
-    const remotes = (active.remotes || []).join(', ') || '(none)';
-    const ahead = typeof active.ahead === 'number' ? active.ahead : '?';
-    const behind = typeof active.behind === 'number' ? active.behind : '?';
-    lines.push(
-      `Repository: ${active.name || '(unknown)'}`,
-      `Branch: ${branch}`,
-      `Upstream: ${upstream}`,
-      `Remotes: ${remotes}`,
-      `Ahead: ${ahead}`,
-      `Behind: ${behind}`
-    );
-    if (typeof active.ahead === 'number' && active.ahead === 0) {
-      lines.push('', 'No local commits to push (ahead = 0). You can still try Push.');
-    }
-    if (typeof active.behind === 'number' && active.behind > 0) {
-      lines.push(
-        '',
-        `Remote is ahead by ${active.behind} commit(s). Push may be rejected — Merge or Rebase first.`
-      );
-    }
-    pushModalState = 'confirm';
-    pushTitle.textContent = 'Push';
-    pushSummary.textContent = lines.join('\n');
-    renderConflictList([]);
-    setPushTagsOptionVisible(true);
-    setPushActionVisibility(['pushCancel', 'pushConfirm']);
-    pushModal.classList.remove('hidden');
-  }
-
-  function openPushRejectedModal(payload) {
-    pushModalState = 'rejected';
-    pushRepoRoot = payload.repoRoot || pushRepoRoot || activeRepoRoot() || null;
-    pushTitle.textContent = 'Push Rejected';
-    const behind =
-      typeof payload.behind === 'number' ? `Behind remote: ${payload.behind}` : 'Remote has commits you do not have locally.';
-    pushSummary.textContent =
-      `${payload.message}\n\n` +
-      `Repository: ${payload.repoName}\n` +
-      `Branch: ${payload.branch || '(detached)'}\n` +
-      `Upstream: ${payload.upstream || '(none)'}\n` +
-      `${behind}\n\n` +
-      `Choose Merge or Rebase to sync with remote, then Push.`;
-    renderConflictList([]);
-    setPushTagsOptionVisible(false);
-    setPushActionVisibility(['pushCancel', 'pushMerge', 'pushRebase']);
-    pushModal.classList.remove('hidden');
-  }
-
-  function openSyncConflictModal(payload) {
-    pushModalState = 'conflict';
-    pushRepoRoot = payload.repoRoot || pushRepoRoot || activeRepoRoot() || null;
-    const modeLabel = payload.mode === 'rebase' ? 'Rebase' : 'Merge';
-    pushTitle.textContent = `${modeLabel} Conflicts`;
-    pushSummary.textContent =
-      `${payload.message}\n\n` +
-      `Click conflict files below to resolve in VS Code merge editor. When all are resolved, click Continue; or Abort to cancel.`;
-    renderConflictList(payload.conflicts || []);
-    setPushTagsOptionVisible(false);
-    setPushActionVisibility(['pushAbort', 'pushContinue']);
-    pushModal.classList.remove('hidden');
-  }
-
-  function openAskPushModal(payload) {
-    pushModalState = 'askPush';
-    pushRepoRoot = payload.repoRoot || pushRepoRoot || activeRepoRoot() || null;
-    pushTitle.textContent = 'Push?';
-    const behindLine =
-      typeof payload.behind === 'number' ? `\nBehind: ${payload.behind}` : '';
-    pushSummary.textContent =
-      `${payload.summary}\n\n` +
-      `Repository: ${payload.repoName}\n` +
-      `Branch: ${payload.branch || '(detached)'}\n` +
-      `Upstream: ${payload.upstream || '(none)'}\n` +
-      `Ahead: ${typeof payload.ahead === 'number' ? payload.ahead : '?'}` +
-      behindLine;
-    renderConflictList([]);
-    setPushTagsOptionVisible(true);
-    setPushActionVisibility(['pushAskNo', 'pushAskYes']);
-    pushModal.classList.remove('hidden');
-  }
-
-  function syncConflictListFromSnapshot() {
-    if (pushModalState !== 'conflict') {
-      return;
-    }
-    const conflicts = workspace.active.conflictFiles || [];
-    renderConflictList(conflicts);
-    if (!conflicts.length && workspace.active.syncMode) {
-      pushSummary.textContent =
-        'All conflicts resolved. Click Continue to finish Merge / Rebase; or Abort to cancel.';
-    }
   }
 
   function closeRollbackModal() {
@@ -758,8 +716,10 @@
     if (!message) {
       return;
     }
+    const unversionedPaths = collectCheckedUnversionedPaths();
+    clearUnversionedChecks(unversionedPaths);
     cacheLastCommitMessage(message);
-    post({ type: 'commit', message });
+    post({ type: 'commit', message, unversionedPaths });
   });
 
   commitPushBtn.addEventListener('click', () => {
@@ -767,8 +727,10 @@
     if (!message) {
       return;
     }
+    const unversionedPaths = collectCheckedUnversionedPaths();
+    clearUnversionedChecks(unversionedPaths);
     cacheLastCommitMessage(message);
-    post({ type: 'commitAndPush', message });
+    post({ type: 'commitAndPush', message, unversionedPaths });
   });
 
   messageEl.addEventListener('input', () => {
@@ -815,40 +777,6 @@
       closeUpdateAllModal(false);
     }
   });
-  pushCancel.addEventListener('click', () => {
-    closePushModal();
-    post({ type: 'pushDialogCancel' });
-  });
-  pushConfirm.addEventListener('click', () => {
-    post({
-      type: 'push',
-      repoRoot: pushRepoRoot || undefined,
-      pushTags: isPushTagsChecked(),
-    });
-  });
-  pushMerge.addEventListener('click', () =>
-    post({ type: 'pushSync', mode: 'merge', repoRoot: pushRepoRoot || undefined })
-  );
-  pushRebase.addEventListener('click', () =>
-    post({ type: 'pushSync', mode: 'rebase', repoRoot: pushRepoRoot || undefined })
-  );
-  pushAbort.addEventListener('click', () =>
-    post({ type: 'syncAbort', repoRoot: pushRepoRoot || undefined })
-  );
-  pushContinue.addEventListener('click', () =>
-    post({ type: 'syncContinue', repoRoot: pushRepoRoot || undefined })
-  );
-  pushAskNo.addEventListener('click', () => {
-    closePushModal();
-    post({ type: 'askPushCancel' });
-  });
-  pushAskYes.addEventListener('click', () =>
-    post({
-      type: 'askPushConfirm',
-      repoRoot: pushRepoRoot || undefined,
-      pushTags: isPushTagsChecked(),
-    })
-  );
   rollbackCancelBtn.addEventListener('click', () => {
     closeRollbackModal();
     post({ type: 'rollbackCancel' });
@@ -870,6 +798,11 @@
   window.addEventListener('blur', hideContextMenu);
 
   document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'a' && !e.shiftKey) {
+      e.preventDefault();
+      performAddToGit();
+      return;
+    }
     if (!selected) {
       return;
     }
@@ -928,41 +861,20 @@
 
         setBusy(!!workspace.busy);
         renderRepoSelector();
+        pruneCheckedUnversioned();
 
         if (selected && !selectionStillExists(selected)) {
           selected = null;
           post({ type: 'updateSelection', repoRoot: activeRepoRoot(), path: null, staged: false });
         }
         renderFiles();
-        syncConflictListFromSnapshot();
         break;
       }
       case 'error':
         showFormError(msg.message);
-        if (pushModalState && !pushModal.classList.contains('hidden')) {
-          pushSummary.textContent = msg.message;
-        }
         break;
       case 'busy':
         setBusy(msg.busy);
-        break;
-      case 'showPushDialog':
-        workspace = msg.payload;
-        renderRepoSelector();
-        renderFiles();
-        openPushModal();
-        break;
-      case 'showPushRejected':
-        openPushRejectedModal(msg.payload);
-        break;
-      case 'showSyncConflict':
-        openSyncConflictModal(msg.payload);
-        break;
-      case 'showAskPush':
-        openAskPushModal(msg.payload);
-        break;
-      case 'closePushDialog':
-        closePushModal();
         break;
       case 'showRollbackDialog':
         openRollbackModal(msg.payload);
@@ -984,6 +896,9 @@
         break;
       case 'expandChanges':
         expandChangesGroups();
+        break;
+      case 'triggerAddToGit':
+        performAddToGit();
         break;
     }
   });

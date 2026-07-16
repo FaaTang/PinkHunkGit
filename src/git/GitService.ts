@@ -20,6 +20,7 @@ import {
 	SyncMode,
 	WorkspaceSnapshot,
 } from '../panel/messages';
+import { PushCommitItem, PushTarget } from '../panel/pushMessages';
 
 const MAX_DIFF_BYTES = 1_000_000;
 
@@ -611,10 +612,24 @@ export class GitService implements vscode.Disposable {
 		// Keep the rejected repo pinned so Merge / Rebase / retry Push stay on the same repo.
 		this.setActiveRepository(repo.rootUri.fsPath);
 		const pushDetail = this.describePush(repo);
+		const pushTags = !!options?.pushTags;
 		try {
-			await this.runGitApi(repo, 'push', pushDetail, () => repo.push());
-			if (options?.pushTags) {
-				await this.pushAllTags(repo.rootUri.fsPath);
+			if (pushTags && this.canPushBranchWithTags(repo)) {
+				const head = repo.state.HEAD!;
+				const remote = head.upstream!.remote;
+				const branch = head.name!;
+				const upstreamBranch = head.upstream!.name;
+				await this.runGitApi(
+					repo,
+					'push (with tags)',
+					`${branch} -> ${remote}/${upstreamBranch} + tags`,
+					() => this.execGit(repo.rootUri.fsPath, ['push', remote, branch, '--tags'])
+				);
+			} else {
+				await this.runGitApi(repo, 'push', pushDetail, () => repo.push());
+				if (pushTags) {
+					await this.pushAllTags(repo.rootUri.fsPath);
+				}
 			}
 		} catch (err) {
 			if (isPushRejectedError(err)) {
@@ -623,6 +638,11 @@ export class GitService implements vscode.Disposable {
 			}
 			throw err instanceof Error ? err : new Error(String(err));
 		}
+	}
+
+	private canPushBranchWithTags(repo: Repository): boolean {
+		const head = repo.state.HEAD;
+		return !!(head?.upstream && head.name);
 	}
 
 	/** Push all local tags to the default / upstream remote. */
@@ -652,6 +672,100 @@ export class GitService implements vscode.Disposable {
 			ahead: snap.ahead,
 			behind: snap.behind,
 		};
+	}
+
+	/** Build push targets with commits ahead of upstream for the Push dialog. */
+	async getPushTargets(options?: {
+		repoRoots?: string[];
+		activeRepoRoot?: string;
+	}): Promise<PushTarget[]> {
+		await this.refresh();
+		const workspace = this.getWorkspaceSnapshot();
+		const activeRoot = options?.activeRepoRoot ?? workspace.activeRepoRoot ?? workspace.active.rootPath;
+		const requested = options?.repoRoots?.length ? options.repoRoots : undefined;
+
+		let repos = workspace.repositories.filter((r) => r.ok && r.rootPath);
+		if (requested?.length) {
+			const wanted = new Set(requested.map((r) => r.replace(/\\/g, '/').toLowerCase()));
+			repos = repos.filter((r) => wanted.has(r.rootPath.replace(/\\/g, '/').toLowerCase()));
+		}
+
+		const targets: PushTarget[] = [];
+		for (const snap of repos) {
+			targets.push(await this.buildPushTarget(snap));
+		}
+		return targets;
+	}
+
+	private async buildPushTarget(
+		snap: RepoSnapshot
+	): Promise<PushTarget> {
+		const repo = this.requireRepoByRoot(snap.rootPath);
+		const head = repo.state.HEAD;
+		const branch = head?.name;
+		const upstream = snap.upstream;
+		const { remote, upstreamBranch } = parseUpstream(upstream, head?.upstream);
+
+		const label =
+			branch && remote && upstreamBranch
+				? `${branch} \u2192 ${remote} : ${upstreamBranch}`
+				: branch && upstream
+					? `${branch} \u2192 ${upstream}`
+					: branch ?? snap.name;
+
+		let commits: PushCommitItem[] = [];
+		if (head?.upstream) {
+			try {
+				const raw = await this.queryGit(snap.rootPath, [
+					'log',
+					`${head.upstream.remote}/${head.upstream.name}..HEAD`,
+					'--pretty=format:%H|%h|%s|%an|%ad',
+					'--date=short',
+				]);
+				commits = parsePushCommits(raw);
+			} catch {
+				commits = [];
+			}
+		}
+
+		return {
+			repoRoot: snap.rootPath,
+			repoName: snap.name,
+			branch,
+			upstream,
+			remote,
+			upstreamBranch,
+			ahead: snap.ahead,
+			behind: snap.behind,
+			label,
+			commits,
+		};
+	}
+
+	private async queryGit(cwd: string, args: string[]): Promise<string> {
+		const command = formatGitShellCommand(args);
+		logGitStart(cwd, command);
+		const started = Date.now();
+		try {
+			const { stdout, stderr } = await execFile('git', args, {
+				cwd,
+				maxBuffer: 10 * 1024 * 1024,
+				env: process.env,
+			});
+			const output = combineGitOutput(stdout, stderr);
+			logGitOk(Date.now() - started, output);
+			return bufferToString(stdout).trim();
+		} catch (err) {
+			const e = err as { stderr?: string | Buffer; stdout?: string | Buffer; message?: string; code?: number };
+			const stderr = bufferToString(e.stderr).trim();
+			const stdout = bufferToString(e.stdout).trim();
+			const output = combineGitOutput(stdout, stderr);
+			logGitFail(err, Date.now() - started, output);
+			if (e.code === 128 && /unknown revision|bad revision|no upstream/i.test(stderr || stdout)) {
+				return '';
+			}
+			throw new Error(stderr || stdout || e.message || String(err));
+		}
 	}
 
 	async syncWithUpstream(mode: SyncMode, repoRoot?: string): Promise<SyncResult> {
@@ -1289,6 +1403,36 @@ function dedupeByPath(items: ChangeItem[]): ChangeItem[] {
 		map.set(key, item);
 	}
 	return [...map.values()];
+}
+
+function parseUpstream(
+	upstream?: string,
+	headUpstream?: { remote: string; name: string }
+): { remote?: string; upstreamBranch?: string } {
+	if (headUpstream) {
+		return { remote: headUpstream.remote, upstreamBranch: headUpstream.name };
+	}
+	if (!upstream) {
+		return {};
+	}
+	const slash = upstream.indexOf('/');
+	if (slash > 0) {
+		return {
+			remote: upstream.slice(0, slash),
+			upstreamBranch: upstream.slice(slash + 1),
+		};
+	}
+	return { upstreamBranch: upstream };
+}
+
+function parsePushCommits(raw: string): PushCommitItem[] {
+	if (!raw.trim()) {
+		return [];
+	}
+	return raw.split('\n').map((line) => {
+		const [hash = '', shortHash = '', subject = '', author = '', date = ''] = line.split('|');
+		return { hash, shortHash, subject, author, date };
+	});
 }
 
 function pathsEqual(a: string, b: string): boolean {
