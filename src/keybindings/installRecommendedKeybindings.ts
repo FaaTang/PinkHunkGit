@@ -22,12 +22,12 @@ export async function promptInstallKeybindings(context: vscode.ExtensionContext)
 	}
 
 	const choice = await vscode.window.showInformationMessage(
-		'Copy IDEA Git UI：Ctrl+K / Ctrl+Shift+K / Ctrl+T 会被 VS Code 内置快捷键占用。是否写入用户快捷键配置以仿 IDEA？',
-		'安装',
-		'稍后'
+		'Copy IDEA Git UI: Ctrl+K / Ctrl+Shift+K / Ctrl+T conflict with built-in VS Code shortcuts. Write user keybindings to mimic IDEA?',
+		'Install',
+		'Later'
 	);
 
-	if (choice === '安装') {
+	if (choice === 'Install') {
 		await installRecommendedKeybindings(context);
 	}
 }
@@ -60,7 +60,7 @@ export async function installRecommendedKeybindings(
 
 		if (!toAdd.length) {
 			await context.globalState.update(MARKER, true);
-			vscode.window.showInformationMessage('IDEA 快捷键已存在，无需重复安装。');
+			vscode.window.showInformationMessage('IDEA keybindings already installed.');
 			return { ok: true };
 		}
 
@@ -71,10 +71,10 @@ export async function installRecommendedKeybindings(
 		await fs.writeFile(keybindingsPath, content, 'utf8');
 		await context.globalState.update(MARKER, true);
 		vscode.window.showInformationMessage(
-			'已写入用户快捷键。若仍无效，请重载窗口（Developer: Reload Window）。',
-			'重载窗口'
+			'User keybindings written. If shortcuts still do not work, reload the window (Developer: Reload Window).',
+			'Reload Window'
 		).then((action) => {
-			if (action === '重载窗口') {
+			if (action === 'Reload Window') {
 				void vscode.commands.executeCommand('workbench.action.reloadWindow');
 			}
 		});

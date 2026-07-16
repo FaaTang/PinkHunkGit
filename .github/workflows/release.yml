@@ -1,8 +1,8 @@
 name: Release
 
-# 推送 v* tag 时打包 .vsix 并发布到 GitHub Releases
-# 可选：仓库 Settings → Variables → Actions 设置 RELEASE_BRANCH（默认 main）
-# 仅当 tag 指向的提交在该分支历史上时才发布，避免误触发
+# On v* tag push: package .vsix and publish to GitHub Releases
+# Optional: set RELEASE_BRANCH under Settings → Variables → Actions (default main)
+# Release runs only when the tagged commit is on that branch history
 on:
   push:
     tags:
@@ -128,25 +128,25 @@ jobs:
           {
             echo "# Copy IDEA Git UI ${TAG}"
             echo
-            echo "## 安装方式（手动）"
+            echo "## Installation (manual)"
             echo
-            echo "1. 下载下方附件 \`copy-idea-git-ui-${{ needs.gate.outputs.version }}.vsix\`"
-            echo "2. 打开 VS Code / Cursor"
-            echo "3. 命令面板运行 \`Extensions: Install from VSIX...\`"
-            echo "4. 选择下载的 \`.vsix\` 文件并安装"
-            echo "5. 如提示，重载窗口"
+            echo "1. Download the attachment \`copy-idea-git-ui-${{ needs.gate.outputs.version }}.vsix\` below"
+            echo "2. Open VS Code / Cursor"
+            echo "3. Run \`Extensions: Install from VSIX...\` from the Command Palette"
+            echo "4. Select the downloaded \`.vsix\` file and install"
+            echo "5. Reload the window if prompted"
             echo
-            echo "## 变更"
+            echo "## Changes"
             echo
             if [ -z "$COMMITS" ]; then
-              echo "暂无提交记录。"
+              echo "No commits recorded."
             else
               printf '%s\n' "$COMMITS"
             fi
             if [ -n "$PREV_TAG" ]; then
               echo
               echo "---"
-              echo "**完整变更**: [${PREV_TAG}...${TAG}](${{ github.server_url }}/${{ github.repository }}/compare/${PREV_TAG}...${TAG})"
+              echo "**Full changelog**: [${PREV_TAG}...${TAG}](${{ github.server_url }}/${{ github.repository }}/compare/${PREV_TAG}...${TAG})"
             fi
           } > /tmp/changelog.md
 

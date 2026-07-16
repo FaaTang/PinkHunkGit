@@ -401,7 +401,7 @@
         title.innerHTML =
           `<span class="repo-group-chevron">${collapsed ? '▸' : '▾'}</span>` +
           `<span class="repo-group-name">${repo.name}${branch}</span><span class="repo-group-count">${count}</span>`;
-        title.title = collapsed ? '点击展开' : '点击折叠';
+        title.title = collapsed ? 'Click to expand' : 'Click to collapse';
         title.addEventListener('click', () => toggleRepoCollapsed(repo.rootPath));
         group.appendChild(title);
       }
@@ -434,7 +434,7 @@
       `<span class="group-title-chevron">${collapsed ? '▸' : '▾'}</span>` +
       `<span class="group-title-name">${title}</span><span class="group-title-count">${items.length}</span>`;
     if (groupId) {
-      head.title = collapsed ? '点击展开' : '点击折叠';
+      head.title = collapsed ? 'Click to expand' : 'Click to collapse';
       head.addEventListener('click', () => toggleGroupCollapsed(repoRoot, groupId));
     }
     wrap.appendChild(head);
@@ -541,7 +541,7 @@
       return null;
     }
     if (!totalStagedCount()) {
-      showFormError('请勾选要提交的文件。');
+      showFormError('Select files to include in the commit.');
       return null;
     }
     showFormError('');
@@ -577,7 +577,7 @@
     conflicts.forEach((item) => {
       const li = document.createElement('li');
       li.className = 'conflict-item';
-      li.title = '在 VS Code 合并编辑器中打开';
+      li.title = 'Open in VS Code merge editor';
       const status = document.createElement('span');
       status.className = 'conflict-status';
       status.textContent = item.status || 'C';
@@ -617,7 +617,7 @@
     pushRepoRoot = active.rootPath || null;
     const lines = [];
     if (repos.length > 1) {
-      lines.push('将 Push 当前聚焦仓库（高亮分组）。其它仓库概况：');
+      lines.push('Will push the focused repository (highlighted group). Other repositories:');
       for (const repo of repos) {
         const ahead = typeof repo.ahead === 'number' ? repo.ahead : '?';
         const behind = typeof repo.behind === 'number' ? repo.behind : '?';
@@ -675,7 +675,7 @@
       `Branch: ${payload.branch || '(detached)'}\n` +
       `Upstream: ${payload.upstream || '(none)'}\n` +
       `${behind}\n\n` +
-      `选择 Merge 或 Rebase 同步远程后再 Push。`;
+      `Choose Merge or Rebase to sync with remote, then Push.`;
     renderConflictList([]);
     setPushTagsOptionVisible(false);
     setPushActionVisibility(['pushCancel', 'pushMerge', 'pushRebase']);
@@ -689,7 +689,7 @@
     pushTitle.textContent = `${modeLabel} Conflicts`;
     pushSummary.textContent =
       `${payload.message}\n\n` +
-      `点击下方冲突文件，在 VS Code 合并编辑器中解决。全部解决后点 Continue；或 Abort 中止。`;
+      `Click conflict files below to resolve in VS Code merge editor. When all are resolved, click Continue; or Abort to cancel.`;
     renderConflictList(payload.conflicts || []);
     setPushTagsOptionVisible(false);
     setPushActionVisibility(['pushAbort', 'pushContinue']);
@@ -699,7 +699,7 @@
   function openAskPushModal(payload) {
     pushModalState = 'askPush';
     pushRepoRoot = payload.repoRoot || pushRepoRoot || activeRepoRoot() || null;
-    pushTitle.textContent = 'Push？';
+    pushTitle.textContent = 'Push?';
     const behindLine =
       typeof payload.behind === 'number' ? `\nBehind: ${payload.behind}` : '';
     pushSummary.textContent =
@@ -723,7 +723,7 @@
     renderConflictList(conflicts);
     if (!conflicts.length && workspace.active.syncMode) {
       pushSummary.textContent =
-        '冲突文件已全部解决。点击 Continue 完成 Merge / Rebase；或 Abort 中止。';
+        'All conflicts resolved. Click Continue to finish Merge / Rebase; or Abort to cancel.';
     }
   }
 
@@ -735,11 +735,11 @@
   function openRollbackModal(payload) {
     pendingRollback = payload;
     if (payload.isUntracked) {
-      rollbackTitle.textContent = '删除未跟踪文件';
-      rollbackSummary.textContent = `将删除 "${payload.path}"。此操作不可撤销。`;
+      rollbackTitle.textContent = 'Delete Untracked File';
+      rollbackSummary.textContent = `Will delete "${payload.path}". This cannot be undone.`;
     } else {
-      rollbackTitle.textContent = '回滚文件';
-      rollbackSummary.textContent = `将 "${payload.path}" 恢复到 Git 中的版本（撤销所有本地修改）。此操作不可撤销。`;
+      rollbackTitle.textContent = 'Rollback File';
+      rollbackSummary.textContent = `Will restore "${payload.path}" to the version in Git (discarding all local changes). This cannot be undone.`;
     }
     rollbackModal.classList.remove('hidden');
     rollbackConfirmBtn.focus();
@@ -803,7 +803,7 @@
   }
   function openUpdateAllModal(payload) {
     const count = payload && payload.repoCount != null ? payload.repoCount : 0;
-    updateAllSummary.textContent = `将对工作区内 ${count} 个 Git 仓库执行 pull 更新。是否继续？`;
+    updateAllSummary.textContent = `Will pull and update ${count} Git repositories in the workspace. Continue?`;
     updateAllModal.classList.remove('hidden');
     updateAllConfirmBtn.focus();
   }

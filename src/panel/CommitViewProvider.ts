@@ -133,7 +133,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 
 	async showDiffForSelection(): Promise<void> {
 		if (!this.selected) {
-			vscode.window.showWarningMessage('请先在 Commit 列表中选中一个文件。');
+			vscode.window.showWarningMessage('Select a file in the Commit list first.');
 			return;
 		}
 		await this.git.openDiffInEditor(
@@ -145,7 +145,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 
 	async openFileForSelection(): Promise<void> {
 		if (!this.selected) {
-			vscode.window.showWarningMessage('请先在 Commit 列表中选中一个文件。');
+			vscode.window.showWarningMessage('Select a file in the Commit list first.');
 			return;
 		}
 		await this.openFile(this.selected.repoRoot, this.selected.path);
@@ -153,7 +153,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 
 	async revealSelectionInExplorer(): Promise<void> {
 		if (!this.selected) {
-			vscode.window.showWarningMessage('请先在 Commit 列表中选中一个文件。');
+			vscode.window.showWarningMessage('Select a file in the Commit list first.');
 			return;
 		}
 		await this.revealInExplorer(this.selected.repoRoot, this.selected.path);
@@ -172,7 +172,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 
 	async rollbackForSelection(): Promise<void> {
 		if (!this.selected) {
-			vscode.window.showWarningMessage('请先在 Commit 列表中选中一个文件。');
+			vscode.window.showWarningMessage('Select a file in the Commit list first.');
 			return;
 		}
 		await this.startRollbackFlow(this.selected);
@@ -298,7 +298,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					await this.withBusy(async () => {
 						await this.git.abortSync(msg.repoRoot);
 						this.post({ type: 'closePushDialog' });
-						vscode.window.showInformationMessage('已中止 Merge / Rebase。');
+						vscode.window.showInformationMessage('Merge / Rebase aborted.');
 					});
 					break;
 				case 'syncContinue':
@@ -380,7 +380,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		try {
 			await this.git.push(repoRoot, { pushTags });
 			this.post({ type: 'closePushDialog' });
-			const tagsNote = pushTags ? '（含 tags）' : '';
+			const tagsNote = pushTags ? ' (with tags)' : '';
 			vscode.window.showInformationMessage(
 				`Pushed ${label}${upstream ? ` → ${upstream}` : ''}${tagsNote}.`
 			);
@@ -463,7 +463,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				upstream: ctx.upstream,
 				ahead: ctx.ahead,
 				behind: ctx.behind,
-				summary: `${modeLabel} 已完成。是否立即 Push 到 ${ctx.upstream || 'remote'}？`,
+				summary: `${modeLabel} completed. Push to ${ctx.upstream || 'remote'} now?`,
 			},
 		});
 	}
@@ -513,14 +513,14 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
     <div class="panel-toolbar">
       <span class="toolbar-title">Git</span>
       <div class="toolbar-actions">
-        <button id="installKeysBtn" type="button" title="安装本插件快捷键">⌨</button>
-        <button id="locateBtn" type="button" title="在资源管理器中定位选中文件">⌖</button>
-        <button id="refreshBtn" type="button" title="刷新 Git 状态">↻</button>
+        <button id="installKeysBtn" type="button" title="Install extension keybindings">⌨</button>
+        <button id="locateBtn" type="button" title="Reveal selected file in Explorer">⌖</button>
+        <button id="refreshBtn" type="button" title="Refresh Git status">↻</button>
       </div>
     </div>
     <div id="banner" class="banner hidden"></div>
     <div id="repoBar" class="repo-bar hidden">
-      <select id="repoSelect" title="默认跟随当前编辑文件所在仓库；也可手动切换" aria-label="当前仓库"></select>
+      <select id="repoSelect" title="Follows the repo of the active editor by default; switch manually if needed" aria-label="Current repository"></select>
     </div>
     <div class="main">
       <aside class="file-pane">
@@ -554,7 +554,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
       <div id="pushTagsOption" class="push-options hidden">
         <label class="push-option" for="pushTagsCheckbox">
           <input id="pushTagsCheckbox" type="checkbox" />
-          <span>Push tags 到远程</span>
+          <span>Push tags to remote</span>
         </label>
       </div>
       <div class="modal-actions" id="pushActions">
@@ -564,7 +564,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
         <button id="pushRebase" class="hidden" type="button">Rebase</button>
         <button id="pushAbort" class="hidden" type="button">Abort</button>
         <button id="pushContinue" class="primary hidden" type="button">Continue</button>
-        <button id="pushAskNo" class="hidden" type="button">稍后</button>
+        <button id="pushAskNo" class="hidden" type="button">Later</button>
         <button id="pushAskYes" class="primary hidden" type="button">Push</button>
       </div>
     </div>
@@ -575,30 +575,30 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
       <h2 id="rollbackTitle">Rollback</h2>
       <p id="rollbackSummary"></p>
       <div class="modal-actions">
-        <button id="rollbackCancel" type="button">取消</button>
-        <button id="rollbackConfirm" class="danger" type="button">回滚</button>
+        <button id="rollbackCancel" type="button">Cancel</button>
+        <button id="rollbackConfirm" class="danger" type="button">Rollback</button>
       </div>
     </div>
   </div>
 
   <div id="keysModal" class="modal hidden">
     <div class="modal-card">
-      <h2>安装快捷键</h2>
-      <p id="keysSummary">将把本插件快捷键写入用户 keybindings.json，并可能覆盖已有快捷键（如 Ctrl+K、Ctrl+Shift+K、Ctrl+D、F4、Ctrl+Alt+Z）。是否继续？</p>
+      <h2>Install Keybindings</h2>
+      <p id="keysSummary">This will write extension keybindings to your user keybindings.json and may override existing bindings (Ctrl+K, Ctrl+Shift+K, Ctrl+D, F4, Ctrl+Alt+Z). Continue?</p>
       <div class="modal-actions">
-        <button id="keysCancel" type="button">取消</button>
-        <button id="keysConfirm" class="primary" type="button">安装</button>
+        <button id="keysCancel" type="button">Cancel</button>
+        <button id="keysConfirm" class="primary" type="button">Install</button>
       </div>
     </div>
   </div>
 
   <div id="updateAllModal" class="modal hidden">
     <div class="modal-card">
-      <h2>更新所有仓库</h2>
+      <h2>Update All Repositories</h2>
       <p id="updateAllSummary"></p>
       <div class="modal-actions">
-        <button id="updateAllCancel" type="button">取消</button>
-        <button id="updateAllConfirm" class="primary" type="button">更新</button>
+        <button id="updateAllCancel" type="button">Cancel</button>
+        <button id="updateAllConfirm" class="primary" type="button">Update</button>
       </div>
     </div>
   </div>
