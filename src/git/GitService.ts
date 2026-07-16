@@ -7,6 +7,12 @@ import { promisify } from 'util';
 const execFile = promisify(execFileCb);
 import { API, Change, GitErrorCodes, GitExtension, Repository, Status } from '../git/git';
 import {
+	formatGitShellCommand,
+	logGitFail,
+	logGitOk,
+	logGitStart,
+} from './gitOutput';
+import {
 	ChangeItem,
 	CommitRepoResult,
 	DiffResult,
@@ -225,8 +231,8 @@ export class GitService implements vscode.Disposable {
 			const name = this.repoDisplayName(repo.rootUri.fsPath);
 			onProgress?.(name, index + 1, repositories.length);
 			try {
-				await repo.pull();
-				await repo.status().catch(() => undefined);
+				await this.runGitApi(repo, 'pull', '', () => repo.pull());
+				await this.runGitApi(repo, 'status', '', () => repo.status().catch(() => undefined));
 				result.succeeded.push(name);
 			} catch (err) {
 				result.failed.push({ repository: name, error: formatGitError(err) });
@@ -498,12 +504,14 @@ export class GitService implements vscode.Disposable {
 	async stage(fsPath: string): Promise<void> {
 		await this.ensureSaved(fsPath);
 		const repo = this.requireRepoForFsPath(fsPath);
-		await repo.add([fsPath]);
+		await this.runGitApi(repo, 'add', this.formatPaths([fsPath]), () => repo.add([fsPath]));
 	}
 
 	async unstage(fsPath: string): Promise<void> {
 		const repo = this.requireRepoForFsPath(fsPath);
-		await repo.revert([fsPath]);
+		await this.runGitApi(repo, 'revert (unstage)', this.formatPaths([fsPath]), () =>
+			repo.revert([fsPath])
+		);
 	}
 
 	async stageAll(stage: boolean): Promise<void> {
@@ -526,10 +534,13 @@ export class GitService implements vscode.Disposable {
 				}
 				const paths = snap.unstaged.map((c) => c.fsPath);
 				if (paths.length) {
-					await repo.add(paths);
+					await this.runGitApi(repo, 'add', this.formatPaths(paths), () => repo.add(paths));
 				}
 			} else if (snap.staged.length) {
-				await repo.revert(snap.staged.map((c) => c.fsPath));
+				const paths = snap.staged.map((c) => c.fsPath);
+				await this.runGitApi(repo, 'revert (unstage all)', this.formatPaths(paths), () =>
+					repo.revert(paths)
+				);
 			}
 		}
 	}
@@ -551,7 +562,12 @@ export class GitService implements vscode.Disposable {
 					await this.ensureSaved(item.fsPath);
 				}
 			}
-			await repo.add(snap.unstaged.map((c) => c.fsPath));
+			await this.runGitApi(
+				repo,
+				'add (tracked changes)',
+				this.formatPaths(snap.unstaged.map((c) => c.fsPath)),
+				() => repo.add(snap.unstaged.map((c) => c.fsPath))
+			);
 		}
 	}
 
@@ -577,7 +593,10 @@ export class GitService implements vscode.Disposable {
 		const committed: CommitRepoResult[] = [];
 		for (const snap of targets) {
 			const repo = this.requireRepoByRoot(snap.rootPath);
-			await repo.commit(trimmed, { postCommitCommand: null });
+			const detail = `message="${this.summarizeCommitMessage(trimmed)}"`;
+			await this.runGitApi(repo, 'commit', detail, () =>
+				repo.commit(trimmed, { postCommitCommand: null })
+			);
 			committed.push({ name: snap.name, rootPath: snap.rootPath, branch: snap.branch });
 		}
 		return committed;
@@ -591,8 +610,9 @@ export class GitService implements vscode.Disposable {
 		const repo = repoRoot ? this.requireRepoByRoot(repoRoot) : this.requireActiveRepo();
 		// Keep the rejected repo pinned so Merge / Rebase / retry Push stay on the same repo.
 		this.setActiveRepository(repo.rootUri.fsPath);
+		const pushDetail = this.describePush(repo);
 		try {
-			await repo.push();
+			await this.runGitApi(repo, 'push', pushDetail, () => repo.push());
 			if (options?.pushTags) {
 				await this.pushAllTags(repo.rootUri.fsPath);
 			}
@@ -664,7 +684,7 @@ export class GitService implements vscode.Disposable {
 		const mode = this.detectSyncMode(repo) ?? 'merge';
 		const remaining = this.getConflictItems(repo);
 		if (remaining.length) {
-			throw new Error(`还有 ${remaining.length} 个未解决的冲突文件。`);
+			throw new Error(`${remaining.length} unresolved conflict file(s) remain.`);
 		}
 
 		const root = repo.rootUri.fsPath;
@@ -707,7 +727,7 @@ export class GitService implements vscode.Disposable {
 		}
 
 		if (typeof repo.mergeAbort === 'function') {
-			await repo.mergeAbort();
+			await this.runGitApi(repo, 'mergeAbort', '', () => repo.mergeAbort!());
 			return;
 		}
 
@@ -735,7 +755,7 @@ export class GitService implements vscode.Disposable {
 			return {
 				status: 'failed',
 				mode,
-				message: `${modeLabel} 后仍落后远程 ${behind} 个提交，无法 Push。请检查上游分支或网络后重试。`,
+				message: `Still ${behind} commit(s) behind remote after ${modeLabel}. Cannot push. Check upstream branch or network and retry.`,
 			};
 		}
 
@@ -774,7 +794,7 @@ export class GitService implements vscode.Disposable {
 	private async pullUpstream(repo: Repository, mode: SyncMode): Promise<void> {
 		const head = repo.state.HEAD;
 		if (!head?.upstream) {
-			throw new Error('当前分支没有上游（upstream）。请先设置跟踪分支后再同步。');
+			throw new Error('Current branch has no upstream. Set a tracking branch before syncing.');
 		}
 		const remote = head.upstream.remote;
 		const remoteBranch = head.upstream.name;
@@ -788,7 +808,7 @@ export class GitService implements vscode.Disposable {
 	private requireUpstreamName(repo: Repository): string {
 		const head = repo.state.HEAD;
 		if (!head?.upstream) {
-			throw new Error('当前分支没有上游（upstream）。请先设置跟踪分支后再同步。');
+			throw new Error('Current branch has no upstream. Set a tracking branch before syncing.');
 		}
 		return `${head.upstream.remote}/${head.upstream.name}`;
 	}
@@ -850,7 +870,7 @@ export class GitService implements vscode.Disposable {
 		const fsPath = path.join(repo.rootUri.fsPath, relativePath);
 
 		if (this.isUntracked(relativePath, repoRoot)) {
-			await repo.clean([fsPath]);
+			await this.runGitApi(repo, 'clean (untracked)', relativePath, () => repo.clean([fsPath]));
 			await this.refresh();
 			return;
 		}
@@ -869,8 +889,12 @@ export class GitService implements vscode.Disposable {
 		const restoreFn = (repo as Repository & { restore?: typeof repo.restore }).restore;
 		if (typeof restoreFn === 'function') {
 			try {
-				await restoreFn.call(repo, [fsPath], { staged: true, ref: 'HEAD' });
-				await restoreFn.call(repo, [fsPath], { ref: 'HEAD' });
+				await this.runGitApi(repo, 'restore (staged)', relativePath, () =>
+					restoreFn.call(repo, [fsPath], { staged: true, ref: 'HEAD' })
+				);
+				await this.runGitApi(repo, 'restore (working tree)', relativePath, () =>
+					restoreFn.call(repo, [fsPath], { ref: 'HEAD' })
+				);
 				return;
 			} catch {
 				// Fall through to git checkout / clean
@@ -880,21 +904,77 @@ export class GitService implements vscode.Disposable {
 		try {
 			await this.execGit(repo.rootUri.fsPath, ['checkout', 'HEAD', '--', relativePath]);
 		} catch {
-			await repo.clean([fsPath]);
+			await this.runGitApi(repo, 'clean', relativePath, () => repo.clean([fsPath]));
 		}
 	}
 
-	private async execGit(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<void> {
+	private async runGitApi<T>(
+		repo: Repository,
+		operation: string,
+		detail: string,
+		fn: () => Promise<T>
+	): Promise<T> {
+		const repoRoot = repo.rootUri.fsPath;
+		const command = detail
+			? `vscode:${operation} ${detail}`
+			: `vscode:${operation}`;
+		logGitStart(repoRoot, command);
+		const started = Date.now();
 		try {
-			await execFile('git', args, {
+			const result = await fn();
+			logGitOk(Date.now() - started);
+			return result;
+		} catch (err) {
+			logGitFail(err, Date.now() - started);
+			throw err;
+		}
+	}
+
+	private formatPaths(paths: string[]): string {
+		if (!paths.length) {
+			return '';
+		}
+		if (paths.length === 1) {
+			return paths[0];
+		}
+		return `${paths.length} files`;
+	}
+
+	private summarizeCommitMessage(message: string): string {
+		const oneLine = message.replace(/\s+/g, ' ').trim();
+		if (oneLine.length <= 80) {
+			return oneLine;
+		}
+		return `${oneLine.slice(0, 77)}...`;
+	}
+
+	private describePush(repo: Repository): string {
+		const head = repo.state.HEAD;
+		const branch = head?.name ?? '(detached)';
+		const upstream = head?.upstream
+			? `${head.upstream.remote}/${head.upstream.name}`
+			: '(no upstream)';
+		return `${branch} -> ${upstream}`;
+	}
+
+	private async execGit(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<void> {
+		const command = formatGitShellCommand(args);
+		logGitStart(cwd, command);
+		const started = Date.now();
+		try {
+			const { stdout, stderr } = await execFile('git', args, {
 				cwd,
 				maxBuffer: 10 * 1024 * 1024,
 				env: env ? { ...process.env, ...env } : process.env,
 			});
+			const output = combineGitOutput(stdout, stderr);
+			logGitOk(Date.now() - started, output);
 		} catch (err) {
 			const e = err as { stderr?: string | Buffer; stdout?: string | Buffer; message?: string };
 			const stderr = bufferToString(e.stderr).trim();
 			const stdout = bufferToString(e.stdout).trim();
+			const output = combineGitOutput(stdout, stderr);
+			logGitFail(err, Date.now() - started, output);
 			throw new Error(stderr || stdout || e.message || String(err));
 		}
 	}
@@ -1195,6 +1275,11 @@ function bufferToString(value: string | Buffer | undefined): string {
 		return '';
 	}
 	return typeof value === 'string' ? value : value.toString('utf8');
+}
+
+function combineGitOutput(stdout: string | Buffer | undefined, stderr: string | Buffer | undefined): string {
+	const parts = [bufferToString(stdout).trim(), bufferToString(stderr).trim()].filter(Boolean);
+	return parts.join('\n');
 }
 
 function dedupeByPath(items: ChangeItem[]): ChangeItem[] {

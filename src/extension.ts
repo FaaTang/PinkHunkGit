@@ -5,6 +5,7 @@ import {
 	promptInstallKeybindings,
 } from './keybindings/installRecommendedKeybindings';
 import { CommitViewProvider } from './panel/CommitViewProvider';
+import { initGitOutput, logExtension } from './git/gitOutput';
 
 let gitService: GitService | undefined;
 let commitViewProvider: CommitViewProvider | undefined;
@@ -16,6 +17,7 @@ let outputChannel: vscode.OutputChannel | undefined;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	outputChannel = vscode.window.createOutputChannel('Copy IDEA Git UI');
 	context.subscriptions.push(outputChannel);
+	initGitOutput(outputChannel);
 
 	try {
 		gitService = new GitService();
@@ -49,7 +51,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					await gitService.stageTrackedChanges();
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
-					vscode.window.showWarningMessage(`自动勾选 Changes 失败：${message}`);
+					vscode.window.showWarningMessage(`Failed to auto-stage Changes: ${message}`);
 				}
 				await commitViewProvider.reveal(false, true, true);
 			}),
@@ -69,7 +71,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				}
 				const repoCount = gitService.getRepositoryCount();
 				if (!repoCount) {
-					vscode.window.showWarningMessage('当前工作区没有已识别的 Git 仓库。');
+					vscode.window.showWarningMessage('No Git repositories detected in the current workspace.');
 					return;
 				}
 
@@ -81,18 +83,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				const result = await vscode.window.withProgress(
 					{
 						location: vscode.ProgressLocation.Notification,
-						title: '正在更新所有 Git 仓库',
+						title: 'Updating all Git repositories',
 						cancellable: false,
 					},
 					async (progress) =>
 						gitService!.pullAllRepositories((repository, index, total) => {
-							progress.report({ message: `${repository}（${index}/${total}）` });
+							progress.report({ message: `${repository} (${index}/${total})` });
 						})
 				);
 
 				if (!result.failed.length) {
 					vscode.window.showInformationMessage(
-						`已更新 ${result.succeeded.length} 个 Git 仓库。`
+						`Updated ${result.succeeded.length} Git repositories.`
 					);
 					return;
 				}
@@ -101,7 +103,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					.map(({ repository, error }) => `${repository}: ${error}`)
 					.join('\n');
 				vscode.window.showWarningMessage(
-					`仓库更新完成：成功 ${result.succeeded.length} 个，失败 ${result.failed.length} 个。\n${details}`,
+					`Repository update finished: ${result.succeeded.length} succeeded, ${result.failed.length} failed.\n${details}`,
 					{ modal: true }
 				);
 			}),
@@ -135,11 +137,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.installKeybindings', async () => {
 				const choice = await vscode.window.showWarningMessage(
-					'安装本插件快捷键会写入用户 keybindings.json，并可能覆盖已有快捷键（如 Ctrl+K、Ctrl+Shift+K、Ctrl+T、Ctrl+D、F4、Ctrl+Alt+Z）。是否继续？',
+					'Installing extension keybindings will write to your user keybindings.json and may override existing bindings (Ctrl+K, Ctrl+Shift+K, Ctrl+T, Ctrl+D, F4, Ctrl+Alt+Z). Continue?',
 					{ modal: true },
-					'安装'
+					'Install'
 				);
-				if (choice !== '安装') {
+				if (choice !== 'Install') {
 					return;
 				}
 				const result = await installRecommendedKeybindings(context);
@@ -150,17 +152,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		);
 
 		gitInitPromise = initializeGit(context);
-		log(`Activated v${context.extension.packageJSON.version ?? 'unknown'}`);
+		logExtension(`Activated v${context.extension.packageJSON.version ?? 'unknown'}`);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		log(`Activation failed: ${message}`);
-		vscode.window.showErrorMessage(`Copy IDEA Git UI 激活失败：${message}`);
+		logExtension(`Activation failed: ${message}`);
+		vscode.window.showErrorMessage(`Copy IDEA Git UI activation failed: ${message}`);
 		throw err;
 	}
-}
-
-function log(message: string): void {
-	outputChannel?.appendLine(`[${new Date().toISOString()}] ${message}`);
 }
 
 async function initializeGit(context: vscode.ExtensionContext): Promise<void> {
@@ -174,18 +172,18 @@ async function initializeGit(context: vscode.ExtensionContext): Promise<void> {
 		const init = await gitService.init();
 		gitReady = init.ok;
 		gitInitError = init.ok ? '' : init.error;
-		log(gitReady ? 'Git service initialized.' : `Git init failed: ${gitInitError}`);
+		logExtension(gitReady ? 'Git service initialized.' : `Git init failed: ${gitInitError}`);
 	} catch (err) {
 		gitReady = false;
 		gitInitError = err instanceof Error ? err.message : String(err);
-		log(`Git init error: ${gitInitError}`);
+		logExtension(`Git init error: ${gitInitError}`);
 	}
 
 	if (gitReady) {
 		void promptInstallKeybindings(context);
 	} else {
 		vscode.window.showWarningMessage(
-			`Copy IDEA Git UI：${gitInitError || 'Git 未就绪'}。快捷键仍可用，打开面板时会提示详情。`
+			`Copy IDEA Git UI: ${gitInitError || 'Git not ready'}. Keybindings remain available; details will be shown when opening the panel.`
 		);
 	}
 }

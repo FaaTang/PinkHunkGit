@@ -43,7 +43,7 @@
       },
       {
         "command": "copyIdeaGitUi.updateAllRepositories",
-        "title": "更新所有 Git 仓库",
+        "title": "Update All Git Repositories",
         "category": "Copy IDEA Git UI",
         "icon": "$(sync)"
       },
@@ -104,7 +104,7 @@
           "command": "copyIdeaGitUi.updateAllRepositories",
           "when": "view == copyIdeaGitUi.commitView",
           "group": "navigation@0",
-          "title": "更新所有 Git 仓库"
+          "title": "Update All Git Repositories"
         },
         {
           "command": "copyIdeaGitUi.openExplorer",
