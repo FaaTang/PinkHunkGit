@@ -699,7 +699,18 @@ export class GitService implements vscode.Disposable {
 		this.setActiveRepository(repo.rootUri.fsPath);
 		const pushDetail = this.describePush(repo);
 		const pushTags = !!options?.pushTags;
+		const ahead = repo.state.HEAD?.ahead ?? 0;
+
 		try {
+			if (ahead === 0) {
+				if (pushTags) {
+					await this.pushAllTags(repo.rootUri.fsPath);
+					return;
+				}
+				await this.runGitApi(repo, 'push', pushDetail, () => repo.push());
+				return;
+			}
+
 			if (pushTags && this.canPushBranchWithTags(repo)) {
 				const head = repo.state.HEAD!;
 				const remote = head.upstream!.remote;
@@ -724,6 +735,23 @@ export class GitService implements vscode.Disposable {
 			}
 			throw err instanceof Error ? err : new Error(String(err));
 		}
+	}
+
+	/** Create a lightweight tag at the current HEAD of the repository. */
+	async createTagAtHead(repoRoot: string, tagName: string): Promise<void> {
+		const repo = this.requireRepoByRoot(repoRoot);
+		const name = tagName.trim();
+		if (!name) {
+			throw new Error('Tag name cannot be empty.');
+		}
+		if (!isValidTagName(name)) {
+			throw new Error(`Invalid tag name: ${name}`);
+		}
+
+		await this.runGitApi(repo, 'tag', name, async () => {
+			await this.execGit(repo.rootUri.fsPath, ['tag', name]);
+		});
+		this._onDidChange.fire();
 	}
 
 	private canPushBranchWithTags(repo: Repository): boolean {
@@ -962,8 +990,8 @@ export class GitService implements vscode.Disposable {
 		return { status: 'ok', mode };
 	}
 
-	async openConflictFile(relativePath: string): Promise<void> {
-		const repo = this.requireActiveRepo();
+	async openConflictFile(relativePath: string, repoRoot?: string): Promise<void> {
+		const repo = repoRoot ? this.requireRepoByRoot(repoRoot) : this.requireActiveRepo();
 		const fsPath = path.join(repo.rootUri.fsPath, relativePath);
 		const uri = vscode.Uri.file(fsPath);
 
@@ -976,6 +1004,32 @@ export class GitService implements vscode.Disposable {
 
 		const doc = await vscode.workspace.openTextDocument(uri);
 		await vscode.window.showTextDocument(doc, { preview: false });
+	}
+
+	/**
+	 * Resolve a merge/rebase conflict by taking one side.
+	 * "yours" = local branch changes; "theirs" = incoming/upstream changes.
+	 */
+	async resolveConflictSide(
+		relativePath: string,
+		side: 'yours' | 'theirs',
+		mode: SyncMode,
+		repoRoot?: string
+	): Promise<void> {
+		const repo = repoRoot ? this.requireRepoByRoot(repoRoot) : this.requireActiveRepo();
+		this.setActiveRepository(repo.rootUri.fsPath);
+		const root = repo.rootUri.fsPath;
+		const gitSide = mode === 'rebase'
+			? side === 'yours' ? '--theirs' : '--ours'
+			: side === 'yours' ? '--ours' : '--theirs';
+		const label = side === 'yours' ? 'yours' : 'theirs';
+
+		await this.runGitApi(repo, 'resolve conflict', `${label} ${relativePath}`, async () => {
+			await this.execGit(root, ['checkout', gitSide, '--', relativePath]);
+			await this.execGit(root, ['add', '--', relativePath]);
+		});
+		await repo.status().catch(() => undefined);
+		this._onDidChange.fire();
 	}
 
 	getConflictSnapshot(): { mode?: SyncMode; conflicts: ChangeItem[] } {
@@ -1035,7 +1089,7 @@ export class GitService implements vscode.Disposable {
 		);
 	}
 
-	async openDiffInEditor(relativePath: string, staged: boolean, repoRoot?: string): Promise<void> {
+	async openDiffInEditor(relativePath: string, _staged: boolean, repoRoot?: string): Promise<void> {
 		if (!this.api) {
 			throw new Error('VS Code Git extension is not available.');
 		}
@@ -1046,23 +1100,17 @@ export class GitService implements vscode.Disposable {
 		const fileUri = vscode.Uri.file(fsPath);
 		await this.ensureSaved(fsPath);
 
-		// Untracked files have no HEAD/index side — show file content instead of an empty vs working-tree diff.
-		if (this.isUntracked(relativePath, root)) {
-			const doc = await vscode.workspace.openTextDocument(fileUri);
-			await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
-			return;
-		}
+		const fileName = path.basename(relativePath);
+		const title = `Commit: ${fileName}`;
+		const diffOptions: vscode.TextDocumentShowOptions = {
+			preview: false,
+			preserveFocus: false,
+			viewColumn: vscode.ViewColumn.Active,
+		};
 
-		const title = `${relativePath}${staged ? ' (Staged)' : ' (Changes)'}`;
-		if (staged) {
-			const head = this.api.toGitUri(fileUri, 'HEAD');
-			const index = this.api.toGitUri(fileUri, '');
-			await vscode.commands.executeCommand('vscode.diff', head, index, title);
-			return;
-		}
-
-		const index = this.api.toGitUri(fileUri, '');
-		await vscode.commands.executeCommand('vscode.diff', index, fileUri, title);
+		// IDEA Commit diff: left = before (HEAD), right = current working version.
+		const before = this.api.toGitUri(fileUri, 'HEAD');
+		await vscode.commands.executeCommand('vscode.diff', before, fileUri, title, diffOptions);
 	}
 
 	async rollbackFile(relativePath: string, repoRoot: string): Promise<void> {
@@ -1653,4 +1701,11 @@ function computeLcs(a: string[], b: string[]): string[] {
 		}
 	}
 	return result;
+}
+
+export function isValidTagName(name: string): boolean {
+	if (!name || name.includes('..') || name.startsWith('-') || name.endsWith('.')) {
+		return false;
+	}
+	return /^[^\s~^:?*[\]\\]+$/.test(name);
 }

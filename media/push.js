@@ -9,9 +9,13 @@
   const targetList = document.getElementById('targetList');
   const commitList = document.getElementById('commitList');
   const noCommitSelected = document.getElementById('noCommitSelected');
-  const conflictList = document.getElementById('conflictList');
+  const altSplitPane = document.getElementById('altSplitPane');
+  const altLeftPane = document.getElementById('altLeftPane');
+  const altRightPane = document.getElementById('altRightPane');
   const pushTagsCheckbox = document.getElementById('pushTagsCheckbox');
   const pushTagsOption = document.getElementById('pushTagsOption');
+  const footerLeft = document.getElementById('footerLeft');
+  const newTagBtn = document.getElementById('newTagBtn');
   const cancelBtn = document.getElementById('cancelBtn');
   const pushBtn = document.getElementById('pushBtn');
   const mergeBtn = document.getElementById('mergeBtn');
@@ -27,6 +31,9 @@
   let selectedCommitHash = null;
   let checkedRoots = new Set();
   let pushRepoRoot = null;
+  let syncMode = 'merge';
+  let conflictItems = [];
+  let selectedConflictPath = null;
 
   function post(message) {
     vscode.postMessage(message);
@@ -34,7 +41,7 @@
 
   function setBusy(busy) {
     document.body.classList.toggle('busy', !!busy);
-    [cancelBtn, pushBtn, mergeBtn, rebaseBtn, abortBtn, continueBtn, laterBtn].forEach((btn) => {
+    [cancelBtn, pushBtn, mergeBtn, rebaseBtn, abortBtn, continueBtn, laterBtn, newTagBtn].forEach((btn) => {
       if (btn) {
         btn.disabled = !!busy;
       }
@@ -59,8 +66,8 @@
   }
 
   function setTagsVisible(visible) {
-    if (pushTagsOption) {
-      pushTagsOption.classList.toggle('hidden', !visible);
+    if (footerLeft) {
+      footerLeft.classList.toggle('hidden', !visible);
     }
   }
 
@@ -213,11 +220,16 @@
     selectedTargetRoot = checkedRoots.has(activeKey) ? activeKey : [...checkedRoots][0] || activeKey || null;
     selectedCommitHash = null;
     pushRepoRoot = findTargetByKey(selectedTargetRoot)?.repoRoot || data.targets[0]?.repoRoot || null;
+    conflictItems = [];
+    selectedConflictPath = null;
 
     mainView.classList.remove('hidden');
     altView.classList.add('hidden');
     statusBanner.classList.add('hidden');
     statusBanner.textContent = '';
+    if (altSplitPane) {
+      altSplitPane.classList.add('hidden');
+    }
 
     updateTitle();
     renderTargets();
@@ -227,43 +239,220 @@
     setFooterActions(['cancelBtn', 'pushBtn']);
   }
 
-  function showAltView(title, message, conflicts, state, footerIds, showTags) {
+  function showBannerAltView(title, message, state, footerIds, showTags, isError) {
     modalState = state;
     dialogTitle.textContent = title;
     mainView.classList.add('hidden');
     altView.classList.remove('hidden');
     statusBanner.classList.remove('hidden');
     statusBanner.textContent = message;
-    statusBanner.classList.toggle('error', state === 'rejected');
-    renderConflictList(conflicts || []);
+    statusBanner.classList.toggle('error', !!isError);
+    if (altSplitPane) {
+      altSplitPane.classList.add('hidden');
+    }
     setTagsVisible(!!showTags);
     setFooterActions(footerIds);
   }
 
-  function renderConflictList(conflicts) {
-    conflictList.innerHTML = '';
-    if (!conflicts.length) {
-      conflictList.classList.add('hidden');
+  function showSplitAltView(title, bannerMessage, state, footerIds, showTags, isError) {
+    modalState = state;
+    dialogTitle.textContent = title;
+    mainView.classList.add('hidden');
+    altView.classList.remove('hidden');
+    statusBanner.classList.remove('hidden');
+    statusBanner.textContent = bannerMessage;
+    statusBanner.classList.toggle('error', !!isError);
+    if (altSplitPane) {
+      altSplitPane.classList.remove('hidden');
+    }
+    setTagsVisible(!!showTags);
+    setFooterActions(footerIds);
+  }
+
+  function renderRejectedSplit(p) {
+    if (!altLeftPane || !altRightPane) {
       return;
     }
-    conflictList.classList.remove('hidden');
-    conflicts.forEach((item) => {
-      const li = document.createElement('li');
-      li.className = 'conflict-item';
-      li.title = 'Open in VS Code merge editor';
-      const status = document.createElement('span');
-      status.className = 'conflict-status';
-      status.textContent = item.status || 'C';
-      const name = document.createElement('span');
-      name.className = 'conflict-path';
-      name.textContent = item.path;
-      li.appendChild(status);
-      li.appendChild(name);
-      li.addEventListener('click', () =>
-        post({ type: 'openConflict', path: item.path, repoRoot: pushRepoRoot || undefined })
-      );
-      conflictList.appendChild(li);
+    altLeftPane.innerHTML = '';
+    altRightPane.innerHTML = '';
+
+    const leftTitle = document.createElement('div');
+    leftTitle.className = 'alt-pane-title';
+    leftTitle.textContent = 'Repository';
+    altLeftPane.appendChild(leftTitle);
+
+    const repoItem = document.createElement('div');
+    repoItem.className = 'alt-info-item selected';
+    repoItem.innerHTML =
+      `<div class="alt-info-name">${escapeHtml(p.repoName || 'repository')}</div>` +
+      `<div class="alt-info-meta">Branch: ${escapeHtml(p.branch || '(detached)')}</div>` +
+      `<div class="alt-info-meta">Upstream: ${escapeHtml(p.upstream || '(none)')}</div>` +
+      (typeof p.behind === 'number' ? `<div class="alt-info-meta">Behind: ${p.behind}</div>` : '') +
+      (typeof p.ahead === 'number' ? `<div class="alt-info-meta">Ahead: ${p.ahead}</div>` : '');
+    altLeftPane.appendChild(repoItem);
+
+    const rightTitle = document.createElement('div');
+    rightTitle.className = 'alt-pane-title';
+    rightTitle.textContent = 'Push rejected';
+    altRightPane.appendChild(rightTitle);
+
+    const msg = document.createElement('div');
+    msg.className = 'alt-detail-message';
+    msg.textContent = p.message;
+    altRightPane.appendChild(msg);
+
+    const hint = document.createElement('div');
+    hint.className = 'alt-detail-hint';
+    hint.textContent = 'Remote has commits you do not have locally. Choose Merge to integrate remote changes, or Rebase to replay your commits on top.';
+    altRightPane.appendChild(hint);
+  }
+
+  function renderConflictSplit(p) {
+    if (!altLeftPane || !altRightPane) {
+      return;
+    }
+    syncMode = p.mode || 'merge';
+    conflictItems = p.conflicts || [];
+    if (selectedConflictPath && !conflictItems.some((c) => c.path === selectedConflictPath)) {
+      selectedConflictPath = conflictItems[0]?.path || null;
+    } else if (!selectedConflictPath && conflictItems.length) {
+      selectedConflictPath = conflictItems[0].path;
+    }
+
+    altLeftPane.innerHTML = '';
+    altRightPane.innerHTML = '';
+
+    const leftTitle = document.createElement('div');
+    leftTitle.className = 'alt-pane-title';
+    leftTitle.textContent = `Conflicts (${conflictItems.length})`;
+    altLeftPane.appendChild(leftTitle);
+
+    if (!conflictItems.length) {
+      const empty = document.createElement('div');
+      empty.className = 'placeholder compact';
+      empty.textContent = 'No unresolved conflicts';
+      altLeftPane.appendChild(empty);
+    } else {
+      const list = document.createElement('ul');
+      list.className = 'conflict-list';
+      conflictItems.forEach((item) => {
+        const li = document.createElement('li');
+        li.className = 'conflict-item' + (selectedConflictPath === item.path ? ' selected' : '');
+        const status = document.createElement('span');
+        status.className = 'conflict-status';
+        status.textContent = item.status || 'C';
+        const name = document.createElement('span');
+        name.className = 'conflict-path';
+        name.textContent = item.path;
+        name.title = item.path;
+        li.appendChild(status);
+        li.appendChild(name);
+        li.addEventListener('click', () => {
+          selectedConflictPath = item.path;
+          renderConflictSplit(p);
+        });
+        list.appendChild(li);
+      });
+      altLeftPane.appendChild(list);
+    }
+
+    renderConflictDetail(p);
+  }
+
+  function renderConflictDetail(p) {
+    if (!altRightPane) {
+      return;
+    }
+
+    const rightTitle = document.createElement('div');
+    rightTitle.className = 'alt-pane-title';
+    rightTitle.textContent = 'Resolve conflict';
+    altRightPane.appendChild(rightTitle);
+
+    if (!conflictItems.length) {
+      const done = document.createElement('div');
+      done.className = 'alt-detail-hint success';
+      done.textContent = 'All conflicts resolved. Click Continue to finish the merge/rebase.';
+      altRightPane.appendChild(done);
+      return;
+    }
+
+    if (!selectedConflictPath) {
+      const pick = document.createElement('div');
+      pick.className = 'placeholder compact';
+      pick.textContent = 'Select a conflicted file on the left.';
+      altRightPane.appendChild(pick);
+      return;
+    }
+
+    const fileTitle = document.createElement('div');
+    fileTitle.className = 'alt-file-path';
+    fileTitle.textContent = selectedConflictPath;
+    fileTitle.title = selectedConflictPath;
+    altRightPane.appendChild(fileTitle);
+
+    const yoursLabel = syncMode === 'rebase' ? 'Accept Yours (Local commit)' : 'Accept Yours (Local)';
+    const theirsLabel = syncMode === 'rebase' ? 'Accept Theirs (Upstream)' : 'Accept Theirs (Remote)';
+
+    const actions = document.createElement('div');
+    actions.className = 'resolve-actions';
+
+    const yoursBtn = document.createElement('button');
+    yoursBtn.type = 'button';
+    yoursBtn.className = 'resolve-btn';
+    yoursBtn.textContent = yoursLabel;
+    yoursBtn.addEventListener('click', () => {
+      post({
+        type: 'resolveConflict',
+        path: selectedConflictPath,
+        side: 'yours',
+        mode: syncMode,
+        repoRoot: pushRepoRoot || undefined,
+      });
     });
+
+    const theirsBtn = document.createElement('button');
+    theirsBtn.type = 'button';
+    theirsBtn.className = 'resolve-btn';
+    theirsBtn.textContent = theirsLabel;
+    theirsBtn.addEventListener('click', () => {
+      post({
+        type: 'resolveConflict',
+        path: selectedConflictPath,
+        side: 'theirs',
+        mode: syncMode,
+        repoRoot: pushRepoRoot || undefined,
+      });
+    });
+
+    const mergeBtnLocal = document.createElement('button');
+    mergeBtnLocal.type = 'button';
+    mergeBtnLocal.className = 'resolve-btn primary';
+    mergeBtnLocal.textContent = 'Merge in Editor…';
+    mergeBtnLocal.addEventListener('click', () => {
+      post({ type: 'openConflict', path: selectedConflictPath, repoRoot: pushRepoRoot || undefined });
+    });
+
+    actions.appendChild(yoursBtn);
+    actions.appendChild(theirsBtn);
+    actions.appendChild(mergeBtnLocal);
+    altRightPane.appendChild(actions);
+
+    const hint = document.createElement('div');
+    hint.className = 'alt-detail-hint';
+    hint.textContent =
+      syncMode === 'rebase'
+        ? 'Pick one side to auto-resolve, or open the merge editor to combine changes manually.'
+        : 'Accept local or remote version, or open the merge editor to combine changes manually.';
+    altRightPane.appendChild(hint);
+  }
+
+  function escapeHtml(text) {
+    return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
   }
 
   function getCheckedRepoRoots() {
@@ -272,14 +461,47 @@
       .map((t) => t.repoRoot);
   }
 
+  function selectionHasCommits(roots) {
+    return roots.some((root) => (findTarget(root)?.commits?.length ?? 0) > 0);
+  }
+
+  function canPushSelection() {
+    const roots = getCheckedRepoRoots();
+    if (!roots.length) {
+      return false;
+    }
+    if (isPushTagsChecked()) {
+      return true;
+    }
+    return selectionHasCommits(roots);
+  }
+
+  function showFooterError(message) {
+    statusBanner.classList.remove('hidden');
+    statusBanner.textContent = message;
+    statusBanner.classList.add('error');
+  }
+
   cancelBtn.addEventListener('click', () => post({ type: 'cancel' }));
   closeBtn.addEventListener('click', () => post({ type: 'cancel' }));
+  if (newTagBtn) {
+    newTagBtn.addEventListener('click', () => {
+      const roots = getCheckedRepoRoots();
+      if (!roots.length) {
+        showFooterError('Select at least one branch to tag.');
+        return;
+      }
+      post({ type: 'createTag', repoRoots: roots });
+    });
+  }
   pushBtn.addEventListener('click', () => {
     const roots = getCheckedRepoRoots();
     if (!roots.length) {
-      statusBanner.classList.remove('hidden');
-      statusBanner.textContent = 'Select at least one branch to push.';
-      statusBanner.classList.add('error');
+      showFooterError('Select at least one branch to push.');
+      return;
+    }
+    if (!canPushSelection()) {
+      showFooterError('No commits to push. Check Push tags to push tags only.');
       return;
     }
     post({ type: 'push', repoRoots: roots, pushTags: isPushTagsChecked() });
@@ -317,44 +539,42 @@
       case 'showRejected': {
         const p = msg.payload;
         pushRepoRoot = p.repoRoot || pushRepoRoot;
-        const behind =
-          typeof p.behind === 'number'
-            ? `Behind remote: ${p.behind}`
-            : 'Remote has commits you do not have locally.';
-        showAltView(
+        showSplitAltView(
           'Push Rejected',
-          `${p.message}\n\nRepository: ${p.repoName}\nBranch: ${p.branch || '(detached)'}\nUpstream: ${p.upstream || '(none)'}\n${behind}\n\nChoose Merge or Rebase to sync with remote, then Push.`,
-          [],
+          `${p.repoName} · ${p.branch || '(detached)'} → ${p.upstream || 'remote'}`,
           'rejected',
           ['cancelBtn', 'mergeBtn', 'rebaseBtn'],
-          false
+          false,
+          true
         );
+        renderRejectedSplit(p);
         break;
       }
       case 'showSyncConflict': {
         const p = msg.payload;
         pushRepoRoot = p.repoRoot || pushRepoRoot;
-        showAltView(
+        showSplitAltView(
           `${p.mode === 'rebase' ? 'Rebase' : 'Merge'} Conflicts`,
-          `${p.message}\n\nClick conflict files below to resolve in VS Code merge editor. When all are resolved, click Continue; or Abort to cancel.`,
-          p.conflicts || [],
+          p.message,
           'conflict',
           ['abortBtn', 'continueBtn'],
+          false,
           false
         );
+        renderConflictSplit(p);
         break;
       }
       case 'showAskPush': {
         const p = msg.payload;
         pushRepoRoot = p.repoRoot || pushRepoRoot;
         const behindLine = typeof p.behind === 'number' ? `\nBehind: ${p.behind}` : '';
-        showAltView(
+        showBannerAltView(
           'Push?',
           `${p.summary}\n\nRepository: ${p.repoName}\nBranch: ${p.branch || '(detached)'}\nUpstream: ${p.upstream || '(none)'}\nAhead: ${typeof p.ahead === 'number' ? p.ahead : '?'}${behindLine}`,
-          [],
           'askPush',
           ['laterBtn', 'pushBtn'],
-          true
+          true,
+          false
         );
         pushBtn.onclick = () =>
           post({ type: 'askPushConfirm', repoRoot: pushRepoRoot || undefined, pushTags: isPushTagsChecked() });

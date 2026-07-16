@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { GitService, PushRejectedError } from '../git/GitService';
+import { GitService, PushRejectedError, isValidTagName } from '../git/GitService';
 import {
 	PushDialogPayload,
 	PushHostToWebview,
@@ -11,6 +11,7 @@ export class PushDialogProvider implements vscode.Disposable {
 	private busy = false;
 	private pendingPushRoots?: string[];
 	private dialogPhase: 'confirm' | 'alt' = 'confirm';
+	private conflictContext?: { mode: import('./messages').SyncMode; repoRoot?: string };
 	private readonly disposables: vscode.Disposable[] = [];
 
 	constructor(
@@ -71,10 +72,16 @@ export class PushDialogProvider implements vscode.Disposable {
 	}
 
 	private async refreshIfOpen(): Promise<void> {
-		if (!this.panel || this.dialogPhase !== 'confirm') {
+		if (!this.panel) {
 			return;
 		}
-		await this.sendState();
+		if (this.dialogPhase === 'confirm') {
+			await this.sendState();
+			return;
+		}
+		if (this.conflictContext) {
+			await this.refreshConflictState();
+		}
 	}
 
 	private async sendState(): Promise<void> {
@@ -132,6 +139,7 @@ export class PushDialogProvider implements vscode.Disposable {
 				case 'syncAbort':
 					await this.withBusy(async () => {
 						await this.git.abortSync(msg.repoRoot);
+						this.conflictContext = undefined;
 						vscode.window.showInformationMessage('Merge / Rebase aborted.');
 						this.close();
 					});
@@ -149,13 +157,24 @@ export class PushDialogProvider implements vscode.Disposable {
 							// ignore
 						}
 					}
-					await this.git.openConflictFile(msg.path);
+					await this.git.openConflictFile(msg.path, msg.repoRoot);
+					break;
+				case 'resolveConflict':
+					await this.withBusy(async () => {
+						await this.git.resolveConflictSide(msg.path, msg.side, msg.mode, msg.repoRoot);
+						await this.git.refresh();
+						this.conflictContext = { mode: msg.mode, repoRoot: msg.repoRoot };
+						await this.refreshConflictState();
+					});
 					break;
 				case 'refresh':
 					await this.withBusy(async () => {
 						await this.git.refresh();
 						await this.sendState();
 					});
+					break;
+				case 'createTag':
+					await this.handleCreateTags(msg.repoRoots);
 					break;
 			}
 		} catch (err) {
@@ -201,13 +220,18 @@ export class PushDialogProvider implements vscode.Disposable {
 			: workspace.active;
 		const label = snap?.name ?? 'repository';
 		const upstream = snap?.upstream;
+		const ahead = snap?.ahead ?? 0;
 		try {
 			await this.git.push(repoRoot, { pushTags });
 			this.close();
-			const tagsNote = pushTags ? ' (with tags)' : '';
-			vscode.window.showInformationMessage(
-				`Pushed ${label}${upstream ? ` → ${upstream}` : ''}${tagsNote}.`
-			);
+			if (ahead === 0 && pushTags) {
+				vscode.window.showInformationMessage(`Pushed tags for ${label}.`);
+			} else {
+				const tagsNote = pushTags ? ' (with tags)' : '';
+				vscode.window.showInformationMessage(
+					`Pushed ${label}${upstream ? ` → ${upstream}` : ''}${tagsNote}.`
+				);
+			}
 			return true;
 		} catch (err) {
 			if (err instanceof PushRejectedError) {
@@ -218,8 +242,112 @@ export class PushDialogProvider implements vscode.Disposable {
 		}
 	}
 
+	private async handleCreateTags(repoRoots: string[]): Promise<void> {
+		if (!repoRoots.length) {
+			vscode.window.showWarningMessage('Select at least one branch to tag.');
+			return;
+		}
+
+		const tagName = await vscode.window.showInputBox({
+			title: 'New Tag',
+			prompt:
+				repoRoots.length > 1
+					? `Create tag on ${repoRoots.length} selected repositories (at each HEAD)`
+					: 'Create tag at the current branch HEAD',
+			placeHolder: 'v0.1.21',
+			validateInput: (value) => {
+				const trimmed = value.trim();
+				if (!trimmed) {
+					return 'Tag name cannot be empty.';
+				}
+				if (!isValidTagName(trimmed)) {
+					return 'Invalid tag name.';
+				}
+				return undefined;
+			},
+		});
+		if (!tagName?.trim()) {
+			return;
+		}
+
+		const trimmed = tagName.trim();
+		const succeeded: string[] = [];
+		const failed: Array<{ name: string; error: string }> = [];
+
+		await this.withBusy(async () => {
+			for (const root of repoRoots) {
+				const snap = this.git.getWorkspaceSnapshot().repositories.find((r) =>
+					r.rootPath.replace(/\\/g, '/').toLowerCase() === root.replace(/\\/g, '/').toLowerCase()
+				);
+				const name = snap?.name ?? root;
+				try {
+					await this.git.createTagAtHead(root, trimmed);
+					succeeded.push(name);
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					failed.push({ name, error: message });
+				}
+			}
+			await this.git.refresh();
+			await this.sendState();
+		});
+
+		if (succeeded.length && !failed.length) {
+			vscode.window.showInformationMessage(
+				succeeded.length === 1
+					? `Created tag ${trimmed} on ${succeeded[0]}.`
+					: `Created tag ${trimmed} on ${succeeded.length} repositories.`
+			);
+		} else if (succeeded.length && failed.length) {
+			const details = failed.map((f) => `${f.name}: ${f.error}`).join('\n');
+			vscode.window.showWarningMessage(
+				`Tag ${trimmed} created on ${succeeded.length} repo(s); ${failed.length} failed.`,
+				{ modal: true, detail: details }
+			);
+		} else if (failed.length) {
+			const details = failed.map((f) => `${f.name}: ${f.error}`).join('\n');
+			vscode.window.showErrorMessage(`Failed to create tag ${trimmed}.`, { modal: true, detail: details });
+		}
+	}
+
+	private async refreshConflictState(): Promise<void> {
+		if (!this.conflictContext) {
+			return;
+		}
+		const { mode, repoRoot } = this.conflictContext;
+		if (repoRoot) {
+			try {
+				this.git.setActiveRepository(repoRoot);
+			} catch {
+				// keep current
+			}
+		}
+		const ctx = this.git.getPushContext();
+		const snap = this.git.getWorkspaceSnapshot().active;
+		const resolvedRoot = snap.rootPath || repoRoot;
+		const conflicts = this.git.getConflictSnapshot().conflicts;
+		this.post({
+			type: 'showSyncConflict',
+			payload: {
+				mode,
+				message:
+					conflicts.length === 0
+						? 'All conflicts resolved. Click Continue to finish, or Abort to cancel.'
+						: mode === 'merge'
+							? 'Merge produced conflicts. Select a file on the left and choose how to resolve.'
+							: 'Rebase produced conflicts. Select a file on the left and choose how to resolve.',
+				conflicts,
+				repoRoot: resolvedRoot,
+				repoName: ctx.repoName,
+				branch: ctx.branch,
+				upstream: ctx.upstream,
+			},
+		});
+	}
+
 	private postPushRejected(message: string, repoRoot?: string): void {
 		this.dialogPhase = 'alt';
+		this.conflictContext = undefined;
 		if (repoRoot) {
 			try {
 				this.git.setActiveRepository(repoRoot);
@@ -258,6 +386,7 @@ export class PushDialogProvider implements vscode.Disposable {
 
 		if (result.status === 'conflict') {
 			this.dialogPhase = 'alt';
+			this.conflictContext = { mode: result.mode, repoRoot: resolvedRoot };
 			this.post({
 				type: 'showSyncConflict',
 				payload: {
@@ -281,6 +410,7 @@ export class PushDialogProvider implements vscode.Disposable {
 
 		const modeLabel = result.mode === 'merge' ? 'Merge' : 'Rebase';
 		this.dialogPhase = 'alt';
+		this.conflictContext = undefined;
 		this.post({
 			type: 'showAskPush',
 			payload: {
@@ -345,17 +475,23 @@ export class PushDialogProvider implements vscode.Disposable {
             </div>
           </div>
         </div>
-        <div id="altView" class="hidden" style="display:flex;flex-direction:column;flex:1;min-height:0;">
-          <div id="statusBanner" class="status-banner"></div>
-          <ul id="conflictList" class="conflict-list hidden"></ul>
+        <div id="altView" class="alt-view hidden">
+          <div id="statusBanner" class="status-banner hidden"></div>
+          <div id="altSplitPane" class="split-pane hidden">
+            <div id="altLeftPane" class="alt-list-pane"></div>
+            <div id="altRightPane" class="alt-detail-pane"></div>
+          </div>
         </div>
       </div>
       <footer class="dialog-footer">
-        <label id="pushTagsOption" class="push-tags" for="pushTagsCheckbox">
-          <input id="pushTagsCheckbox" type="checkbox" />
-          <span>Push tags:</span>
-          <span>All</span>
-        </label>
+        <div id="footerLeft" class="footer-left">
+          <label id="pushTagsOption" class="push-tags" for="pushTagsCheckbox">
+            <input id="pushTagsCheckbox" type="checkbox" />
+            <span>Push tags:</span>
+            <span>All</span>
+          </label>
+          <button id="newTagBtn" type="button">New tag</button>
+        </div>
         <div class="footer-actions">
           <button id="cancelBtn" type="button">Cancel</button>
           <button id="mergeBtn" class="hidden" type="button">Merge</button>

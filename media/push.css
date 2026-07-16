@@ -232,10 +232,126 @@ body {
   color: var(--vscode-gitDecoration-conflictingResourceForeground, #e51400);
 }
 
-.conflict-path {
+.conflict-item.selected {
+  background: var(--list-active);
+  color: var(--list-active-fg);
+}
+
+.alt-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.alt-list-pane,
+.alt-detail-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.alt-list-pane {
+  border-right: 1px solid var(--border);
+}
+
+.alt-pane-title {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.65;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  flex-shrink: 0;
+}
+
+.alt-info-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.alt-info-item.selected {
+  background: var(--list-active);
+  color: var(--list-active-fg);
+}
+
+.alt-info-name {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.alt-info-meta {
+  font-size: 12px;
+  opacity: 0.8;
+  line-height: 1.45;
+}
+
+.alt-detail-pane {
+  padding: 0;
+  overflow: auto;
+}
+
+.alt-detail-message {
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.alt-detail-hint {
+  padding: 0 14px 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0.75;
+}
+
+.alt-detail-hint.success {
+  padding: 12px 14px;
+  color: var(--vscode-gitDecoration-addedResourceForeground, #73c991);
+  opacity: 1;
+}
+
+.alt-file-path {
+  padding: 12px 14px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.resolve-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 14px 12px;
+}
+
+.resolve-btn {
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+}
+
+.placeholder.compact {
+  flex: 0;
+  min-height: 80px;
+  padding: 16px;
+}
+
+#altSplitPane.split-pane {
+  flex: 1;
+  min-height: 280px;
+}
+
+.dialog-body #mainView,
+.dialog-body .alt-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .dialog-footer {
@@ -248,6 +364,13 @@ body {
   flex-shrink: 0;
 }
 
+.footer-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
 .push-tags {
   display: flex;
   align-items: center;
@@ -255,6 +378,13 @@ body {
   font-size: 12px;
   cursor: pointer;
   user-select: none;
+  flex-shrink: 0;
+}
+
+#newTagBtn {
+  padding: 4px 10px;
+  font-size: 12px;
+  flex-shrink: 0;
 }
 
 .push-tags input {

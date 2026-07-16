@@ -76,7 +76,9 @@ export type PushWebviewToHost =
 	| { type: 'syncAbort'; repoRoot?: string }
 	| { type: 'syncContinue'; repoRoot?: string }
 	| { type: 'openConflict'; path: string; repoRoot?: string }
+	| { type: 'resolveConflict'; path: string; side: 'yours' | 'theirs'; mode: SyncMode; repoRoot?: string }
 	| { type: 'askPushConfirm'; repoRoot?: string; pushTags?: boolean }
 	| { type: 'askPushCancel' }
+	| { type: 'createTag'; repoRoots: string[] }
 	| { type: 'selectTarget'; repoRoot: string }
 	| { type: 'refresh' };

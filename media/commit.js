@@ -697,6 +697,16 @@
         renderFiles();
         post({ type: 'updateSelection', repoRoot, path: item.path, staged: gitStaged });
       });
+      row.addEventListener('dblclick', (e) => {
+        if (e.target.closest('input')) {
+          return;
+        }
+        e.preventDefault();
+        selected = { repoRoot, path: item.path, staged: gitStaged };
+        renderFiles();
+        post({ type: 'updateSelection', repoRoot, path: item.path, staged: gitStaged });
+        post({ type: 'openDiff', repoRoot, path: item.path, staged: gitStaged });
+      });
       row.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         selected = { repoRoot, path: item.path, staged: gitStaged };
