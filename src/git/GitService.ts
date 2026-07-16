@@ -444,12 +444,13 @@ export class GitService implements vscode.Disposable {
 			}
 			const repo = this.requireRepoByRoot(snap.rootPath);
 			if (stage) {
-				for (const item of [...snap.unstaged, ...snap.unversioned]) {
+				// Unversioned files must be added via right-click "Add to Git".
+				for (const item of snap.unstaged) {
 					if (item.unsaved) {
 						await this.ensureSaved(item.fsPath);
 					}
 				}
-				const paths = [...snap.unstaged, ...snap.unversioned].map((c) => c.fsPath);
+				const paths = snap.unstaged.map((c) => c.fsPath);
 				if (paths.length) {
 					await repo.add(paths);
 				}
@@ -512,12 +513,15 @@ export class GitService implements vscode.Disposable {
 		return this.commitAllStaged(message);
 	}
 
-	async push(repoRoot?: string): Promise<void> {
+	async push(repoRoot?: string, options?: { pushTags?: boolean }): Promise<void> {
 		const repo = repoRoot ? this.requireRepoByRoot(repoRoot) : this.requireActiveRepo();
 		// Keep the rejected repo pinned so Merge / Rebase / retry Push stay on the same repo.
 		this.setActiveRepository(repo.rootUri.fsPath);
 		try {
 			await repo.push();
+			if (options?.pushTags) {
+				await this.pushAllTags(repo.rootUri.fsPath);
+			}
 		} catch (err) {
 			if (isPushRejectedError(err)) {
 				this.setActiveRepository(repo.rootUri.fsPath);
@@ -525,6 +529,18 @@ export class GitService implements vscode.Disposable {
 			}
 			throw err instanceof Error ? err : new Error(String(err));
 		}
+	}
+
+	/** Push all local tags to the default / upstream remote. */
+	private async pushAllTags(repoRoot: string): Promise<void> {
+		const repo = this.requireRepoByRoot(repoRoot);
+		const remotes = repo.state.remotes.map((r) => r.name);
+		const upstreamRemote = repo.state.HEAD?.upstream?.remote;
+		const remote =
+			upstreamRemote ||
+			(remotes.includes('origin') ? 'origin' : remotes[0]);
+		const args = remote ? ['push', remote, '--tags'] : ['push', '--tags'];
+		await this.execGit(repoRoot, args);
 	}
 
 	getPushContext(): {

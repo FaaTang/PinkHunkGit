@@ -15,6 +15,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private pendingExpandChanges = false;
 	private pendingUpdateAllRepoCount?: number;
 	private updateAllResolver?: (confirmed: boolean) => void;
+	/** After Commit and Push, wait for Push dialog confirm before pushing these roots. */
+	private pendingPushRoots?: string[];
 
 	constructor(
 		private readonly extensionUri: vscode.Uri,
@@ -271,17 +273,13 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 						const committed = await this.git.commitAllStaged(msg.message);
 						vscode.window.showInformationMessage(formatCommittedMessage(committed));
 						this.post({ type: 'clearMessage' });
-						for (const repo of committed) {
-							const pushed = await this.runPush(repo.rootPath);
-							if (!pushed) {
-								return;
-							}
-						}
+						this.pendingPushRoots = committed.map((repo) => repo.rootPath);
 					});
+					await this.showPushConfirmDialog();
 					break;
 				case 'push':
 					await this.withBusy(async () => {
-						await this.runPush(msg.repoRoot);
+						await this.runPendingOrSinglePush(msg.repoRoot, !!msg.pushTags);
 					});
 					break;
 				case 'pushSync':
@@ -306,11 +304,12 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'askPushConfirm':
 					await this.withBusy(async () => {
-						await this.runPush(msg.repoRoot);
+						await this.runPendingOrSinglePush(msg.repoRoot, !!msg.pushTags);
 					});
 					break;
 				case 'askPushCancel':
 				case 'pushDialogCancel':
+					this.pendingPushRoots = undefined;
 					this.post({ type: 'closePushDialog' });
 					break;
 				case 'updateAllConfirm':
@@ -344,7 +343,25 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	private async runPush(repoRoot?: string): Promise<boolean> {
+	private async showPushConfirmDialog(): Promise<void> {
+		const snapshot = this.git.getWorkspaceSnapshot();
+		this.post({ type: 'showPushDialog', payload: { ...snapshot, busy: this.busy } });
+	}
+
+	private async runPendingOrSinglePush(repoRoot?: string, pushTags = false): Promise<void> {
+		const roots = this.pendingPushRoots?.length
+			? [...this.pendingPushRoots]
+			: [repoRoot];
+		this.pendingPushRoots = undefined;
+		for (const root of roots) {
+			const pushed = await this.runPush(root, pushTags);
+			if (!pushed) {
+				return;
+			}
+		}
+	}
+
+	private async runPush(repoRoot?: string, pushTags = false): Promise<boolean> {
 		const workspace = this.git.getWorkspaceSnapshot();
 		const snap = repoRoot
 			? workspace.repositories.find((r) =>
@@ -354,10 +371,11 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		const label = snap?.name ?? 'repository';
 		const upstream = snap?.upstream;
 		try {
-			await this.git.push(repoRoot);
+			await this.git.push(repoRoot, { pushTags });
 			this.post({ type: 'closePushDialog' });
+			const tagsNote = pushTags ? '（含 tags）' : '';
 			vscode.window.showInformationMessage(
-				`Pushed ${label}${upstream ? ` → ${upstream}` : ''}.`
+				`Pushed ${label}${upstream ? ` → ${upstream}` : ''}${tagsNote}.`
 			);
 			return true;
 		} catch (err) {
@@ -526,6 +544,12 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
       <h2 id="pushTitle">Push</h2>
       <p id="pushSummary"></p>
       <ul id="pushConflictList" class="conflict-list hidden"></ul>
+      <div id="pushTagsOption" class="push-options hidden">
+        <label class="push-option" for="pushTagsCheckbox">
+          <input id="pushTagsCheckbox" type="checkbox" />
+          <span>Push tags 到远程</span>
+        </label>
+      </div>
       <div class="modal-actions" id="pushActions">
         <button id="pushCancel" type="button">Cancel</button>
         <button id="pushConfirm" class="primary" type="button">Push</button>

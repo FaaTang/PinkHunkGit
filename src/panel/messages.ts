@@ -127,12 +127,12 @@ export type WebviewToHost =
 	| { type: 'rollbackCancel' }
 	| { type: 'commit'; message: string }
 	| { type: 'commitAndPush'; message: string }
-	| { type: 'push'; repoRoot?: string }
+	| { type: 'push'; repoRoot?: string; pushTags?: boolean }
 	| { type: 'pushSync'; mode: SyncMode; repoRoot?: string }
 	| { type: 'syncAbort'; repoRoot?: string }
 	| { type: 'syncContinue'; repoRoot?: string }
 	| { type: 'openConflict'; path: string }
-	| { type: 'askPushConfirm'; repoRoot?: string }
+	| { type: 'askPushConfirm'; repoRoot?: string; pushTags?: boolean }
 	| { type: 'askPushCancel' }
 	| { type: 'pushDialogCancel' }
 	| { type: 'updateAllConfirm' }

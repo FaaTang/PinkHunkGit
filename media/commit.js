@@ -26,6 +26,8 @@
   const pushContinue = document.getElementById('pushContinue');
   const pushAskNo = document.getElementById('pushAskNo');
   const pushAskYes = document.getElementById('pushAskYes');
+  const pushTagsOption = document.getElementById('pushTagsOption');
+  const pushTagsCheckbox = document.getElementById('pushTagsCheckbox');
   const rollbackModal = document.getElementById('rollbackModal');
   const rollbackTitle = document.getElementById('rollbackTitle');
   const rollbackSummary = document.getElementById('rollbackSummary');
@@ -281,9 +283,26 @@
     return unversioned.some((i) => i.path === selectedRef.path);
   }
 
-  function showContextMenu(x, y, item, repoRoot) {
+  function showContextMenu(x, y, item, repoRoot, unversionedGroup = false) {
     contextMenu.innerHTML = '';
     const staged = item.staged;
+
+    if (unversionedGroup) {
+      const addToGit = document.createElement('button');
+      addToGit.type = 'button';
+      addToGit.textContent = 'Add to Git';
+      addToGit.addEventListener('click', () => {
+        hideContextMenu();
+        post({
+          type: 'toggleStage',
+          repoRoot,
+          path: item.path,
+          staged: true,
+          currentlyStaged: false,
+        });
+      });
+      contextMenu.appendChild(addToGit);
+    }
 
     const openFile = document.createElement('button');
     openFile.type = 'button';
@@ -440,24 +459,28 @@
         row.classList.add('selected');
       }
 
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.checked = staged;
-      checkbox.title = unversionedGroup
-        ? 'Add to Git (include in commit)'
-        : staged
-          ? 'Included in commit'
-          : 'Not included in commit';
-      checkbox.addEventListener('click', (e) => {
-        e.stopPropagation();
-        post({
-          type: 'toggleStage',
-          repoRoot,
-          path: item.path,
-          staged: !staged,
-          currentlyStaged: staged,
+      if (unversionedGroup) {
+        const spacer = document.createElement('span');
+        spacer.className = 'file-row-spacer';
+        spacer.title = 'Right-click → Add to Git';
+        row.appendChild(spacer);
+      } else {
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = staged;
+        checkbox.title = staged ? 'Included in commit' : 'Not included in commit';
+        checkbox.addEventListener('click', (e) => {
+          e.stopPropagation();
+          post({
+            type: 'toggleStage',
+            repoRoot,
+            path: item.path,
+            staged: !staged,
+            currentlyStaged: staged,
+          });
         });
-      });
+        row.appendChild(checkbox);
+      }
 
       const status = document.createElement('span');
       status.className = 'status ' + (item.status === '?' ? 'A' : item.status);
@@ -488,10 +511,9 @@
       pathEl.title = item.unsaved
         ? `${item.path} — unsaved`
         : unversionedGroup
-          ? `${item.path} — check to add; right-click for more`
+          ? `${item.path} — right-click Add to Git`
           : `${item.path} — checked = commit; right-click for more`;
 
-      row.appendChild(checkbox);
       row.appendChild(status);
       row.appendChild(pathEl);
       row.addEventListener('click', () => {
@@ -505,7 +527,7 @@
         selected = { repoRoot, path: item.path, staged };
         renderFiles();
         post({ type: 'updateSelection', repoRoot, path: item.path, staged });
-        showContextMenu(e.clientX, e.clientY, item, repoRoot);
+        showContextMenu(e.clientX, e.clientY, item, repoRoot, unversionedGroup);
       });
       wrap.appendChild(row);
     }
@@ -575,6 +597,18 @@
     pushModal.classList.add('hidden');
     pushConflictList.classList.add('hidden');
     pushConflictList.innerHTML = '';
+    setPushTagsOptionVisible(false);
+  }
+
+  function setPushTagsOptionVisible(visible) {
+    if (!pushTagsOption) {
+      return;
+    }
+    pushTagsOption.classList.toggle('hidden', !visible);
+  }
+
+  function isPushTagsChecked() {
+    return !!(pushTagsCheckbox && pushTagsCheckbox.checked);
   }
 
   function openPushModal() {
@@ -624,6 +658,7 @@
     pushTitle.textContent = 'Push';
     pushSummary.textContent = lines.join('\n');
     renderConflictList([]);
+    setPushTagsOptionVisible(true);
     setPushActionVisibility(['pushCancel', 'pushConfirm']);
     pushModal.classList.remove('hidden');
   }
@@ -642,6 +677,7 @@
       `${behind}\n\n` +
       `选择 Merge 或 Rebase 同步远程后再 Push。`;
     renderConflictList([]);
+    setPushTagsOptionVisible(false);
     setPushActionVisibility(['pushCancel', 'pushMerge', 'pushRebase']);
     pushModal.classList.remove('hidden');
   }
@@ -655,6 +691,7 @@
       `${payload.message}\n\n` +
       `点击下方冲突文件，在 VS Code 合并编辑器中解决。全部解决后点 Continue；或 Abort 中止。`;
     renderConflictList(payload.conflicts || []);
+    setPushTagsOptionVisible(false);
     setPushActionVisibility(['pushAbort', 'pushContinue']);
     pushModal.classList.remove('hidden');
   }
@@ -673,6 +710,7 @@
       `Ahead: ${typeof payload.ahead === 'number' ? payload.ahead : '?'}` +
       behindLine;
     renderConflictList([]);
+    setPushTagsOptionVisible(true);
     setPushActionVisibility(['pushAskNo', 'pushAskYes']);
     pushModal.classList.remove('hidden');
   }
@@ -782,7 +820,11 @@
     post({ type: 'pushDialogCancel' });
   });
   pushConfirm.addEventListener('click', () => {
-    post({ type: 'push', repoRoot: pushRepoRoot || undefined });
+    post({
+      type: 'push',
+      repoRoot: pushRepoRoot || undefined,
+      pushTags: isPushTagsChecked(),
+    });
   });
   pushMerge.addEventListener('click', () =>
     post({ type: 'pushSync', mode: 'merge', repoRoot: pushRepoRoot || undefined })
@@ -801,7 +843,11 @@
     post({ type: 'askPushCancel' });
   });
   pushAskYes.addEventListener('click', () =>
-    post({ type: 'askPushConfirm', repoRoot: pushRepoRoot || undefined })
+    post({
+      type: 'askPushConfirm',
+      repoRoot: pushRepoRoot || undefined,
+      pushTags: isPushTagsChecked(),
+    })
   );
   rollbackCancelBtn.addEventListener('click', () => {
     closeRollbackModal();

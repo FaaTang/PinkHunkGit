@@ -305,6 +305,12 @@ body.sidebar-mode .commit-form {
   margin: 0;
 }
 
+.file-row-spacer {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+}
+
 .status {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 11px;
@@ -490,6 +496,26 @@ button.danger {
   line-height: 1.5;
   opacity: 0.9;
   white-space: pre-wrap;
+}
+
+.push-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.push-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.95;
+}
+
+.push-option input {
+  margin: 0;
 }
 
 .conflict-list {
