@@ -10,13 +10,10 @@ let gitService: GitService | undefined;
 let commitViewProvider: CommitViewProvider | undefined;
 let gitReady = false;
 let gitInitError = 'Git service is not initialized.';
+let gitInitPromise: Promise<void> | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	gitService = new GitService();
-	const init = await gitService.init();
-	gitReady = init.ok;
-	gitInitError = init.ok ? '' : init.error;
-
 	commitViewProvider = new CommitViewProvider(context.extensionUri, gitService, async () => {
 		const result = await installRecommendedKeybindings(context);
 		if (!result.ok) {
@@ -28,6 +25,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	void vscode.commands.executeCommand('setContext', 'copyIdeaGitUi.hasSelection', false);
 
+	// Register view + commands before awaiting Git init so Ctrl+K never hits
+	// "command not found" if Git activation is slow or races.
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(CommitViewProvider.viewType, commitViewProvider, {
 			webviewOptions: { retainContextWhenHidden: true },
@@ -36,14 +35,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('copyIdeaGitUi.openCommit', async () => {
+			await ensureGitReady(true);
 			if (!gitService || !commitViewProvider) {
 				return;
-			}
-			if (!gitReady) {
-				const choice = await vscode.window.showErrorMessage(gitInitError, 'Open Extensions');
-				if (choice === 'Open Extensions') {
-					await vscode.commands.executeCommand('workbench.extensions.search', '@builtin git');
-				}
 			}
 			gitService.rememberEditorContext();
 			try {
@@ -55,19 +49,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await commitViewProvider.reveal(false, true, true);
 		}),
 		vscode.commands.registerCommand('copyIdeaGitUi.openPush', async () => {
-			if (!gitService || !commitViewProvider) {
+			if (!(await ensureGitReady(true))) {
 				return;
 			}
-			if (!gitReady) {
-				vscode.window.showErrorMessage(gitInitError);
+			if (!gitService || !commitViewProvider) {
 				return;
 			}
 			gitService.rememberEditorContext();
 			await commitViewProvider.reveal(true);
 		}),
 		vscode.commands.registerCommand('copyIdeaGitUi.updateAllRepositories', async () => {
-			if (!gitService || !gitReady || !commitViewProvider) {
-				vscode.window.showErrorMessage(gitInitError);
+			if (!(await ensureGitReady(true)) || !gitService || !commitViewProvider) {
 				return;
 			}
 			const repoCount = gitService.getRepositoryCount();
@@ -152,13 +144,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		})
 	);
 
-	// First-run tip only; install is available from the panel toolbar button.
+	// Kick off Git init without blocking activate. Commands are already
+	// registered, so Ctrl+K never reports "command not found" while Git starts.
+	gitInitPromise = initializeGit(context);
+}
+
+async function initializeGit(context: vscode.ExtensionContext): Promise<void> {
+	if (!gitService) {
+		gitReady = false;
+		gitInitError = 'Git service is not initialized.';
+		return;
+	}
+
+	try {
+		const init = await gitService.init();
+		gitReady = init.ok;
+		gitInitError = init.ok ? '' : init.error;
+	} catch (err) {
+		gitReady = false;
+		gitInitError = err instanceof Error ? err.message : String(err);
+	}
+
 	if (gitReady) {
 		void promptInstallKeybindings(context);
+	} else {
+		vscode.window.showWarningMessage(
+			`Copy IDEA Git UI：${gitInitError || 'Git 未就绪'}。快捷键仍可用，打开面板时会提示详情。`
+		);
 	}
+}
+
+async function ensureGitReady(showError: boolean): Promise<boolean> {
+	if (gitInitPromise) {
+		await gitInitPromise;
+	}
+	if (gitReady) {
+		return true;
+	}
+	if (showError) {
+		const choice = await vscode.window.showErrorMessage(
+			gitInitError || 'Git service is not initialized.',
+			'Open Extensions'
+		);
+		if (choice === 'Open Extensions') {
+			await vscode.commands.executeCommand('workbench.extensions.search', '@builtin git');
+		}
+	}
+	return false;
 }
 
 export function deactivate(): void {
 	gitService = undefined;
 	commitViewProvider = undefined;
+	gitInitPromise = undefined;
 }

@@ -80,16 +80,7 @@ export class GitService implements vscode.Disposable {
 			})
 		);
 
-		if (this.api.state !== 'initialized') {
-			await new Promise<void>((resolve) => {
-				const sub = this.api!.onDidChangeState((state) => {
-					if (state === 'initialized') {
-						sub.dispose();
-						resolve();
-					}
-				});
-			});
-		}
+		await this.waitForGitApiInitialized();
 
 		this.bindRepositoryEvents();
 
@@ -119,6 +110,55 @@ export class GitService implements vscode.Disposable {
 		);
 
 		return { ok: true };
+	}
+
+	/**
+	 * Wait until the built-in Git API is ready.
+	 * Must re-check state after subscribe to avoid a hang if `initialized`
+	 * fired between the initial check and the listener attachment.
+	 */
+	private async waitForGitApiInitialized(timeoutMs = 15_000): Promise<void> {
+		if (!this.api || this.api.state === 'initialized') {
+			return;
+		}
+
+		await new Promise<void>((resolve, reject) => {
+			const api = this.api!;
+			let settled = false;
+
+			const finish = (err?: Error) => {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				clearTimeout(timer);
+				sub.dispose();
+				if (err) {
+					reject(err);
+				} else {
+					resolve();
+				}
+			};
+
+			const sub = api.onDidChangeState((state) => {
+				if (state === 'initialized') {
+					finish();
+				}
+			});
+
+			const timer = setTimeout(() => {
+				finish(
+					new Error(
+						'Timed out waiting for the VS Code Git extension to initialize.'
+					)
+				);
+			}, timeoutMs);
+
+			// Race: state may have flipped to initialized before the listener ran.
+			if (api.state === 'initialized') {
+				finish();
+			}
+		});
 	}
 
 	dispose(): void {
