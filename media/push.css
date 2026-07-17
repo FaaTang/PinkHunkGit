@@ -315,6 +315,12 @@ body {
   opacity: 1;
 }
 
+.alt-detail-hint.error {
+  padding: 12px 14px;
+  color: var(--vscode-inputValidation-errorForeground, #f85149);
+  opacity: 1;
+}
+
 .alt-file-path {
   padding: 12px 14px 8px;
   font-size: 13px;
@@ -428,9 +434,30 @@ button.danger {
   color: var(--vscode-inputValidation-errorForeground, #f85149);
 }
 
-body.busy {
-  pointer-events: none;
-  opacity: 0.85;
+body.busy .footer-actions button {
+  opacity: 0.7;
+}
+
+body.busy .dialog-body {
+  opacity: 0.92;
+}
+
+.incoming-commit-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.incoming-commit-list .commit-item {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  cursor: default;
+}
+
+.incoming-commit-list .commit-item:hover {
+  background: transparent;
 }
 
 .modal {

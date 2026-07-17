@@ -130,10 +130,14 @@ export class PushDialogProvider implements vscode.Disposable {
 						await this.runPushMany(roots.length ? roots : undefined, !!msg.pushTags);
 					});
 					break;
+				case 'pushSyncPreview':
+					await this.runSyncPreview(msg.mode, msg.repoRoot);
+					break;
+				case 'pushSyncConfirm':
 				case 'pushSync':
 					await this.withBusy(async () => {
 						await this.runPushSync(msg.mode, msg.repoRoot);
-					});
+					}, msg.mode === 'rebase' ? 'Rebasing…' : 'Merging…');
 					break;
 				case 'syncAbort':
 					await this.withBusy(async () => {
@@ -358,6 +362,43 @@ export class PushDialogProvider implements vscode.Disposable {
 		});
 	}
 
+	private async runSyncPreview(mode: import('./messages').SyncMode, repoRoot?: string): Promise<void> {
+		this.dialogPhase = 'alt';
+		if (repoRoot) {
+			try {
+				this.git.setActiveRepository(repoRoot);
+			} catch {
+				// keep current
+			}
+		}
+		const ctx = this.git.getPushContext();
+		const snap = this.git.getWorkspaceSnapshot().active;
+		const resolvedRoot = snap.rootPath || repoRoot;
+
+		this.post({ type: 'busy', busy: true, message: 'Loading incoming commits…' });
+		try {
+			await this.git.refresh();
+			const [commits, blockers] = await Promise.all([
+				this.git.getIncomingCommits(resolvedRoot),
+				this.git.getMergeBlockers(resolvedRoot),
+			]);
+			this.post({
+				type: 'showSyncPreview',
+				payload: {
+					mode,
+					repoRoot: resolvedRoot,
+					repoName: ctx.repoName,
+					branch: ctx.branch,
+					upstream: ctx.upstream,
+					commits,
+					blockers,
+				},
+			});
+		} finally {
+			this.post({ type: 'busy', busy: false });
+		}
+	}
+
 	private async runPushSync(mode: import('./messages').SyncMode, repoRoot?: string): Promise<void> {
 		const result = await this.git.syncWithUpstream(mode, repoRoot);
 		await this.handleSyncResult(result, repoRoot);
@@ -412,9 +453,9 @@ export class PushDialogProvider implements vscode.Disposable {
 		});
 	}
 
-	private async withBusy(fn: () => Promise<void>): Promise<void> {
+	private async withBusy(fn: () => Promise<void>, message?: string): Promise<void> {
 		this.busy = true;
-		this.post({ type: 'busy', busy: true });
+		this.post({ type: 'busy', busy: true, message });
 		try {
 			await fn();
 		} finally {
@@ -496,7 +537,7 @@ export class PushDialogProvider implements vscode.Disposable {
       <h2>New Tag</h2>
       <p id="newTagSummary">Create tag at the current branch HEAD.</p>
       <label class="field-label" for="newTagInput">Tag name</label>
-      <input id="newTagInput" class="field-input" type="text" placeholder="v0.1.21" autocomplete="off" spellcheck="false" />
+      <input id="newTagInput" class="field-input" type="text" placeholder="v1.0.3" autocomplete="off" spellcheck="false" />
       <div id="newTagError" class="field-error hidden"></div>
       <div class="modal-actions">
         <button id="newTagCancelBtn" type="button">Cancel</button>

@@ -40,6 +40,7 @@
   let checkedRoots = new Set();
   let pushRepoRoot = null;
   let syncMode = 'merge';
+  let syncPreviewPayload = null;
   let conflictItems = [];
   let selectedConflictPath = null;
 
@@ -47,13 +48,24 @@
     vscode.postMessage(message);
   }
 
-  function setBusy(busy) {
+  function setBusy(busy, message) {
     document.body.classList.toggle('busy', !!busy);
     [cancelBtn, pushBtn, mergeBtn, rebaseBtn, abortBtn, continueBtn, laterBtn, newTagBtn, newTagCancelBtn, newTagConfirmBtn].forEach((btn) => {
       if (btn) {
         btn.disabled = !!busy;
       }
     });
+    if (statusBanner && modalState !== 'confirm') {
+      if (busy && message) {
+        statusBanner.classList.remove('hidden');
+        statusBanner.textContent = message;
+        statusBanner.classList.remove('error');
+      } else if (!busy && modalState === 'syncPreview' && syncPreviewPayload) {
+        statusBanner.classList.remove('hidden');
+        statusBanner.textContent = syncPreviewPayload.mode === 'rebase' ? 'Review commits to rebase onto.' : 'Review commits to merge.';
+        statusBanner.classList.remove('error');
+      }
+    }
   }
 
   function setFooterActions(visibleIds) {
@@ -281,6 +293,14 @@
       dialogTitle.textContent = `Push Commits to ${name}`;
     } else if (modalState === 'rejected') {
       dialogTitle.textContent = 'Push Rejected';
+    } else if (modalState === 'syncPreview') {
+      const branch = syncPreviewPayload?.branch || '(detached)';
+      const upstream = syncPreviewPayload?.upstream || 'remote';
+      if (syncPreviewPayload?.mode === 'rebase') {
+        dialogTitle.textContent = `Rebase ${branch} onto ${upstream}`;
+      } else {
+        dialogTitle.textContent = `Merge Revisions from ${upstream} into ${branch}`;
+      }
     } else if (modalState === 'conflict') {
       dialogTitle.textContent = 'Merge / Rebase Conflicts';
     } else if (modalState === 'askPush') {
@@ -343,6 +363,93 @@
     }
     setTagsVisible(!!showTags);
     setFooterActions(footerIds);
+  }
+
+  function renderIncomingCommits(commits, emptyText) {
+    if (!commits.length) {
+      const empty = document.createElement('div');
+      empty.className = 'placeholder compact';
+      empty.textContent = emptyText;
+      return empty;
+    }
+
+    const list = document.createElement('ul');
+    list.className = 'commit-list incoming-commit-list';
+    commits.forEach((commit) => {
+      const li = document.createElement('li');
+      li.className = 'commit-item';
+      const subject = document.createElement('div');
+      subject.className = 'commit-subject';
+      subject.textContent = commit.subject;
+      subject.title = commit.subject;
+      const meta = document.createElement('div');
+      meta.className = 'commit-meta';
+      meta.textContent = `${commit.shortHash} · ${commit.author} · ${commit.date}`;
+      li.appendChild(subject);
+      li.appendChild(meta);
+      list.appendChild(li);
+    });
+    return list;
+  }
+
+  function renderSyncPreviewSplit(p) {
+    if (!altLeftPane || !altRightPane) {
+      return;
+    }
+    syncPreviewPayload = p;
+    syncMode = p.mode || 'merge';
+    altLeftPane.innerHTML = '';
+    altRightPane.innerHTML = '';
+
+    const leftTitle = document.createElement('div');
+    leftTitle.className = 'alt-pane-title';
+    leftTitle.textContent = 'Repository';
+    altLeftPane.appendChild(leftTitle);
+
+    const repoItem = document.createElement('div');
+    repoItem.className = 'alt-info-item selected';
+    repoItem.innerHTML =
+      `<div class="alt-info-name">${escapeHtml(p.repoName || 'repository')}</div>` +
+      `<div class="alt-info-meta">Branch: ${escapeHtml(p.branch || '(detached)')}</div>` +
+      `<div class="alt-info-meta">Upstream: ${escapeHtml(p.upstream || '(none)')}</div>`;
+    altLeftPane.appendChild(repoItem);
+
+    const rightTitle = document.createElement('div');
+    rightTitle.className = 'alt-pane-title';
+    rightTitle.textContent =
+      p.mode === 'rebase'
+        ? `Incoming commits (${p.commits?.length || 0})`
+        : `Commits to merge (${p.commits?.length || 0})`;
+    altRightPane.appendChild(rightTitle);
+
+    if (p.blockers?.length) {
+      const warning = document.createElement('div');
+      warning.className = 'alt-detail-hint error';
+      warning.textContent =
+        `Local changes to the following file(s) would be overwritten: ${p.blockers.join(', ')}. Commit or stash them before merging.`;
+      altRightPane.appendChild(warning);
+    }
+
+    altRightPane.appendChild(
+      renderIncomingCommits(
+        p.commits || [],
+        p.mode === 'rebase' ? 'No incoming commits found on upstream.' : 'No incoming commits found to merge.'
+      )
+    );
+
+    const hint = document.createElement('div');
+    hint.className = 'alt-detail-hint';
+    hint.textContent =
+      p.mode === 'rebase'
+        ? 'Your local commits will be replayed on top of the upstream branch.'
+        : 'Remote commits will be merged into your current branch.';
+    altRightPane.appendChild(hint);
+
+    if (mergeBtn) {
+      mergeBtn.textContent = p.mode === 'rebase' ? 'Rebase' : 'Merge';
+      mergeBtn.disabled = !!(p.blockers && p.blockers.length);
+      mergeBtn.classList.toggle('primary', true);
+    }
   }
 
   function renderRejectedSplit(p) {
@@ -604,8 +711,18 @@
     }
     post({ type: 'push', repoRoots: roots, pushTags: isPushTagsChecked() });
   });
-  mergeBtn.addEventListener('click', () => post({ type: 'pushSync', mode: 'merge', repoRoot: pushRepoRoot || undefined }));
-  rebaseBtn.addEventListener('click', () => post({ type: 'pushSync', mode: 'rebase', repoRoot: pushRepoRoot || undefined }));
+  mergeBtn.addEventListener('click', () => {
+    if (modalState === 'rejected') {
+      post({ type: 'pushSyncPreview', mode: 'merge', repoRoot: pushRepoRoot || undefined });
+      return;
+    }
+    if (modalState === 'syncPreview') {
+      post({ type: 'pushSyncConfirm', mode: syncMode, repoRoot: pushRepoRoot || undefined });
+    }
+  });
+  rebaseBtn.addEventListener('click', () =>
+    post({ type: 'pushSyncPreview', mode: 'rebase', repoRoot: pushRepoRoot || undefined })
+  );
   abortBtn.addEventListener('click', () => post({ type: 'syncAbort', repoRoot: pushRepoRoot || undefined }));
   continueBtn.addEventListener('click', () => post({ type: 'syncContinue', repoRoot: pushRepoRoot || undefined }));
   laterBtn.addEventListener('click', () => {
@@ -631,7 +748,7 @@
         showConfirmView(msg.payload);
         break;
       case 'busy':
-        setBusy(msg.busy);
+        setBusy(msg.busy, msg.message);
         break;
       case 'error':
         statusBanner.classList.remove('hidden');
@@ -650,6 +767,12 @@
       case 'showRejected': {
         const p = msg.payload;
         pushRepoRoot = p.repoRoot || pushRepoRoot;
+        syncPreviewPayload = null;
+        if (mergeBtn) {
+          mergeBtn.textContent = 'Merge';
+          mergeBtn.classList.add('primary');
+          mergeBtn.disabled = false;
+        }
         showSplitAltView(
           'Push Rejected',
           `${p.repoName} · ${p.branch || '(detached)'} → ${p.upstream || 'remote'}`,
@@ -659,6 +782,29 @@
           true
         );
         renderRejectedSplit(p);
+        break;
+      }
+      case 'showSyncPreview': {
+        const p = msg.payload;
+        pushRepoRoot = p.repoRoot || pushRepoRoot;
+        syncPreviewPayload = p;
+        syncMode = p.mode || 'merge';
+        const titleBranch = p.branch || '(detached)';
+        const titleUpstream = p.upstream || 'remote';
+        const title =
+          p.mode === 'rebase'
+            ? `Rebase ${titleBranch} onto ${titleUpstream}`
+            : `Merge Revisions from ${titleUpstream} into ${titleBranch}`;
+        showSplitAltView(
+          title,
+          p.mode === 'rebase' ? 'Review commits to rebase onto.' : 'Review commits to merge.',
+          'syncPreview',
+          ['cancelBtn', 'mergeBtn'],
+          false,
+          false
+        );
+        renderSyncPreviewSplit(p);
+        updateTitle();
         break;
       }
       case 'showSyncConflict': {

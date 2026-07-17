@@ -882,6 +882,64 @@ export class GitService implements vscode.Disposable {
 		}
 	}
 
+	/** Commits on upstream that are not in HEAD (incoming when push is rejected). */
+	async getIncomingCommits(repoRoot?: string): Promise<PushCommitItem[]> {
+		const repo = repoRoot ? this.requireRepoByRoot(repoRoot) : this.requireActiveRepo();
+		const head = repo.state.HEAD;
+		if (!head?.upstream) {
+			return [];
+		}
+		const root = repo.rootUri.fsPath;
+		const upstreamRef = `${head.upstream.remote}/${head.upstream.name}`;
+		try {
+			await this.execGit(root, ['fetch', head.upstream.remote, head.upstream.name]);
+		} catch {
+			// Continue with possibly stale remote-tracking refs.
+		}
+		try {
+			const raw = await this.queryGit(root, [
+				'log',
+				`HEAD..${upstreamRef}`,
+				'--pretty=format:%H|%h|%s|%an|%ad',
+				'--date=short',
+			]);
+			return parsePushCommits(raw);
+		} catch {
+			return [];
+		}
+	}
+
+	/** Local tracked changes that would be overwritten by merging upstream. */
+	async getMergeBlockers(repoRoot?: string): Promise<string[]> {
+		const repo = repoRoot ? this.requireRepoByRoot(repoRoot) : this.requireActiveRepo();
+		const head = repo.state.HEAD;
+		if (!head?.upstream) {
+			return [];
+		}
+		const root = repo.rootUri.fsPath;
+		const upstreamRef = `${head.upstream.remote}/${head.upstream.name}`;
+		const localChanged = new Set<string>();
+		for (const change of [...repo.state.indexChanges, ...repo.state.workingTreeChanges]) {
+			if (change.status === Status.UNTRACKED) {
+				continue;
+			}
+			localChanged.add(path.relative(root, change.uri.fsPath).replace(/\\/g, '/'));
+		}
+
+		let incomingChanged: string[] = [];
+		try {
+			const raw = await this.queryGit(root, ['diff', '--name-only', 'HEAD', upstreamRef]);
+			incomingChanged = raw
+				.split('\n')
+				.map((line) => line.trim())
+				.filter(Boolean);
+		} catch {
+			return [];
+		}
+
+		return incomingChanged.filter((file) => localChanged.has(file));
+	}
+
 	async syncWithUpstream(mode: SyncMode, repoRoot?: string): Promise<SyncResult> {
 		const repo = repoRoot ? this.requireRepoByRoot(repoRoot) : this.requireActiveRepo();
 		this.setActiveRepository(repo.rootUri.fsPath);
@@ -900,7 +958,11 @@ export class GitService implements vscode.Disposable {
 					message: formatGitError(err),
 				};
 			}
-			throw err instanceof Error ? err : new Error(String(err));
+			return {
+				status: 'failed',
+				mode,
+				message: formatGitError(err),
+			};
 		}
 
 		return this.finalizeSyncResult(repo, mode);

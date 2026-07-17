@@ -59,12 +59,23 @@ export type AskPushPayload = {
 	summary: string;
 };
 
+export type SyncPreviewPayload = {
+	mode: SyncMode;
+	repoRoot?: string;
+	repoName: string;
+	branch?: string;
+	upstream?: string;
+	commits: PushCommitItem[];
+	blockers: string[];
+};
+
 export type PushHostToWebview =
 	| { type: 'state'; payload: PushDialogPayload }
-	| { type: 'busy'; busy: boolean }
+	| { type: 'busy'; busy: boolean; message?: string }
 	| { type: 'error'; message: string }
 	| { type: 'tagResult'; success: boolean; message: string }
 	| { type: 'showRejected'; payload: PushRejectedPayload }
+	| { type: 'showSyncPreview'; payload: SyncPreviewPayload }
 	| { type: 'showSyncConflict'; payload: SyncConflictPayload }
 	| { type: 'showAskPush'; payload: AskPushPayload }
 	| { type: 'close' };
@@ -73,6 +84,8 @@ export type PushWebviewToHost =
 	| { type: 'ready' }
 	| { type: 'cancel' }
 	| { type: 'push'; repoRoots: string[]; pushTags?: boolean }
+	| { type: 'pushSyncPreview'; mode: SyncMode; repoRoot?: string }
+	| { type: 'pushSyncConfirm'; mode: SyncMode; repoRoot?: string }
 	| { type: 'pushSync'; mode: SyncMode; repoRoot?: string }
 	| { type: 'syncAbort'; repoRoot?: string }
 	| { type: 'syncContinue'; repoRoot?: string }

@@ -995,10 +995,6 @@
     }
 
     if (!entries.length) {
-      const empty = document.createElement('div');
-      empty.className = 'empty-group category-empty';
-      empty.textContent = 'None';
-      wrap.appendChild(empty);
       return wrap;
     }
 
@@ -1006,10 +1002,6 @@
     if (!multi) {
       const { repo, items } = entries[0];
       if (!items.length) {
-        const empty = document.createElement('div');
-        empty.className = 'empty-group category-empty';
-        empty.textContent = 'None';
-        wrap.appendChild(empty);
         return wrap;
       }
       const repoGroupContext = {
@@ -1126,10 +1118,6 @@
     }
 
     if (!items.length) {
-      const empty = document.createElement('div');
-      empty.className = 'empty-group repo-subgroup-empty';
-      empty.textContent = 'None';
-      wrap.appendChild(empty);
       return wrap;
     }
 
