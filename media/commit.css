@@ -213,6 +213,16 @@ body.sidebar-mode .commit-form {
   background: var(--list-hover);
 }
 
+.group-title.selected {
+  background: var(--file-row-selected-bg);
+  color: var(--list-active-fg, var(--fg));
+  opacity: 1;
+}
+
+.group-title.selected:hover {
+  background: var(--file-row-selected-bg);
+}
+
 .group-title-chevron {
   flex-shrink: 0;
   width: 12px;
