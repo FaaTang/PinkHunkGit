@@ -63,6 +63,7 @@ export type PushHostToWebview =
 	| { type: 'state'; payload: PushDialogPayload }
 	| { type: 'busy'; busy: boolean }
 	| { type: 'error'; message: string }
+	| { type: 'tagResult'; success: boolean; message: string }
 	| { type: 'showRejected'; payload: PushRejectedPayload }
 	| { type: 'showSyncConflict'; payload: SyncConflictPayload }
 	| { type: 'showAskPush'; payload: AskPushPayload }
@@ -79,6 +80,6 @@ export type PushWebviewToHost =
 	| { type: 'resolveConflict'; path: string; side: 'yours' | 'theirs'; mode: SyncMode; repoRoot?: string }
 	| { type: 'askPushConfirm'; repoRoot?: string; pushTags?: boolean }
 	| { type: 'askPushCancel' }
-	| { type: 'createTag'; repoRoots: string[] }
+	| { type: 'createTag'; repoRoots: string[]; tagName: string }
 	| { type: 'selectTarget'; repoRoot: string }
 	| { type: 'refresh' };
