@@ -243,36 +243,58 @@ body.sidebar-mode .commit-form {
   font-variant-numeric: tabular-nums;
 }
 
-.repo-group {
-  margin-bottom: 4px;
+.category-group {
+  margin-bottom: 2px;
 }
 
-.repo-group + .repo-group {
+.category-group + .category-group {
   border-top: 1px solid var(--border);
   margin-top: 4px;
   padding-top: 2px;
 }
 
-.repo-group-title {
+.category-empty {
+  padding-left: 28px;
+}
+
+.repo-subgroup-empty {
+  padding-left: 44px;
+}
+
+.repo-subgroup {
+  margin-bottom: 2px;
+}
+
+.repo-subgroup-title {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 10px 2px;
+  padding: 4px 10px 2px 20px;
   font-size: 12px;
   font-weight: 600;
   opacity: 0.92;
 }
 
-.repo-group-title.collapsible {
+.repo-subgroup-title.collapsible {
   cursor: pointer;
   user-select: none;
 }
 
-.repo-group-title.collapsible:hover {
+.repo-subgroup-title.collapsible:hover {
   background: var(--list-hover);
 }
 
-.repo-group-chevron {
+.repo-subgroup-title.selected {
+  background: var(--file-row-selected-bg);
+  color: var(--list-active-fg, var(--fg));
+  opacity: 1;
+}
+
+.repo-subgroup-title.selected:hover {
+  background: var(--file-row-selected-bg);
+}
+
+.repo-subgroup-chevron {
   flex-shrink: 0;
   width: 12px;
   text-align: center;
@@ -280,26 +302,57 @@ body.sidebar-mode .commit-form {
   font-size: 10px;
 }
 
-.repo-group.collapsed {
-  padding-bottom: 4px;
+.repo-color-dot {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 1px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
-.repo-group.focused .repo-group-title {
-  color: var(--vscode-gitDecoration-modifiedResourceForeground, var(--modified));
-}
-
-.repo-group-name {
+.repo-subgroup-name {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.repo-group-count {
+.repo-subgroup-count {
   flex-shrink: 0;
   font-weight: 500;
   opacity: 0.7;
   font-variant-numeric: tabular-nums;
+}
+
+.repo-branch-badge {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 16px;
+  opacity: 0.75;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-subgroup.focused .repo-subgroup-name {
+  color: var(--vscode-gitDecoration-modifiedResourceForeground, var(--modified));
+}
+
+.repo-subgroup.collapsed {
+  padding-bottom: 2px;
+}
+
+.file-rows {
+  padding-bottom: 2px;
+}
+
+.file-rows.nested .file-row {
+  margin-left: 28px;
 }
 
 .file-row {

@@ -36,8 +36,18 @@
     busy: false,
   };
   const webviewState = vscode.getState() || {};
-  const collapsedRepos = new Set(webviewState.collapsedRepos || []);
   const collapsedGroups = new Set(webviewState.collapsedGroups || []);
+  /** IDEA-style repo color palette (stable hash per rootPath). */
+  const REPO_COLORS = [
+    '#8b4049',
+    '#3d6b4f',
+    '#4a6082',
+    '#6b4c8b',
+    '#8b6914',
+    '#3d6b6b',
+    '#6b523d',
+    '#4a6b3d',
+  ];
   const checkedUnversioned = new Set(webviewState.checkedUnversioned || []);
   const changeIncludeState = new Map(Object.entries(webviewState.changeIncludeState || {}));
   let lastCommitMessage = webviewState.lastCommitMessage || '';
@@ -120,23 +130,44 @@
     vscode.setState(state);
   }
 
-  function saveCollapsedRepos() {
-    saveWebviewState({ collapsedRepos: Array.from(collapsedRepos) });
+  function repoColor(root) {
+    const s = repoKey(root);
+    let hash = 0;
+    for (let i = 0; i < s.length; i += 1) {
+      hash = (hash << 5) - hash + s.charCodeAt(i);
+      hash |= 0;
+    }
+    return REPO_COLORS[Math.abs(hash) % REPO_COLORS.length];
   }
 
-  function toggleRepoCollapsed(root) {
-    const key = repoKey(root);
-    if (collapsedRepos.has(key)) {
-      collapsedRepos.delete(key);
+  function categoryCollapseKey(groupId) {
+    return 'category:' + groupId;
+  }
+
+  function repoCollapseKey(groupId, root) {
+    return 'repo:' + groupId + ':' + repoKey(root);
+  }
+
+  function toggleCategoryCollapsed(groupId) {
+    const key = categoryCollapseKey(groupId);
+    if (collapsedGroups.has(key)) {
+      collapsedGroups.delete(key);
     } else {
-      collapsedRepos.add(key);
+      collapsedGroups.add(key);
     }
-    saveCollapsedRepos();
+    saveCollapsedGroups();
     renderFiles();
   }
 
-  function groupKey(root, group) {
-    return repoKey(root) + '::' + group;
+  function toggleRepoInCategoryCollapsed(groupId, root) {
+    const key = repoCollapseKey(groupId, root);
+    if (collapsedGroups.has(key)) {
+      collapsedGroups.delete(key);
+    } else {
+      collapsedGroups.add(key);
+    }
+    saveCollapsedGroups();
+    renderFiles();
   }
 
   function saveCollapsedGroups() {
@@ -359,31 +390,41 @@
     syncSelectionToHost();
   }
 
-  function isGroupSelected(repoRoot, groupId) {
-    return (
-      selectedGroup &&
-      selectedGroup.repoRoot === repoRoot &&
-      selectedGroup.groupId === groupId
-    );
+  function isGroupSelected(repoRoot, groupId, category = false) {
+    if (!selectedGroup || selectedGroup.groupId !== groupId) {
+      return false;
+    }
+    if (category) {
+      return !!selectedGroup.category;
+    }
+    return !selectedGroup.category && selectedGroup.repoRoot === repoRoot;
   }
 
-  function selectGroup(repoRoot, groupId, unversionedGroup) {
+  function selectGroup(repoRoot, groupId, unversionedGroup, category = false) {
     clearFileSelection();
-    selectedGroup = { repoRoot, groupId, unversionedGroup };
+    selectedGroup = { repoRoot, groupId, unversionedGroup, category: !!category };
     syncSelectionToHost();
   }
 
   /** Update row/group highlight without rebuilding the file list (keeps double-click working). */
   function applyFileListSelectionVisuals() {
-    document.querySelectorAll('.group-title.selected').forEach((el) => el.classList.remove('selected'));
+    document.querySelectorAll('.group-title.selected, .repo-subgroup-title.selected').forEach((el) =>
+      el.classList.remove('selected')
+    );
     if (selectedGroup) {
-      for (const wrap of document.querySelectorAll('.change-list[data-group-id]')) {
-        if (
-          wrap.dataset.repoRoot === selectedGroup.repoRoot &&
-          wrap.dataset.groupId === selectedGroup.groupId
-        ) {
-          wrap.querySelector('.group-title')?.classList.add('selected');
-          break;
+      if (selectedGroup.category) {
+        document
+          .querySelector(`.category-group[data-group-id="${selectedGroup.groupId}"] .group-title`)
+          ?.classList.add('selected');
+      } else {
+        for (const wrap of document.querySelectorAll('.repo-subgroup[data-group-id]')) {
+          if (
+            wrap.dataset.repoRoot === selectedGroup.repoRoot &&
+            wrap.dataset.groupId === selectedGroup.groupId
+          ) {
+            wrap.querySelector('.repo-subgroup-title')?.classList.add('selected');
+            break;
+          }
         }
       }
     }
@@ -449,46 +490,53 @@
     return `${selected}/${total}`;
   }
 
-  function toggleGroupCollapsed(root, group) {
-    const key = groupKey(root, group);
-    if (collapsedGroups.has(key)) {
-      collapsedGroups.delete(key);
-    } else {
-      collapsedGroups.add(key);
-    }
-    saveCollapsedGroups();
-    renderFiles();
-  }
-
-  function resolveChangeListGroupFromTarget(target) {
-    const wrap = target.closest('.change-list[data-group-id]');
+  function resolveCategoryGroupFromTarget(target) {
+    const wrap = target.closest('.category-group[data-group-id]');
     if (!wrap) {
       return null;
     }
+    const groupId = wrap.dataset.groupId;
     return {
-      repoRoot: wrap.dataset.repoRoot,
-      groupId: wrap.dataset.groupId,
-      unversionedGroup: wrap.dataset.groupId === 'unversioned',
+      repoRoot: null,
+      groupId,
+      unversionedGroup: groupId === 'unversioned',
+      category: true,
     };
   }
 
-  /** Expand all repo groups and their Changes groups (used on Ctrl+K auto-check). */
+  function resolveRepoSubgroupFromTarget(target) {
+    const wrap = target.closest('.repo-subgroup[data-group-id]');
+    if (!wrap) {
+      return null;
+    }
+    const groupId = wrap.dataset.groupId;
+    return {
+      repoRoot: wrap.dataset.repoRoot,
+      groupId,
+      unversionedGroup: groupId === 'unversioned',
+      category: false,
+    };
+  }
+
+  function resolveChangeListGroupFromTarget(target) {
+    return resolveRepoSubgroupFromTarget(target) || resolveCategoryGroupFromTarget(target);
+  }
+
+  /** Expand Changes category and all repo subgroups (used on Ctrl+K auto-check). */
   function expandChangesGroups() {
     let changed = false;
+    if (collapsedGroups.has(categoryCollapseKey('changes'))) {
+      collapsedGroups.delete(categoryCollapseKey('changes'));
+      changed = true;
+    }
     for (const repo of allRepos()) {
-      const rKey = repoKey(repo.rootPath);
-      if (collapsedRepos.has(rKey)) {
-        collapsedRepos.delete(rKey);
-        changed = true;
-      }
-      const gKey = groupKey(repo.rootPath, 'changes');
-      if (collapsedGroups.has(gKey)) {
-        collapsedGroups.delete(gKey);
+      const key = repoCollapseKey('changes', repo.rootPath);
+      if (collapsedGroups.has(key)) {
+        collapsedGroups.delete(key);
         changed = true;
       }
     }
     if (changed) {
-      saveCollapsedRepos();
       saveCollapsedGroups();
       renderFiles();
     }
@@ -599,6 +647,18 @@
 
   function selectionStillExists() {
     if (selectedGroup) {
+      if (selectedGroup.category) {
+        for (const repo of allRepos()) {
+          const items =
+            selectedGroup.groupId === 'unversioned'
+              ? getUnversioned(repo)
+              : getMergedChanges(repo);
+          if (items.length > 0) {
+            return true;
+          }
+        }
+        return false;
+      }
       const repo = findRepo(selectedGroup.repoRoot);
       if (!repo) {
         return false;
@@ -750,85 +810,250 @@
       return;
     }
 
-    const multi = repos.length > 1;
     const focused = activeRepoRoot();
-    let rendered = 0;
+    const changesEntries = repos.map((repo) => ({ repo, items: getMergedChanges(repo) }));
+    const unversionedEntries = repos.map((repo) => ({ repo, items: getUnversioned(repo) }));
 
-    for (const repo of repos) {
-      const tracked = getMergedChanges(repo);
-      const unversioned = getUnversioned(repo);
-      // Always list every Git repository in multi-root workspaces, including
-      // clean ones (no local changes). Skipping them made it look like the
-      // panel was missing repos (e.g. 3 folders open, only 2 shown).
+    fileList.appendChild(
+      renderCategoryGroup('Changes', 'changes', changesEntries, false, focused)
+    );
+    fileList.appendChild(
+      renderCategoryGroup('Unversioned Files', 'unversioned', unversionedEntries, true, focused)
+    );
+  }
 
-      rendered += 1;
-      const group = document.createElement('div');
-      group.className = 'repo-group';
-      if (multi && focused && repoKey(repo.rootPath) === repoKey(focused)) {
-        group.classList.add('focused');
+  function countSelectedInEntries(entries, unversionedGroup) {
+    let selected = 0;
+    let total = 0;
+    for (const { repo, items } of entries) {
+      total += items.length;
+      for (const item of items) {
+        if (unversionedGroup ? isUnversionedChecked(repo.rootPath, item.path) : isChangeChecked(repo.rootPath, item.path)) {
+          selected += 1;
+        }
       }
-
-      const collapsed = multi && collapsedRepos.has(repoKey(repo.rootPath));
-
-      if (multi) {
-        const title = document.createElement('div');
-        title.className = 'repo-group-title collapsible';
-        const branch = repo.branch ? ` · ${repo.branch}` : '';
-        const selectedCount =
-          tracked.filter((i) => isChangeChecked(repo.rootPath, i.path)).length +
-          unversioned.filter((i) => isUnversionedChecked(repo.rootPath, i.path)).length;
-        const total = tracked.length + unversioned.length;
-        title.innerHTML =
-          `<span class="repo-group-chevron">${collapsed ? '▸' : '▾'}</span>` +
-          `<span class="repo-group-name">${repo.name}${branch}</span><span class="repo-group-count">${formatGroupCount(selectedCount, total)}</span>`;
-        title.title = collapsed ? 'Click to expand' : 'Click to collapse';
-        title.addEventListener('click', () => toggleRepoCollapsed(repo.rootPath));
-        group.appendChild(title);
-      }
-
-      if (!collapsed) {
-        group.appendChild(renderChangeList('Changes', tracked, repo.rootPath, false, 'changes'));
-        group.appendChild(
-          renderChangeList('Unversioned Files', unversioned, repo.rootPath, true, 'unversioned')
-        );
-      } else {
-        group.classList.add('collapsed');
-      }
-      fileList.appendChild(group);
     }
+    return { selected, total };
+  }
 
-    if (!rendered) {
-      const empty = document.createElement('div');
-      empty.className = 'placeholder';
-      empty.textContent = 'No local changes';
-      fileList.appendChild(empty);
+  function setAllInEntries(entries, unversionedGroup, checked) {
+    for (const { repo, items } of entries) {
+      for (const item of items) {
+        if (unversionedGroup) {
+          toggleUnversionedChecked(repo.rootPath, item.path, checked);
+        } else {
+          setChangeChecked(repo.rootPath, item.path, checked);
+        }
+      }
     }
   }
 
-  function renderChangeList(title, items, repoRoot, unversionedGroup = false, groupId = '') {
-    const wrap = document.createElement('div');
-    wrap.className = 'change-list';
-    if (groupId) {
-      wrap.dataset.repoRoot = repoRoot;
-      wrap.dataset.groupId = groupId;
+  function attachGroupHeaderInteractions(head, groupContext, items, onToggleCollapse) {
+    const { repoRoot, groupId, unversionedGroup, category } = groupContext;
+
+    head.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || e.target.closest('input')) {
+        return;
+      }
+      if (e.target.closest('.group-title-chevron') || e.target.closest('.repo-subgroup-chevron')) {
+        return;
+      }
+      const clickKey = category
+        ? `category|${groupId}`
+        : `repo|${repoKey(repoRoot)}|${groupId}`;
+      if (consumePointerDouble(clickKey)) {
+        onToggleCollapse();
+      }
+    });
+
+    head.addEventListener('click', (e) => {
+      if (shouldSuppressPointerFollowUp()) {
+        e.preventDefault();
+        return;
+      }
+      if (e.target.closest('input')) {
+        return;
+      }
+      const onChevron =
+        e.target.closest('.group-title-chevron') || e.target.closest('.repo-subgroup-chevron');
+      if (onChevron) {
+        onToggleCollapse();
+        return;
+      }
+      selectGroup(repoRoot, groupId, unversionedGroup, category);
+      hideContextMenu();
+      applyFileListSelectionVisuals();
+    });
+
+    head.addEventListener('dblclick', (e) => {
+      if (shouldSuppressPointerFollowUp()) {
+        e.preventDefault();
+        return;
+      }
+      if (e.target.closest('input')) {
+        return;
+      }
+      if (e.target.closest('.group-title-chevron') || e.target.closest('.repo-subgroup-chevron')) {
+        return;
+      }
+      e.preventDefault();
+      markPointerFollowUpSuppressed();
+      onToggleCollapse();
+    });
+
+    head.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('input')) {
+        return;
+      }
+      e.preventDefault();
+      selectGroup(repoRoot, groupId, unversionedGroup, category);
+      hideContextMenu();
+      applyFileListSelectionVisuals();
+      if (!items.length) {
+        return;
+      }
+      const targets = category
+        ? entriesToTargets(groupContext.entries, unversionedGroup)
+        : targetsFromGroup(repoRoot, groupId, items, unversionedGroup);
+      showContextMenuAt(e.clientX, e.clientY, targets, unversionedGroup);
+    });
+  }
+
+  function entriesToTargets(entries, unversionedGroup) {
+    const targets = [];
+    for (const { repo, items } of entries) {
+      targets.push(...targetsFromGroup(repo.rootPath, unversionedGroup ? 'unversioned' : 'changes', items, unversionedGroup));
     }
-    const collapsed = groupId ? collapsedGroups.has(groupKey(repoRoot, groupId)) : false;
-    const selectedCount = unversionedGroup
-      ? items.filter((i) => isUnversionedChecked(repoRoot, i.path)).length
-      : items.filter((i) => isChangeChecked(repoRoot, i.path)).length;
+    return targets;
+  }
+
+  function renderCategoryGroup(title, groupId, entries, unversionedGroup, focusedRoot) {
+    const wrap = document.createElement('div');
+    wrap.className = 'category-group';
+    wrap.dataset.groupId = groupId;
+
+    const { selected, total } = countSelectedInEntries(entries, unversionedGroup);
+    const categoryCollapsed = collapsedGroups.has(categoryCollapseKey(groupId));
 
     const head = document.createElement('div');
-    head.className = 'group-title collapsible';
-    if (groupId && isGroupSelected(repoRoot, groupId)) {
+    head.className = 'group-title collapsible category-group-title';
+    if (isGroupSelected(null, groupId, true)) {
       head.classList.add('selected');
     }
-
-    const groupContext = { repoRoot, groupId, items, unversionedGroup };
 
     const selectAll = document.createElement('input');
     selectAll.type = 'checkbox';
     selectAll.className = 'group-select-all';
     selectAll.title = unversionedGroup ? 'Select all' : 'Include all in commit';
+    selectAll.disabled = total === 0;
+    selectAll.checked = total > 0 && selected === total;
+    selectAll.indeterminate = selected > 0 && selected < total;
+    selectAll.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (total === 0) {
+        return;
+      }
+      setAllInEntries(entries, unversionedGroup, selectAll.checked);
+      renderFiles();
+    });
+
+    const chevron = document.createElement('span');
+    chevron.className = 'group-title-chevron';
+    chevron.textContent = categoryCollapsed ? '▸' : '▾';
+
+    const name = document.createElement('span');
+    name.className = 'group-title-name';
+    name.textContent = title;
+
+    const count = document.createElement('span');
+    count.className = 'group-title-count';
+    count.textContent = unversionedGroup ? `${total} files` : formatGroupCount(selected, total);
+
+    head.appendChild(selectAll);
+    head.appendChild(chevron);
+    head.appendChild(name);
+    head.appendChild(count);
+    head.title = categoryCollapsed
+      ? 'Double-click to expand; click title to select group'
+      : 'Double-click to collapse; click title to select group';
+
+    const groupContext = {
+      repoRoot: null,
+      groupId,
+      items: entries.flatMap(({ items }) => items),
+      entries,
+      unversionedGroup,
+      category: true,
+    };
+    attachGroupHeaderInteractions(head, groupContext, groupContext.items, () =>
+      toggleCategoryCollapsed(groupId)
+    );
+    wrap.appendChild(head);
+
+    if (categoryCollapsed) {
+      return wrap;
+    }
+
+    if (!entries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-group category-empty';
+      empty.textContent = 'None';
+      wrap.appendChild(empty);
+      return wrap;
+    }
+
+    const multi = entries.length > 1;
+    if (!multi) {
+      const { repo, items } = entries[0];
+      if (!items.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-group category-empty';
+        empty.textContent = 'None';
+        wrap.appendChild(empty);
+        return wrap;
+      }
+      const repoGroupContext = {
+        repoRoot: repo.rootPath,
+        groupId,
+        items,
+        unversionedGroup,
+        category: false,
+      };
+      wrap.appendChild(renderFileRows(items, repo.rootPath, unversionedGroup, groupId, repoGroupContext, false));
+      return wrap;
+    }
+
+    for (const { repo, items } of entries) {
+      wrap.appendChild(renderRepoSubgroup(repo, items, groupId, unversionedGroup, focusedRoot));
+    }
+    return wrap;
+  }
+
+  function renderRepoSubgroup(repo, items, groupId, unversionedGroup, focusedRoot) {
+    const wrap = document.createElement('div');
+    wrap.className = 'repo-subgroup';
+    wrap.dataset.repoRoot = repo.rootPath;
+    wrap.dataset.groupId = groupId;
+
+    if (focusedRoot && repoKey(repo.rootPath) === repoKey(focusedRoot)) {
+      wrap.classList.add('focused');
+    }
+
+    const repoCollapsed = collapsedGroups.has(repoCollapseKey(groupId, repo.rootPath));
+    const selectedCount = unversionedGroup
+      ? items.filter((i) => isUnversionedChecked(repo.rootPath, i.path)).length
+      : items.filter((i) => isChangeChecked(repo.rootPath, i.path)).length;
+
+    const head = document.createElement('div');
+    head.className = 'repo-subgroup-title collapsible';
+    if (isGroupSelected(repo.rootPath, groupId, false)) {
+      head.classList.add('selected');
+    }
+
+    const selectAll = document.createElement('input');
+    selectAll.type = 'checkbox';
+    selectAll.className = 'group-select-all';
+    selectAll.title = unversionedGroup ? 'Select all in repository' : 'Include all in commit';
     selectAll.disabled = !items.length;
     selectAll.checked = items.length > 0 && selectedCount === items.length;
     selectAll.indeterminate = selectedCount > 0 && selectedCount < items.length;
@@ -840,130 +1065,81 @@
       const checked = selectAll.checked;
       if (unversionedGroup) {
         for (const item of items) {
-          toggleUnversionedChecked(repoRoot, item.path, checked);
+          toggleUnversionedChecked(repo.rootPath, item.path, checked);
         }
-        renderFiles();
-        return;
-      }
-      for (const item of items) {
-        setChangeChecked(repoRoot, item.path, checked);
+      } else {
+        for (const item of items) {
+          setChangeChecked(repo.rootPath, item.path, checked);
+        }
       }
       renderFiles();
     });
 
     const chevron = document.createElement('span');
-    chevron.className = 'group-title-chevron';
-    chevron.textContent = collapsed ? '▸' : '▾';
+    chevron.className = 'repo-subgroup-chevron';
+    chevron.textContent = repoCollapsed ? '▸' : '▾';
+
+    const colorDot = document.createElement('span');
+    colorDot.className = 'repo-color-dot';
+    colorDot.style.backgroundColor = repoColor(repo.rootPath);
+    colorDot.title = repo.name;
 
     const name = document.createElement('span');
-    name.className = 'group-title-name';
-    name.textContent = title;
+    name.className = 'repo-subgroup-name';
+    name.textContent = repo.name;
 
     const count = document.createElement('span');
-    count.className = 'group-title-count';
-    count.textContent = formatGroupCount(selectedCount, items.length);
+    count.className = 'repo-subgroup-count';
+    count.textContent = unversionedGroup
+      ? `${items.length} files`
+      : formatGroupCount(selectedCount, items.length);
 
     head.appendChild(selectAll);
     head.appendChild(chevron);
+    head.appendChild(colorDot);
     head.appendChild(name);
     head.appendChild(count);
 
-    if (groupId) {
-      head.title = collapsed
-        ? 'Double-click to expand; click title to select group'
-        : 'Double-click to collapse; click title to select group; chevron to collapse';
-      head.addEventListener('mousedown', (e) => {
-        if (e.button !== 0 || e.target === selectAll || e.target.closest('.group-select-all')) {
-          return;
-        }
-        const resolved = resolveChangeListGroupFromTarget(e.target);
-        if (!resolved) {
-          return;
-        }
-        if (e.target === chevron || e.target.closest('.group-title-chevron')) {
-          return;
-        }
-        const clickKey = `group|${repoKey(resolved.repoRoot)}|${resolved.groupId}`;
-        if (consumePointerDouble(clickKey)) {
-          toggleGroupCollapsed(resolved.repoRoot, resolved.groupId);
-        }
-      });
-      head.addEventListener('click', (e) => {
-        if (shouldSuppressPointerFollowUp()) {
-          e.preventDefault();
-          return;
-        }
-        if (e.target === selectAll || e.target.closest('.group-select-all')) {
-          return;
-        }
-        const resolved = resolveChangeListGroupFromTarget(e.target);
-        if (!resolved) {
-          return;
-        }
-        const onChevron = e.target === chevron || e.target.closest('.group-title-chevron');
-        if (onChevron) {
-          toggleGroupCollapsed(resolved.repoRoot, resolved.groupId);
-          return;
-        }
-        selectGroup(resolved.repoRoot, resolved.groupId, resolved.unversionedGroup);
-        hideContextMenu();
-        applyFileListSelectionVisuals();
-      });
-      head.addEventListener('dblclick', (e) => {
-        if (shouldSuppressPointerFollowUp()) {
-          e.preventDefault();
-          return;
-        }
-        if (e.target === selectAll || e.target.closest('.group-select-all')) {
-          return;
-        }
-        if (e.target === chevron || e.target.closest('.group-title-chevron')) {
-          return;
-        }
-        e.preventDefault();
-        const resolved = resolveChangeListGroupFromTarget(e.target);
-        if (!resolved) {
-          return;
-        }
-        markPointerFollowUpSuppressed();
-        toggleGroupCollapsed(resolved.repoRoot, resolved.groupId);
-      });
-      head.addEventListener('contextmenu', (e) => {
-        if (e.target === selectAll || e.target.closest('.group-select-all')) {
-          return;
-        }
-        e.preventDefault();
-        const resolved = resolveChangeListGroupFromTarget(e.target);
-        if (!resolved) {
-          return;
-        }
-        selectGroup(resolved.repoRoot, resolved.groupId, resolved.unversionedGroup);
-        hideContextMenu();
-        applyFileListSelectionVisuals();
-        if (!items.length) {
-          return;
-        }
-        showContextMenuAt(
-          e.clientX,
-          e.clientY,
-          targetsFromGroup(resolved.repoRoot, resolved.groupId, items, resolved.unversionedGroup),
-          resolved.unversionedGroup
-        );
-      });
+    if (repo.branch) {
+      const badge = document.createElement('span');
+      badge.className = 'repo-branch-badge';
+      badge.textContent = repo.branch;
+      badge.title = repo.branch;
+      head.appendChild(badge);
     }
+
+    const groupContext = {
+      repoRoot: repo.rootPath,
+      groupId,
+      items,
+      unversionedGroup,
+      category: false,
+    };
+    attachGroupHeaderInteractions(head, groupContext, items, () =>
+      toggleRepoInCategoryCollapsed(groupId, repo.rootPath)
+    );
     wrap.appendChild(head);
 
-    if (collapsed) {
+    if (repoCollapsed) {
+      wrap.classList.add('collapsed');
       return wrap;
     }
 
     if (!items.length) {
       const empty = document.createElement('div');
-      empty.className = 'empty-group';
+      empty.className = 'empty-group repo-subgroup-empty';
       empty.textContent = 'None';
       wrap.appendChild(empty);
       return wrap;
     }
+
+    wrap.appendChild(renderFileRows(items, repo.rootPath, unversionedGroup, groupId, groupContext, true));
+    return wrap;
+  }
+
+  function renderFileRows(items, repoRoot, unversionedGroup, groupId, groupContext, nested) {
+    const list = document.createElement('div');
+    list.className = nested ? 'file-rows nested' : 'file-rows';
 
     for (let indexInGroup = 0; indexInGroup < items.length; indexInGroup += 1) {
       const item = items[indexInGroup];
@@ -1075,10 +1251,7 @@
       row.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         clearGroupSelection();
-        if (
-          selectedFiles.length <= 1 ||
-          !isFileSelected(repoRoot, item, gitStaged)
-        ) {
+        if (selectedFiles.length <= 1 || !isFileSelected(repoRoot, item, gitStaged)) {
           selectedFiles = [entry];
           selectionAnchor = { repoRoot, groupId, index: indexInGroup };
         }
@@ -1091,9 +1264,9 @@
           unversionedGroup
         );
       });
-      wrap.appendChild(row);
+      list.appendChild(row);
     }
-    return wrap;
+    return list;
   }
 
   function validateBeforeCommit() {
