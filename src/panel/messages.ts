@@ -66,6 +66,9 @@ export type RollbackDialogPayload = {
 	path: string;
 	staged: boolean;
 	isUntracked: boolean;
+	batch?: boolean;
+	paths?: Array<{ repoRoot: string; path: string; staged: boolean }>;
+	allUntracked?: boolean;
 };
 
 export type SyncMode = 'merge' | 'rebase';
@@ -126,7 +129,9 @@ export type WebviewToHost =
 	| { type: 'openFile'; repoRoot: string; path: string }
 	| { type: 'revealInExplorer'; repoRoot: string; path: string }
 	| { type: 'rollback'; repoRoot: string; path: string; staged: boolean }
+	| { type: 'rollbackBatch'; paths: Array<{ repoRoot: string; path: string; staged: boolean }>; unversionedGroup?: boolean }
 	| { type: 'rollbackConfirm'; repoRoot: string; path: string; staged: boolean }
+	| { type: 'rollbackBatchConfirm'; paths: Array<{ repoRoot: string; path: string; staged: boolean }> }
 	| { type: 'rollbackCancel' }
 	| { type: 'addToGit'; paths: Array<{ repoRoot: string; path: string }> }
 	| {

@@ -215,6 +215,37 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		});
 	}
 
+	private async startRollbackBatchFlow(
+		paths: Array<{ repoRoot: string; path: string; staged: boolean }>,
+		unversionedGroup = false
+	): Promise<void> {
+		if (!paths.length) {
+			return;
+		}
+		const allUntracked =
+			unversionedGroup || paths.every((p) => this.git.isUntracked(p.path, p.repoRoot));
+		const firstTracked = paths.find((p) => !this.git.isUntracked(p.path, p.repoRoot));
+		if (firstTracked) {
+			try {
+				await this.git.openRollbackDiff(firstTracked.path, firstTracked.repoRoot);
+			} catch {
+				// Diff may fail for some edge cases; still show confirm dialog
+			}
+		}
+		this.post({
+			type: 'showRollbackDialog',
+			payload: {
+				repoRoot: paths[0].repoRoot,
+				path: paths[0].path,
+				staged: paths[0].staged,
+				isUntracked: allUntracked,
+				batch: true,
+				allUntracked,
+				paths,
+			},
+		});
+	}
+
 	private setSelection(repoRoot: string, filePath: string | null, staged: boolean): void {
 		if (!filePath) {
 			this.selected = undefined;
@@ -277,9 +308,19 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				case 'rollback':
 					await this.startRollbackFlow(msg);
 					break;
+				case 'rollbackBatch':
+					await this.startRollbackBatchFlow(msg.paths, msg.unversionedGroup);
+					break;
 				case 'rollbackConfirm':
 					await this.withBusy(async () => {
 						await this.git.rollbackFile(msg.path, msg.repoRoot);
+					});
+					break;
+				case 'rollbackBatchConfirm':
+					await this.withBusy(async () => {
+						for (const { repoRoot, path } of msg.paths) {
+							await this.git.rollbackFile(path, repoRoot);
+						}
 					});
 					break;
 				case 'rollbackCancel':
