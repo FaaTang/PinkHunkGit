@@ -16,7 +16,6 @@ export function logGitStart(repoRoot: string, commandLine: string): void {
 	const label = repoLabel(repoRoot);
 	appendLine(`[${timestamp()}] ${label}`);
 	appendLine(`  $ ${commandLine}`);
-	channel?.show(true);
 }
 
 export function logGitOk(durationMs: number, output?: string): void {
@@ -28,6 +27,7 @@ export function logGitFail(err: unknown, durationMs: number, output?: string): v
 	const message = err instanceof Error ? err.message : String(err);
 	appendLine(`  FAILED (${durationMs}ms): ${message}`);
 	appendGitOutput(output);
+	channel?.show(true);
 }
 
 export function formatGitShellCommand(args: string[]): string {

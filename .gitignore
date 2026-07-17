@@ -151,3 +151,4 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 .docs/
+.github.code-workspace

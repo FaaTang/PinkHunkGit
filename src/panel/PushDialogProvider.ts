@@ -122,13 +122,13 @@ export class PushDialogProvider implements vscode.Disposable {
 				case 'push':
 					await this.withBusy(async () => {
 						await this.runPushMany(msg.repoRoots, !!msg.pushTags);
-					});
+					}, 'Pushing…');
 					break;
 				case 'askPushConfirm':
 					await this.withBusy(async () => {
 						const roots = msg.repoRoot ? [msg.repoRoot] : this.pendingPushRoots ?? [];
 						await this.runPushMany(roots.length ? roots : undefined, !!msg.pushTags);
-					});
+					}, 'Pushing…');
 					break;
 				case 'pushSyncPreview':
 					await this.runSyncPreview(msg.mode, msg.repoRoot);
@@ -279,7 +279,7 @@ export class PushDialogProvider implements vscode.Disposable {
 			}
 			await this.git.refresh();
 			await this.sendState();
-		});
+		}, 'Creating tag…');
 
 		if (succeeded.length && !failed.length) {
 			const message =
@@ -543,6 +543,12 @@ export class PushDialogProvider implements vscode.Disposable {
         <button id="newTagCancelBtn" type="button">Cancel</button>
         <button id="newTagConfirmBtn" class="primary" type="button">Create</button>
       </div>
+    </div>
+  </div>
+  <div id="loadingOverlay" class="loading-overlay hidden">
+    <div class="loading-box">
+      <div class="loading-spinner" aria-hidden="true"></div>
+      <span id="loadingMessage">Working…</span>
     </div>
   </div>
   <script nonce="${nonce}" src="${scriptUri}"></script>

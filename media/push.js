@@ -30,6 +30,8 @@
   const newTagError = document.getElementById('newTagError');
   const newTagCancelBtn = document.getElementById('newTagCancelBtn');
   const newTagConfirmBtn = document.getElementById('newTagConfirmBtn');
+  const loadingOverlay = document.getElementById('loadingOverlay');
+  const loadingMessage = document.getElementById('loadingMessage');
 
   let payload = { targets: [], activeRepoRoot: '', pendingRepoRoots: [] };
   let modalState = 'confirm';
@@ -50,11 +52,25 @@
 
   function setBusy(busy, message) {
     document.body.classList.toggle('busy', !!busy);
-    [cancelBtn, pushBtn, mergeBtn, rebaseBtn, abortBtn, continueBtn, laterBtn, newTagBtn, newTagCancelBtn, newTagConfirmBtn].forEach((btn) => {
+    [cancelBtn, pushBtn, mergeBtn, rebaseBtn, abortBtn, continueBtn, laterBtn, newTagBtn, newTagCancelBtn, newTagConfirmBtn, closeBtn].forEach((btn) => {
       if (btn) {
         btn.disabled = !!busy;
       }
     });
+    if (newTagInput) {
+      newTagInput.disabled = !!busy;
+    }
+    if (pushTagsCheckbox) {
+      pushTagsCheckbox.disabled = !!busy;
+    }
+    if (loadingOverlay) {
+      loadingOverlay.classList.toggle('hidden', !busy);
+    }
+    if (loadingMessage && message) {
+      loadingMessage.textContent = message;
+    } else if (loadingMessage && busy) {
+      loadingMessage.textContent = 'Working…';
+    }
     if (statusBanner && modalState !== 'confirm') {
       if (busy && message) {
         statusBanner.classList.remove('hidden');
@@ -694,6 +710,9 @@
   }
   if (newTagModal) {
     newTagModal.addEventListener('click', (e) => {
+      if (document.body.classList.contains('busy')) {
+        return;
+      }
       if (e.target === newTagModal) {
         closeNewTagModal();
       }
@@ -732,6 +751,9 @@
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (document.body.classList.contains('busy')) {
+        return;
+      }
       e.preventDefault();
       if (newTagOpen) {
         closeNewTagModal();
