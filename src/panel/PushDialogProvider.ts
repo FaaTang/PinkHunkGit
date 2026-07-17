@@ -87,7 +87,6 @@ export class PushDialogProvider implements vscode.Disposable {
 	private async sendState(): Promise<void> {
 		const workspace = this.git.getWorkspaceSnapshot();
 		const targets = await this.git.getPushTargets({
-			repoRoots: this.pendingPushRoots,
 			activeRepoRoot: workspace.activeRepoRoot ?? workspace.active.rootPath,
 		});
 		const payload: PushDialogPayload = {
@@ -174,7 +173,7 @@ export class PushDialogProvider implements vscode.Disposable {
 					});
 					break;
 				case 'createTag':
-					await this.handleCreateTags(msg.repoRoots);
+					await this.handleCreateTags(msg.repoRoots, msg.tagName);
 					break;
 			}
 		} catch (err) {
@@ -242,35 +241,21 @@ export class PushDialogProvider implements vscode.Disposable {
 		}
 	}
 
-	private async handleCreateTags(repoRoots: string[]): Promise<void> {
+	private async handleCreateTags(repoRoots: string[], tagName: string): Promise<void> {
 		if (!repoRoots.length) {
-			vscode.window.showWarningMessage('Select at least one branch to tag.');
-			return;
-		}
-
-		const tagName = await vscode.window.showInputBox({
-			title: 'New Tag',
-			prompt:
-				repoRoots.length > 1
-					? `Create tag on ${repoRoots.length} selected repositories (at each HEAD)`
-					: 'Create tag at the current branch HEAD',
-			placeHolder: 'v0.1.21',
-			validateInput: (value) => {
-				const trimmed = value.trim();
-				if (!trimmed) {
-					return 'Tag name cannot be empty.';
-				}
-				if (!isValidTagName(trimmed)) {
-					return 'Invalid tag name.';
-				}
-				return undefined;
-			},
-		});
-		if (!tagName?.trim()) {
+			this.post({ type: 'tagResult', success: false, message: 'Select at least one branch to tag.' });
 			return;
 		}
 
 		const trimmed = tagName.trim();
+		if (!trimmed) {
+			this.post({ type: 'tagResult', success: false, message: 'Tag name cannot be empty.' });
+			return;
+		}
+		if (!isValidTagName(trimmed)) {
+			this.post({ type: 'tagResult', success: false, message: 'Invalid tag name.' });
+			return;
+		}
 		const succeeded: string[] = [];
 		const failed: Array<{ name: string; error: string }> = [];
 
@@ -293,20 +278,22 @@ export class PushDialogProvider implements vscode.Disposable {
 		});
 
 		if (succeeded.length && !failed.length) {
-			vscode.window.showInformationMessage(
+			const message =
 				succeeded.length === 1
 					? `Created tag ${trimmed} on ${succeeded[0]}.`
-					: `Created tag ${trimmed} on ${succeeded.length} repositories.`
-			);
+					: `Created tag ${trimmed} on ${succeeded.length} repositories.`;
+			this.post({ type: 'tagResult', success: true, message });
+			vscode.window.showInformationMessage(message);
 		} else if (succeeded.length && failed.length) {
 			const details = failed.map((f) => `${f.name}: ${f.error}`).join('\n');
-			vscode.window.showWarningMessage(
-				`Tag ${trimmed} created on ${succeeded.length} repo(s); ${failed.length} failed.`,
-				{ modal: true, detail: details }
-			);
+			const message = `Tag ${trimmed} created on ${succeeded.length} repo(s); ${failed.length} failed.`;
+			this.post({ type: 'tagResult', success: false, message: `${message}\n${details}` });
+			vscode.window.showWarningMessage(message, { modal: true, detail: details });
 		} else if (failed.length) {
 			const details = failed.map((f) => `${f.name}: ${f.error}`).join('\n');
-			vscode.window.showErrorMessage(`Failed to create tag ${trimmed}.`, { modal: true, detail: details });
+			const message = `Failed to create tag ${trimmed}.`;
+			this.post({ type: 'tagResult', success: false, message: `${message}\n${details}` });
+			vscode.window.showErrorMessage(message, { modal: true, detail: details });
 		}
 	}
 
@@ -502,6 +489,19 @@ export class PushDialogProvider implements vscode.Disposable {
           <button id="pushBtn" class="primary" type="button">Push</button>
         </div>
       </footer>
+    </div>
+  </div>
+  <div id="newTagModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>New Tag</h2>
+      <p id="newTagSummary">Create tag at the current branch HEAD.</p>
+      <label class="field-label" for="newTagInput">Tag name</label>
+      <input id="newTagInput" class="field-input" type="text" placeholder="v0.1.21" autocomplete="off" spellcheck="false" />
+      <div id="newTagError" class="field-error hidden"></div>
+      <div class="modal-actions">
+        <button id="newTagCancelBtn" type="button">Cancel</button>
+        <button id="newTagConfirmBtn" class="primary" type="button">Create</button>
+      </div>
     </div>
   </div>
   <script nonce="${nonce}" src="${scriptUri}"></script>

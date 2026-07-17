@@ -24,9 +24,17 @@
   const continueBtn = document.getElementById('continueBtn');
   const laterBtn = document.getElementById('laterBtn');
   const closeBtn = document.getElementById('closeBtn');
+  const newTagModal = document.getElementById('newTagModal');
+  const newTagSummary = document.getElementById('newTagSummary');
+  const newTagInput = document.getElementById('newTagInput');
+  const newTagError = document.getElementById('newTagError');
+  const newTagCancelBtn = document.getElementById('newTagCancelBtn');
+  const newTagConfirmBtn = document.getElementById('newTagConfirmBtn');
 
   let payload = { targets: [], activeRepoRoot: '', pendingRepoRoots: [] };
   let modalState = 'confirm';
+  let newTagOpen = false;
+  let pendingTagRoots = [];
   let selectedTargetRoot = null;
   let selectedCommitHash = null;
   let checkedRoots = new Set();
@@ -41,7 +49,7 @@
 
   function setBusy(busy) {
     document.body.classList.toggle('busy', !!busy);
-    [cancelBtn, pushBtn, mergeBtn, rebaseBtn, abortBtn, continueBtn, laterBtn, newTagBtn].forEach((btn) => {
+    [cancelBtn, pushBtn, mergeBtn, rebaseBtn, abortBtn, continueBtn, laterBtn, newTagBtn, newTagCancelBtn, newTagConfirmBtn].forEach((btn) => {
       if (btn) {
         btn.disabled = !!busy;
       }
@@ -93,6 +101,74 @@
 
   if (pushTagsCheckbox) {
     pushTagsCheckbox.addEventListener('change', savePushTagsPreference);
+  }
+
+  function isValidTagName(name) {
+    if (!name || name.includes('..') || name.startsWith('-') || name.endsWith('.')) {
+      return false;
+    }
+    return /^[^\s~^:?*[\]\\]+$/.test(name);
+  }
+
+  function showNewTagError(message) {
+    if (!newTagError) {
+      return;
+    }
+    if (message) {
+      newTagError.textContent = message;
+      newTagError.classList.remove('hidden');
+    } else {
+      newTagError.textContent = '';
+      newTagError.classList.add('hidden');
+    }
+  }
+
+  function openNewTagModal(roots) {
+    pendingTagRoots = roots;
+    newTagOpen = true;
+    if (newTagModal) {
+      newTagModal.classList.remove('hidden');
+    }
+    if (newTagSummary) {
+      if (roots.length === 1) {
+        const target = findTarget(roots[0]);
+        const branch = target?.branch || '(detached)';
+        newTagSummary.textContent = `Create tag at HEAD on ${target?.repoName || 'repository'} (${branch}).`;
+      } else {
+        newTagSummary.textContent = `Create tag on ${roots.length} selected repositories (at each HEAD).`;
+      }
+    }
+    if (newTagInput) {
+      newTagInput.value = '';
+      newTagInput.focus();
+    }
+    showNewTagError('');
+  }
+
+  function closeNewTagModal() {
+    newTagOpen = false;
+    pendingTagRoots = [];
+    if (newTagModal) {
+      newTagModal.classList.add('hidden');
+    }
+    showNewTagError('');
+    if (newTagInput) {
+      newTagInput.value = '';
+    }
+  }
+
+  function submitNewTag() {
+    const trimmed = (newTagInput?.value || '').trim();
+    if (!trimmed) {
+      showNewTagError('Tag name cannot be empty.');
+      return;
+    }
+    if (!isValidTagName(trimmed)) {
+      showNewTagError('Invalid tag name.');
+      return;
+    }
+    showNewTagError('');
+    post({ type: 'createTag', repoRoots: pendingTagRoots, tagName: trimmed });
   }
 
   function findTarget(repoRoot) {
@@ -491,7 +567,29 @@
         showFooterError('Select at least one branch to tag.');
         return;
       }
-      post({ type: 'createTag', repoRoots: roots });
+      openNewTagModal(roots);
+    });
+  }
+  if (newTagCancelBtn) {
+    newTagCancelBtn.addEventListener('click', closeNewTagModal);
+  }
+  if (newTagConfirmBtn) {
+    newTagConfirmBtn.addEventListener('click', submitNewTag);
+  }
+  if (newTagInput) {
+    newTagInput.addEventListener('input', () => showNewTagError(''));
+    newTagInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitNewTag();
+      }
+    });
+  }
+  if (newTagModal) {
+    newTagModal.addEventListener('click', (e) => {
+      if (e.target === newTagModal) {
+        closeNewTagModal();
+      }
     });
   }
   pushBtn.addEventListener('click', () => {
@@ -518,6 +616,10 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
+      if (newTagOpen) {
+        closeNewTagModal();
+        return;
+      }
       post({ type: 'cancel' });
     }
   });
@@ -535,6 +637,15 @@
         statusBanner.classList.remove('hidden');
         statusBanner.textContent = msg.message;
         statusBanner.classList.add('error');
+        break;
+      case 'tagResult':
+        if (msg.success) {
+          closeNewTagModal();
+        } else if (newTagOpen) {
+          showNewTagError(msg.message);
+        } else {
+          showFooterError(msg.message);
+        }
         break;
       case 'showRejected': {
         const p = msg.payload;
