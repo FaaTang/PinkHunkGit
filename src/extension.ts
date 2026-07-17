@@ -58,7 +58,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				}
 				gitService.rememberEditorContext();
 				try {
-					await gitService.stageTrackedChanges();
+					await gitService.runWithUserLogging(() => gitService!.stageTrackedChanges());
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
 					vscode.window.showWarningMessage(`Failed to auto-stage Changes: ${message}`);
@@ -97,9 +97,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 						cancellable: false,
 					},
 					async (progress) =>
-						gitService!.pullAllRepositories((repository, index, total) => {
-							progress.report({ message: `${repository} (${index}/${total})` });
-						})
+						gitService!.runWithUserLogging(() =>
+							gitService!.pullAllRepositories((repository, index, total) => {
+								progress.report({ message: `${repository} (${index}/${total})` });
+							})
+						)
 				);
 
 				if (!result.failed.length) {

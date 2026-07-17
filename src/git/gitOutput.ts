@@ -2,9 +2,14 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 let channel: vscode.OutputChannel | undefined;
+let userGitLogging = false;
 
 export function initGitOutput(output: vscode.OutputChannel): void {
 	channel = output;
+}
+
+export function setUserGitLogging(enabled: boolean): void {
+	userGitLogging = enabled;
 }
 
 export function logExtension(message: string): void {
@@ -13,17 +18,26 @@ export function logExtension(message: string): void {
 
 /** Log the start of a git shell command or VS Code Git API call. */
 export function logGitStart(repoRoot: string, commandLine: string): void {
+	if (!userGitLogging) {
+		return;
+	}
 	const label = repoLabel(repoRoot);
 	appendLine(`[${timestamp()}] ${label}`);
 	appendLine(`  $ ${commandLine}`);
 }
 
 export function logGitOk(durationMs: number, output?: string): void {
+	if (!userGitLogging) {
+		return;
+	}
 	appendLine(`  OK (${durationMs}ms)`);
 	appendGitOutput(output);
 }
 
 export function logGitFail(err: unknown, durationMs: number, output?: string): void {
+	if (!userGitLogging) {
+		return;
+	}
 	const message = err instanceof Error ? err.message : String(err);
 	appendLine(`  FAILED (${durationMs}ms): ${message}`);
 	appendGitOutput(output);

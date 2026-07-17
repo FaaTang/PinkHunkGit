@@ -11,6 +11,7 @@ import {
 	logGitFail,
 	logGitOk,
 	logGitStart,
+	setUserGitLogging,
 } from './gitOutput';
 import {
 	ChangeItem,
@@ -225,6 +226,15 @@ export class GitService implements vscode.Disposable {
 		this.repoDisposables.forEach((d) => d.dispose());
 		this.disposables.forEach((d) => d.dispose());
 		this._onDidChange.dispose();
+	}
+
+	async runWithUserLogging<T>(fn: () => Promise<T>): Promise<T> {
+		setUserGitLogging(true);
+		try {
+			return await fn();
+		} finally {
+			setUserGitLogging(false);
+		}
 	}
 
 	getRepositoryCount(): number {
@@ -792,8 +802,11 @@ export class GitService implements vscode.Disposable {
 	async getPushTargets(options?: {
 		repoRoots?: string[];
 		activeRepoRoot?: string;
+		skipRefresh?: boolean;
 	}): Promise<PushTarget[]> {
-		await this.refresh();
+		if (!options?.skipRefresh) {
+			await this.refresh();
+		}
 		const workspace = this.getWorkspaceSnapshot();
 		const activeRoot = options?.activeRepoRoot ?? workspace.activeRepoRoot ?? workspace.active.rootPath;
 		const requested = options?.repoRoots?.length ? options.repoRoots : undefined;

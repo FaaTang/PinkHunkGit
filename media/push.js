@@ -221,6 +221,28 @@
     return new Set(payload.targets.map((t) => normalizeRepoRoot(t.repoRoot)));
   }
 
+  function selectTarget(key) {
+    const changed = selectedTargetRoot !== key;
+    selectedTargetRoot = key;
+    if (changed) {
+      selectedCommitHash = null;
+    }
+    pushRepoRoot = findTargetByKey(key)?.repoRoot || pushRepoRoot;
+    renderTargets();
+    renderCommits();
+    updateTitle();
+  }
+
+  function toggleTargetChecked(key, checked) {
+    targetSelectionInitialized = true;
+    if (checked) {
+      checkedRoots.add(key);
+    } else {
+      checkedRoots.delete(key);
+    }
+    renderTargets();
+  }
+
   function renderTargets() {
     targetList.innerHTML = '';
     if (!payload.targets.length) {
@@ -229,21 +251,6 @@
       empty.textContent = 'No repositories to push.';
       targetList.appendChild(empty);
       return;
-    }
-
-    function setTargetChecked(key, checked) {
-      targetSelectionInitialized = true;
-      if (checked) {
-        checkedRoots.add(key);
-      } else {
-        checkedRoots.delete(key);
-      }
-      selectedTargetRoot = key;
-      selectedCommitHash = null;
-      pushRepoRoot = findTargetByKey(key)?.repoRoot || pushRepoRoot;
-      renderTargets();
-      renderCommits();
-      updateTitle();
     }
 
     payload.targets.forEach((target) => {
@@ -256,7 +263,10 @@
       checkbox.checked = checkedRoots.has(key);
       checkbox.addEventListener('click', (e) => {
         e.stopPropagation();
-        setTargetChecked(key, checkbox.checked);
+      });
+      checkbox.addEventListener('change', (e) => {
+        e.stopPropagation();
+        toggleTargetChecked(key, checkbox.checked);
       });
 
       const label = document.createElement('span');
@@ -266,8 +276,24 @@
 
       row.appendChild(checkbox);
       row.appendChild(label);
-      row.addEventListener('click', () => {
-        setTargetChecked(key, !checkedRoots.has(key));
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('input[type="checkbox"]')) {
+          return;
+        }
+        selectTarget(key);
+      });
+      row.addEventListener('dblclick', (e) => {
+        if (e.target.closest('input[type="checkbox"]')) {
+          return;
+        }
+        e.preventDefault();
+        targetSelectionInitialized = true;
+        if (checkedRoots.has(key)) {
+          checkedRoots.delete(key);
+        } else {
+          checkedRoots.add(key);
+        }
+        selectTarget(key);
       });
       targetList.appendChild(row);
     });
@@ -278,7 +304,15 @@
     const target = findTargetByKey(selectedTargetRoot) || payload.targets[0];
     const commits = target?.commits || [];
 
-    if (!target || !commits.length) {
+    if (!target) {
+      noCommitSelected.textContent = 'No commits selected';
+      noCommitSelected.classList.remove('hidden');
+      commitList.classList.add('hidden');
+      return;
+    }
+
+    if (!commits.length) {
+      noCommitSelected.textContent = 'No commits to push';
       noCommitSelected.classList.remove('hidden');
       commitList.classList.add('hidden');
       return;
@@ -338,6 +372,7 @@
 
   function showConfirmView(data) {
     modalState = 'confirm';
+    const prevSelected = selectedTargetRoot;
     payload = data;
     const targetKeys = new Set(data.targets.map((target) => normalizeRepoRoot(target.repoRoot)));
     if (!targetSelectionInitialized) {
@@ -347,13 +382,16 @@
       checkedRoots = new Set([...checkedRoots].filter((key) => targetKeys.has(key)));
     }
     const activeKey = normalizeRepoRoot(data.activeRepoRoot || data.targets[0]?.repoRoot || '');
-    selectedTargetRoot =
-      selectedTargetRoot && targetKeys.has(selectedTargetRoot)
-        ? selectedTargetRoot
-        : checkedRoots.has(activeKey)
-          ? activeKey
-          : [...checkedRoots][0] || activeKey || null;
-    selectedCommitHash = null;
+    if (prevSelected && targetKeys.has(prevSelected)) {
+      selectedTargetRoot = prevSelected;
+    } else {
+      selectedTargetRoot = checkedRoots.has(activeKey)
+        ? activeKey
+        : [...checkedRoots][0] || activeKey || null;
+    }
+    if (prevSelected !== selectedTargetRoot) {
+      selectedCommitHash = null;
+    }
     pushRepoRoot = findTargetByKey(selectedTargetRoot)?.repoRoot || data.targets[0]?.repoRoot || null;
     conflictItems = [];
     selectedConflictPath = null;

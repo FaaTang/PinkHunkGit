@@ -12,13 +12,14 @@ export class PushDialogProvider implements vscode.Disposable {
 	private pendingPushRoots?: string[];
 	private dialogPhase: 'confirm' | 'alt' = 'confirm';
 	private conflictContext?: { mode: import('./messages').SyncMode; repoRoot?: string };
+	private refreshTimer?: ReturnType<typeof setTimeout>;
 	private readonly disposables: vscode.Disposable[] = [];
 
 	constructor(
 		private readonly extensionUri: vscode.Uri,
 		private readonly git: GitService
 	) {
-		this.disposables.push(this.git.onDidChange(() => void this.refreshIfOpen()));
+		this.disposables.push(this.git.onDidChange(() => this.scheduleRefreshIfOpen()));
 	}
 
 	dispose(): void {
@@ -66,9 +67,26 @@ export class PushDialogProvider implements vscode.Disposable {
 	}
 
 	close(): void {
+		if (this.refreshTimer) {
+			clearTimeout(this.refreshTimer);
+			this.refreshTimer = undefined;
+		}
 		this.panel?.dispose();
 		this.panel = undefined;
 		this.pendingPushRoots = undefined;
+	}
+
+	private scheduleRefreshIfOpen(): void {
+		if (!this.panel) {
+			return;
+		}
+		if (this.refreshTimer) {
+			clearTimeout(this.refreshTimer);
+		}
+		this.refreshTimer = setTimeout(() => {
+			this.refreshTimer = undefined;
+			void this.refreshIfOpen();
+		}, 300);
 	}
 
 	private async refreshIfOpen(): Promise<void> {
@@ -76,7 +94,7 @@ export class PushDialogProvider implements vscode.Disposable {
 			return;
 		}
 		if (this.dialogPhase === 'confirm') {
-			await this.sendState();
+			await this.sendState({ skipRefresh: true });
 			return;
 		}
 		if (this.conflictContext) {
@@ -84,10 +102,11 @@ export class PushDialogProvider implements vscode.Disposable {
 		}
 	}
 
-	private async sendState(): Promise<void> {
+	private async sendState(options?: { skipRefresh?: boolean }): Promise<void> {
 		const workspace = this.git.getWorkspaceSnapshot();
 		const targets = await this.git.getPushTargets({
 			activeRepoRoot: workspace.activeRepoRoot ?? workspace.active.rootPath,
+			skipRefresh: options?.skipRefresh,
 		});
 		const payload: PushDialogPayload = {
 			targets,
@@ -363,40 +382,42 @@ export class PushDialogProvider implements vscode.Disposable {
 	}
 
 	private async runSyncPreview(mode: import('./messages').SyncMode, repoRoot?: string): Promise<void> {
-		this.dialogPhase = 'alt';
-		if (repoRoot) {
-			try {
-				this.git.setActiveRepository(repoRoot);
-			} catch {
-				// keep current
+		await this.git.runWithUserLogging(async () => {
+			this.dialogPhase = 'alt';
+			if (repoRoot) {
+				try {
+					this.git.setActiveRepository(repoRoot);
+				} catch {
+					// keep current
+				}
 			}
-		}
-		const ctx = this.git.getPushContext();
-		const snap = this.git.getWorkspaceSnapshot().active;
-		const resolvedRoot = snap.rootPath || repoRoot;
+			const ctx = this.git.getPushContext();
+			const snap = this.git.getWorkspaceSnapshot().active;
+			const resolvedRoot = snap.rootPath || repoRoot;
 
-		this.post({ type: 'busy', busy: true, message: 'Loading incoming commits…' });
-		try {
-			await this.git.refresh();
-			const [commits, blockers] = await Promise.all([
-				this.git.getIncomingCommits(resolvedRoot),
-				this.git.getMergeBlockers(resolvedRoot),
-			]);
-			this.post({
-				type: 'showSyncPreview',
-				payload: {
-					mode,
-					repoRoot: resolvedRoot,
-					repoName: ctx.repoName,
-					branch: ctx.branch,
-					upstream: ctx.upstream,
-					commits,
-					blockers,
-				},
-			});
-		} finally {
-			this.post({ type: 'busy', busy: false });
-		}
+			this.post({ type: 'busy', busy: true, message: 'Loading incoming commits…' });
+			try {
+				await this.git.refresh();
+				const [commits, blockers] = await Promise.all([
+					this.git.getIncomingCommits(resolvedRoot),
+					this.git.getMergeBlockers(resolvedRoot),
+				]);
+				this.post({
+					type: 'showSyncPreview',
+					payload: {
+						mode,
+						repoRoot: resolvedRoot,
+						repoName: ctx.repoName,
+						branch: ctx.branch,
+						upstream: ctx.upstream,
+						commits,
+						blockers,
+					},
+				});
+			} finally {
+				this.post({ type: 'busy', busy: false });
+			}
+		});
 	}
 
 	private async runPushSync(mode: import('./messages').SyncMode, repoRoot?: string): Promise<void> {
@@ -457,7 +478,7 @@ export class PushDialogProvider implements vscode.Disposable {
 		this.busy = true;
 		this.post({ type: 'busy', busy: true, message });
 		try {
-			await fn();
+			await this.git.runWithUserLogging(fn);
 		} finally {
 			this.busy = false;
 			this.post({ type: 'busy', busy: false });
