@@ -40,6 +40,7 @@
   let selectedTargetRoot = null;
   let selectedCommitHash = null;
   let checkedRoots = new Set();
+  let targetSelectionInitialized = false;
   let pushRepoRoot = null;
   let syncMode = 'merge';
   let syncPreviewPayload = null;
@@ -205,15 +206,19 @@
     );
   }
 
+  function normalizeRepoRoot(repoRoot) {
+    return String(repoRoot || '').replace(/\\/g, '/').toLowerCase();
+  }
+
   function defaultCheckedRoots() {
     if (payload.pendingRepoRoots?.length) {
-      return new Set(payload.pendingRepoRoots.map((r) => r.replace(/\\/g, '/').toLowerCase()));
+      return new Set(payload.pendingRepoRoots.map(normalizeRepoRoot));
     }
     const active = payload.activeRepoRoot || payload.targets[0]?.repoRoot;
     if (active) {
-      return new Set([String(active).replace(/\\/g, '/').toLowerCase()]);
+      return new Set([normalizeRepoRoot(active)]);
     }
-    return new Set(payload.targets.map((t) => t.repoRoot.replace(/\\/g, '/').toLowerCase()));
+    return new Set(payload.targets.map((t) => normalizeRepoRoot(t.repoRoot)));
   }
 
   function renderTargets() {
@@ -227,6 +232,7 @@
     }
 
     function setTargetChecked(key, checked) {
+      targetSelectionInitialized = true;
       if (checked) {
         checkedRoots.add(key);
       } else {
@@ -234,13 +240,14 @@
       }
       selectedTargetRoot = key;
       selectedCommitHash = null;
+      pushRepoRoot = findTargetByKey(key)?.repoRoot || pushRepoRoot;
       renderTargets();
       renderCommits();
       updateTitle();
     }
 
     payload.targets.forEach((target) => {
-      const key = target.repoRoot.replace(/\\/g, '/').toLowerCase();
+      const key = normalizeRepoRoot(target.repoRoot);
       const row = document.createElement('div');
       row.className = 'target-item' + (selectedTargetRoot === key ? ' selected' : '');
 
@@ -332,9 +339,20 @@
   function showConfirmView(data) {
     modalState = 'confirm';
     payload = data;
-    checkedRoots = defaultCheckedRoots();
-    const activeKey = (data.activeRepoRoot || data.targets[0]?.repoRoot || '').replace(/\\/g, '/').toLowerCase();
-    selectedTargetRoot = checkedRoots.has(activeKey) ? activeKey : [...checkedRoots][0] || activeKey || null;
+    const targetKeys = new Set(data.targets.map((target) => normalizeRepoRoot(target.repoRoot)));
+    if (!targetSelectionInitialized) {
+      checkedRoots = defaultCheckedRoots();
+      targetSelectionInitialized = true;
+    } else {
+      checkedRoots = new Set([...checkedRoots].filter((key) => targetKeys.has(key)));
+    }
+    const activeKey = normalizeRepoRoot(data.activeRepoRoot || data.targets[0]?.repoRoot || '');
+    selectedTargetRoot =
+      selectedTargetRoot && targetKeys.has(selectedTargetRoot)
+        ? selectedTargetRoot
+        : checkedRoots.has(activeKey)
+          ? activeKey
+          : [...checkedRoots][0] || activeKey || null;
     selectedCommitHash = null;
     pushRepoRoot = findTargetByKey(selectedTargetRoot)?.repoRoot || data.targets[0]?.repoRoot || null;
     conflictItems = [];
