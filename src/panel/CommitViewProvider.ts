@@ -378,7 +378,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			this.busy = true;
 			this.post({ type: 'busy', busy: true });
 			try {
-				await fn();
+				await this.git.runWithUserLogging(fn);
 			} finally {
 				this.busy = false;
 				this.post({ type: 'busy', busy: false });
