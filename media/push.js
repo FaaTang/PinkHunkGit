@@ -226,6 +226,19 @@
       return;
     }
 
+    function setTargetChecked(key, checked) {
+      if (checked) {
+        checkedRoots.add(key);
+      } else {
+        checkedRoots.delete(key);
+      }
+      selectedTargetRoot = key;
+      selectedCommitHash = null;
+      renderTargets();
+      renderCommits();
+      updateTitle();
+    }
+
     payload.targets.forEach((target) => {
       const key = target.repoRoot.replace(/\\/g, '/').toLowerCase();
       const row = document.createElement('div');
@@ -234,13 +247,9 @@
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.checked = checkedRoots.has(key);
-      checkbox.addEventListener('click', (e) => e.stopPropagation());
-      checkbox.addEventListener('change', () => {
-        if (checkbox.checked) {
-          checkedRoots.add(key);
-        } else {
-          checkedRoots.delete(key);
-        }
+      checkbox.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setTargetChecked(key, checkbox.checked);
       });
 
       const label = document.createElement('span');
@@ -251,11 +260,7 @@
       row.appendChild(checkbox);
       row.appendChild(label);
       row.addEventListener('click', () => {
-        selectedTargetRoot = key;
-        selectedCommitHash = null;
-        post({ type: 'selectTarget', repoRoot: target.repoRoot });
-        renderTargets();
-        renderCommits();
+        setTargetChecked(key, !checkedRoots.has(key));
       });
       targetList.appendChild(row);
     });
