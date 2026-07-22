@@ -1552,7 +1552,7 @@ function conflictStatusLetter(status: Status): string {
 }
 
 function isPushRejectedError(err: unknown): boolean {
-	const e = err as { gitErrorCode?: string; message?: string; stderr?: string };
+	const e = err as { gitErrorCode?: string; message?: string; stderr?: string | Buffer; stdout?: string | Buffer };
 	if (
 		e.gitErrorCode === GitErrorCodes.PushRejected ||
 		e.gitErrorCode === 'PushRejected' ||
@@ -1561,7 +1561,7 @@ function isPushRejectedError(err: unknown): boolean {
 	) {
 		return true;
 	}
-	const text = `${e.message ?? ''} ${e.stderr ?? ''} ${String(err)}`.toLowerCase();
+	const text = `${e.message ?? ''} ${bufferToString(e.stderr)} ${bufferToString(e.stdout)} ${String(err)}`.toLowerCase();
 	return (
 		text.includes('non-fast-forward') ||
 		text.includes('[rejected]') ||
@@ -1587,8 +1587,16 @@ function isConflictError(err: unknown): boolean {
 }
 
 function formatGitError(err: unknown): string {
-	if (err instanceof Error) {
-		return err.message;
+	const e = err as { message?: string; stderr?: string | Buffer; stdout?: string | Buffer };
+	const combined = combineGitOutput(e.stdout, e.stderr).trim();
+	if (combined) {
+		return combined;
+	}
+	if (typeof e.message === 'string' && e.message.trim()) {
+		return e.message.trim();
+	}
+	if (err instanceof Error && err.message.trim()) {
+		return err.message.trim();
 	}
 	return String(err);
 }

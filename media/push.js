@@ -44,6 +44,7 @@
   let pushRepoRoot = null;
   let syncMode = 'merge';
   let syncPreviewPayload = null;
+  let rejectedPayload = null;
   let conflictItems = [];
   let selectedConflictPath = null;
 
@@ -77,12 +78,22 @@
         statusBanner.classList.remove('hidden');
         statusBanner.textContent = message;
         statusBanner.classList.remove('error');
+      } else if (!busy && modalState === 'rejected' && rejectedPayload) {
+        statusBanner.classList.remove('hidden');
+        statusBanner.textContent = formatRejectedBanner(rejectedPayload);
+        statusBanner.classList.add('error');
       } else if (!busy && modalState === 'syncPreview' && syncPreviewPayload) {
         statusBanner.classList.remove('hidden');
         statusBanner.textContent = syncPreviewPayload.mode === 'rebase' ? 'Review commits to rebase onto.' : 'Review commits to merge.';
         statusBanner.classList.remove('error');
       }
     }
+  }
+
+  function formatRejectedBanner(p) {
+    const context = `${p.repoName || 'repository'} · ${p.branch || '(detached)'} → ${p.upstream || 'remote'}`;
+    const reason = (p.message || '').trim();
+    return reason ? `${context}\n${reason}` : context;
   }
 
   function setFooterActions(visibleIds) {
@@ -395,6 +406,8 @@
     pushRepoRoot = findTargetByKey(selectedTargetRoot)?.repoRoot || data.targets[0]?.repoRoot || null;
     conflictItems = [];
     selectedConflictPath = null;
+    rejectedPayload = null;
+    syncPreviewPayload = null;
 
     mainView.classList.remove('hidden');
     altView.classList.add('hidden');
@@ -851,6 +864,7 @@
         const p = msg.payload;
         pushRepoRoot = p.repoRoot || pushRepoRoot;
         syncPreviewPayload = null;
+        rejectedPayload = p;
         if (mergeBtn) {
           mergeBtn.textContent = 'Merge';
           mergeBtn.classList.add('primary');
@@ -858,7 +872,7 @@
         }
         showSplitAltView(
           'Push Rejected',
-          `${p.repoName} · ${p.branch || '(detached)'} → ${p.upstream || 'remote'}`,
+          formatRejectedBanner(p),
           'rejected',
           ['cancelBtn', 'mergeBtn', 'rebaseBtn'],
           false,
@@ -871,6 +885,7 @@
         const p = msg.payload;
         pushRepoRoot = p.repoRoot || pushRepoRoot;
         syncPreviewPayload = p;
+        rejectedPayload = null;
         syncMode = p.mode || 'merge';
         const titleBranch = p.branch || '(detached)';
         const titleUpstream = p.upstream || 'remote';
@@ -893,6 +908,8 @@
       case 'showSyncConflict': {
         const p = msg.payload;
         pushRepoRoot = p.repoRoot || pushRepoRoot;
+        rejectedPayload = null;
+        syncPreviewPayload = null;
         showSplitAltView(
           `${p.mode === 'rebase' ? 'Rebase' : 'Merge'} Conflicts`,
           p.message,
@@ -907,6 +924,8 @@
       case 'showAskPush': {
         const p = msg.payload;
         pushRepoRoot = p.repoRoot || pushRepoRoot;
+        rejectedPayload = null;
+        syncPreviewPayload = null;
         const behindLine = typeof p.behind === 'number' ? `\nBehind: ${p.behind}` : '';
         showBannerAltView(
           'Push?',
