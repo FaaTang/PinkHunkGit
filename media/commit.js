@@ -511,6 +511,9 @@
     for (const commit of commits) {
       const row = document.createElement('div');
       row.className = 'commit-log-row';
+      row.dataset.hash = commit.hash || '';
+      row.dataset.shortHash = commit.shortHash || '';
+      row.dataset.subject = commit.subject || '';
       row.title = `${commit.subject}\n${commit.shortHash} · ${commit.author} · ${commit.date}`;
 
       const dot = document.createElement('span');
@@ -539,8 +542,89 @@
       main.appendChild(meta);
       row.appendChild(dot);
       row.appendChild(main);
+
+      row.addEventListener('click', () => {
+        for (const el of commitLogList.querySelectorAll('.commit-log-row.selected')) {
+          el.classList.remove('selected');
+        }
+        row.classList.add('selected');
+      });
+
+      row.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        const repoRoot = commitLogRepoRoot || activeRepoRoot();
+        if (!repoRoot || !commit.hash) {
+          return;
+        }
+        post({ type: 'openCommitChanges', repoRoot, hash: commit.hash });
+      });
+
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        for (const el of commitLogList.querySelectorAll('.commit-log-row.selected')) {
+          el.classList.remove('selected');
+        }
+        row.classList.add('selected');
+        showCommitLogContextMenu(e.clientX, e.clientY, {
+          repoRoot: commitLogRepoRoot || activeRepoRoot(),
+          hash: commit.hash,
+          shortHash: commit.shortHash,
+          subject: commit.subject,
+        });
+      });
+
       commitLogList.appendChild(row);
     }
+  }
+
+  function showCommitLogContextMenu(x, y, commit) {
+    if (!commit?.hash || !commit?.repoRoot) {
+      return;
+    }
+    contextMenu.innerHTML = '';
+
+    const openChanges = document.createElement('button');
+    openChanges.type = 'button';
+    openChanges.textContent = 'Open Changes';
+    openChanges.addEventListener('click', () => {
+      hideContextMenu();
+      post({
+        type: 'openCommitChanges',
+        repoRoot: commit.repoRoot,
+        hash: commit.hash,
+      });
+    });
+    contextMenu.appendChild(openChanges);
+
+    const copyHash = document.createElement('button');
+    copyHash.type = 'button';
+    copyHash.textContent = 'Copy Commit Hash';
+    copyHash.addEventListener('click', () => {
+      hideContextMenu();
+      post({ type: 'copyCommitHash', hash: commit.hash });
+    });
+    contextMenu.appendChild(copyHash);
+
+    const copyMessage = document.createElement('button');
+    copyMessage.type = 'button';
+    copyMessage.textContent = 'Copy Commit Message';
+    copyMessage.addEventListener('click', () => {
+      hideContextMenu();
+      post({
+        type: 'copyCommitMessage',
+        repoRoot: commit.repoRoot,
+        hash: commit.hash,
+      });
+    });
+    contextMenu.appendChild(copyMessage);
+
+    contextMenu.classList.remove('hidden');
+    const rect = contextMenu.getBoundingClientRect();
+    const maxX = window.innerWidth - rect.width - 8;
+    const maxY = window.innerHeight - rect.height - 8;
+    contextMenu.style.left = `${Math.min(x, maxX)}px`;
+    contextMenu.style.top = `${Math.min(y, maxY)}px`;
   }
 
   function clearFileSelection() {
