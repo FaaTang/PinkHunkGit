@@ -14,17 +14,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished",
-    "onView:copyIdeaGitUi.commitView",
-    "onCommand:copyIdeaGitUi.openCommit",
-    "onCommand:copyIdeaGitUi.openPush",
-    "onCommand:copyIdeaGitUi.updateAllRepositories",
-    "onCommand:copyIdeaGitUi.showDiff",
-    "onCommand:copyIdeaGitUi.openFile",
-    "onCommand:copyIdeaGitUi.revealInExplorer",
-    "onCommand:copyIdeaGitUi.rollback",
-    "onCommand:copyIdeaGitUi.addToGit",
-    "onCommand:copyIdeaGitUi.installKeybindings"
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "extensionKind": [

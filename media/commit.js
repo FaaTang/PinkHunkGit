@@ -30,8 +30,17 @@
   const updateAllCancel = document.getElementById('updateAllCancel');
   const updateAllConfirmBtn = document.getElementById('updateAllConfirm');
   const contextMenu = document.getElementById('contextMenu');
+  const commitLogPane = document.getElementById('commitLogPane');
+  const commitLogToggle = document.getElementById('commitLogToggle');
+  const commitLogRepo = document.getElementById('commitLogRepo');
+  const commitLogRefresh = document.getElementById('commitLogRefresh');
+  const commitLogList = document.getElementById('commitLogList');
 
+  const webviewState = vscode.getState() || {};
   let generatingMessage = false;
+  let commitLogExpanded = webviewState.commitLogExpanded === true;
+  let commitLogRepoRoot = webviewState.commitLogRepoRoot || '';
+  let commitLogLoading = false;
   let workspace = {
     ok: true,
     repositories: [],
@@ -39,7 +48,6 @@
     activeRepoRoot: '',
     busy: false,
   };
-  const webviewState = vscode.getState() || {};
   const collapsedGroups = new Set(webviewState.collapsedGroups || []);
   /**
    * IDEA-style repo color palette.
@@ -393,9 +401,146 @@
         path: primary.path,
         staged: primary.staged,
       });
+      focusCommitLogRepo(primary.repoRoot, false);
       return;
     }
     post({ type: 'updateSelection', repoRoot: activeRepoRoot(), path: null, staged: false });
+  }
+
+  function focusCommitLogRepo(repoRoot, switchActive) {
+    if (!repoRoot) {
+      return;
+    }
+    const changed = repoKey(commitLogRepoRoot) !== repoKey(repoRoot);
+    if (switchActive && changed) {
+      post({ type: 'switchRepo', repoRoot });
+    }
+    commitLogRepoRoot = repoRoot;
+    saveWebviewState({ commitLogRepoRoot });
+    populateCommitLogRepoSelect();
+    if (
+      commitLogExpanded &&
+      (changed ||
+        !commitLogList.dataset.loadedRoot ||
+        repoKey(commitLogList.dataset.loadedRoot) !== repoKey(repoRoot))
+    ) {
+      requestCommitLog(repoRoot);
+    }
+  }
+
+  function setCommitLogExpanded(expanded) {
+    if (!commitLogPane || !commitLogToggle) {
+      return;
+    }
+    commitLogExpanded = !!expanded;
+    commitLogPane.classList.toggle('collapsed', !commitLogExpanded);
+    commitLogToggle.textContent = commitLogExpanded ? '▾' : '▸';
+    commitLogToggle.setAttribute('aria-expanded', commitLogExpanded ? 'true' : 'false');
+    saveWebviewState({ commitLogExpanded });
+    if (commitLogExpanded) {
+      const root = commitLogRepoRoot || activeRepoRoot();
+      if (root) {
+        commitLogRepoRoot = root;
+        populateCommitLogRepoSelect();
+        requestCommitLog(root);
+      }
+    }
+  }
+
+  function populateCommitLogRepoSelect() {
+    if (!commitLogRepo) {
+      return;
+    }
+    const repos = allRepos();
+    commitLogRepo.innerHTML = '';
+    if (!repos.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No repository';
+      commitLogRepo.appendChild(opt);
+      return;
+    }
+    for (const repo of repos) {
+      const opt = document.createElement('option');
+      opt.value = repo.rootPath;
+      opt.textContent = repo.branch ? `${repo.name} (${repo.branch})` : repo.name;
+      commitLogRepo.appendChild(opt);
+    }
+    const preferred = commitLogRepoRoot || activeRepoRoot() || repos[0].rootPath;
+    const match = repos.find((r) => repoKey(r.rootPath) === repoKey(preferred));
+    commitLogRepo.value = match ? match.rootPath : repos[0].rootPath;
+    commitLogRepoRoot = commitLogRepo.value;
+  }
+
+  function requestCommitLog(repoRoot) {
+    const root = repoRoot || commitLogRepoRoot || activeRepoRoot();
+    if (!root || !commitLogExpanded || !commitLogList) {
+      return;
+    }
+    commitLogLoading = true;
+    commitLogList.innerHTML = '';
+    const loading = document.createElement('div');
+    loading.className = 'commit-log-loading';
+    loading.textContent = 'Loading commit history…';
+    commitLogList.appendChild(loading);
+    post({ type: 'loadCommitLog', repoRoot: root });
+  }
+
+  function renderCommitLog(payload) {
+    if (!commitLogList) {
+      return;
+    }
+    commitLogLoading = false;
+    commitLogList.innerHTML = '';
+    commitLogList.dataset.loadedRoot = payload.repoRoot || '';
+    if (payload.repoRoot) {
+      commitLogRepoRoot = payload.repoRoot;
+      populateCommitLogRepoSelect();
+      if (commitLogRepo) {
+        commitLogRepo.value = payload.repoRoot;
+      }
+    }
+    const commits = payload.commits || [];
+    if (!commits.length) {
+      const empty = document.createElement('div');
+      empty.className = 'commit-log-empty';
+      empty.textContent = 'No commits yet.';
+      commitLogList.appendChild(empty);
+      return;
+    }
+    for (const commit of commits) {
+      const row = document.createElement('div');
+      row.className = 'commit-log-row';
+      row.title = `${commit.subject}\n${commit.shortHash} · ${commit.author} · ${commit.date}`;
+
+      const dot = document.createElement('span');
+      dot.className = 'commit-log-dot';
+
+      const main = document.createElement('div');
+      main.className = 'commit-log-main';
+
+      const subject = document.createElement('div');
+      subject.className = 'commit-log-subject';
+      subject.textContent = commit.subject || '(no subject)';
+
+      const meta = document.createElement('div');
+      meta.className = 'commit-log-meta';
+      const bits = [commit.shortHash, commit.author, commit.date].filter(Boolean);
+      meta.textContent = bits.join(' · ');
+      if (commit.refs) {
+        const refs = document.createElement('span');
+        refs.className = 'commit-log-refs';
+        refs.textContent = commit.refs;
+        meta.appendChild(document.createTextNode(' · '));
+        meta.appendChild(refs);
+      }
+
+      main.appendChild(subject);
+      main.appendChild(meta);
+      row.appendChild(dot);
+      row.appendChild(main);
+      commitLogList.appendChild(row);
+    }
   }
 
   function clearFileSelection() {
@@ -967,6 +1112,9 @@
         return;
       }
       selectGroup(repoRoot, groupId, unversionedGroup, category);
+      if (repoRoot) {
+        focusCommitLogRepo(repoRoot, true);
+      }
       hideContextMenu();
       applyFileListSelectionVisuals();
     });
@@ -1020,6 +1168,12 @@
 
     const { selected, total } = countSelectedInEntries(entries, unversionedGroup);
     const categoryCollapsed = collapsedGroups.has(categoryCollapseKey(groupId));
+    // Avoid a "blank panel" look: if Changes was left collapsed with files inside, expand it.
+    if (categoryCollapsed && groupId === 'changes' && total > 0) {
+      collapsedGroups.delete(categoryCollapseKey(groupId));
+      saveWebviewState({ collapsedGroups: Array.from(collapsedGroups) });
+    }
+    const isCollapsed = collapsedGroups.has(categoryCollapseKey(groupId));
 
     const head = document.createElement('div');
     head.className = 'group-title collapsible category-group-title';
@@ -1045,7 +1199,7 @@
 
     const chevron = document.createElement('span');
     chevron.className = 'group-title-chevron';
-    chevron.textContent = categoryCollapsed ? '▸' : '▾';
+    chevron.textContent = isCollapsed ? '▸' : '▾';
 
     const name = document.createElement('span');
     name.className = 'group-title-name';
@@ -1059,7 +1213,7 @@
     head.appendChild(chevron);
     head.appendChild(name);
     head.appendChild(count);
-    head.title = categoryCollapsed
+    head.title = isCollapsed
       ? 'Double-click to expand; click title to select group'
       : 'Double-click to collapse; click title to select group';
 
@@ -1076,7 +1230,7 @@
     );
     wrap.appendChild(head);
 
-    if (categoryCollapsed) {
+    if (isCollapsed) {
       return wrap;
     }
 
@@ -1429,13 +1583,38 @@
     post({ type: 'generateCommitMessage', checkedChanges, unversionedPaths });
   });
 
+  try {
+    commitLogToggle?.addEventListener('click', () => {
+      setCommitLogExpanded(!commitLogExpanded);
+    });
+
+    commitLogRepo?.addEventListener('change', () => {
+      const repoRoot = commitLogRepo.value;
+      if (!repoRoot) {
+        return;
+      }
+      focusCommitLogRepo(repoRoot, true);
+    });
+
+    commitLogRefresh?.addEventListener('click', () => {
+      requestCommitLog(commitLogRepoRoot || activeRepoRoot());
+    });
+
+    if (commitLogPane && commitLogToggle && commitLogRepo && commitLogList) {
+      setCommitLogExpanded(commitLogExpanded);
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    showBanner(`Commit Log init failed: ${message}`, 'error');
+  }
+
   (function setupMessageResize() {
     if (!messageEl || !messageResizeEl || !messageFieldEl) {
       return;
     }
 
     const MIN_HEIGHT = 72;
-    const MAX_HEIGHT = () => Math.min(Math.floor(window.innerHeight * 0.6), 420);
+    const MAX_HEIGHT = () => Math.min(Math.floor(window.innerHeight * 0.28), 200);
 
     function applyHeight(px) {
       const next = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT(), Math.round(px)));
@@ -1446,6 +1625,8 @@
     const savedHeight = Number(webviewState.messageHeight);
     if (Number.isFinite(savedHeight) && savedHeight >= MIN_HEIGHT) {
       applyHeight(savedHeight);
+    } else {
+      applyHeight(MIN_HEIGHT);
     }
 
     let dragging = false;
@@ -1648,10 +1829,24 @@
           syncSelectionToHost();
         }
         renderFiles();
+        populateCommitLogRepoSelect();
+        if (!commitLogRepoRoot && activeRepoRoot()) {
+          commitLogRepoRoot = activeRepoRoot();
+          populateCommitLogRepoSelect();
+        }
+        // Only reload history when the active/log repo changed, not on every status refresh.
+        if (
+          commitLogExpanded &&
+          (commitLogRepoRoot || activeRepoRoot()) &&
+          repoKey(commitLogList?.dataset.loadedRoot || '') !==
+            repoKey(commitLogRepoRoot || activeRepoRoot())
+        ) {
+          requestCommitLog(commitLogRepoRoot || activeRepoRoot());
+        }
         break;
       }
-      case 'error':
-        showFormError(msg.message);
+      case 'commitLog':
+        renderCommitLog(msg.payload || { commits: [] });
         break;
       case 'busy':
         setBusy(msg.busy);
