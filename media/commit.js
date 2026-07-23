@@ -6,6 +6,7 @@
   const repoSelect = document.getElementById('repoSelect');
   const fileList = document.getElementById('fileList');
   const messageEl = document.getElementById('message');
+  const generateMsgBtn = document.getElementById('generateMsgBtn');
   const formError = document.getElementById('formError');
   const commitBtn = document.getElementById('commitBtn');
   const commitPushBtn = document.getElementById('commitPushBtn');
@@ -28,6 +29,7 @@
   const updateAllConfirmBtn = document.getElementById('updateAllConfirm');
   const contextMenu = document.getElementById('contextMenu');
 
+  let generatingMessage = false;
   let workspace = {
     ok: true,
     repositories: [],
@@ -628,18 +630,33 @@
 
   function setBusy(busy) {
     workspace.busy = busy;
-    const disabled = !!busy || !workspace.ok;
+    applyBusyState();
+  }
+
+  function setGenerateBusy(busy) {
+    generatingMessage = !!busy;
+    generateMsgBtn.classList.toggle('is-busy', generatingMessage);
+    generateMsgBtn.title = generatingMessage
+      ? 'Generating commit message…'
+      : 'Generate Commit Message';
+    applyBusyState();
+  }
+
+  function applyBusyState() {
+    const panelBusy = !!workspace.busy || generatingMessage;
+    const disabled = panelBusy || !workspace.ok;
     commitBtn.disabled = disabled;
     commitPushBtn.disabled = disabled;
     stageAllBtn.disabled = disabled;
     unstageAllBtn.disabled = disabled;
     refreshBtn.disabled = disabled;
     locateBtn.disabled = disabled;
-    installKeysBtn.disabled = !!busy;
-    rollbackConfirmBtn.disabled = busy;
-    keysConfirm.disabled = busy;
-    updateAllConfirmBtn.disabled = busy;
-    updateAllCancel.disabled = busy;
+    installKeysBtn.disabled = panelBusy;
+    rollbackConfirmBtn.disabled = panelBusy;
+    keysConfirm.disabled = panelBusy;
+    updateAllConfirmBtn.disabled = panelBusy;
+    updateAllCancel.disabled = panelBusy;
+    generateMsgBtn.disabled = panelBusy || !workspace.ok;
   }
 
   function showBanner(text, kind) {
@@ -1396,6 +1413,20 @@
     post({ type: 'commitAndPush', message, checkedChanges, unversionedPaths });
   });
 
+  generateMsgBtn.addEventListener('click', () => {
+    if (generatingMessage || workspace.busy) {
+      return;
+    }
+    if (!totalIncludableCount()) {
+      showFormError('Select files to include before generating a commit message.');
+      return;
+    }
+    showFormError('');
+    const unversionedPaths = collectCheckedUnversionedPaths();
+    const checkedChanges = collectCheckedChangesPaths();
+    post({ type: 'generateCommitMessage', checkedChanges, unversionedPaths });
+  });
+
   messageEl.addEventListener('input', () => {
     saveMessageDraft();
   });
@@ -1551,6 +1582,19 @@
       case 'busy':
         setBusy(msg.busy);
         break;
+      case 'generateCommitMessageState':
+        setGenerateBusy(msg.busy);
+        break;
+      case 'setMessage': {
+        messageEl.value = msg.message || '';
+        messageDraft = messageEl.value;
+        saveWebviewState({ messageDraft, lastCommitMessage });
+        showFormError('');
+        messageEl.focus();
+        const end = messageEl.value.length;
+        messageEl.setSelectionRange(end, end);
+        break;
+      }
       case 'showRollbackDialog':
         openRollbackModal(msg.payload);
         break;

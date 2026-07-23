@@ -496,6 +496,11 @@ body.sidebar-mode .commit-form {
   padding: 10px 12px 12px;
 }
 
+.message-field {
+  position: relative;
+  display: flex;
+}
+
 textarea {
   width: 100%;
   resize: vertical;
@@ -503,9 +508,61 @@ textarea {
   background: var(--input-bg);
   color: var(--input-fg);
   border: 1px solid var(--input-border);
-  padding: 8px;
+  padding: 8px 36px 8px 8px;
   font-family: inherit;
   font-size: 13px;
+}
+
+.generate-msg-btn {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg);
+  opacity: 0.7;
+  border: none;
+}
+
+.generate-msg-btn:hover:not(:disabled) {
+  opacity: 1;
+  background: var(--list-hover);
+  filter: none;
+}
+
+.generate-msg-btn:disabled {
+  opacity: 0.45;
+}
+
+.generate-msg-btn.is-busy .generate-msg-icon {
+  display: none;
+}
+
+.generate-msg-btn.is-busy .generate-msg-spinner {
+  display: inline-block;
+}
+
+.generate-msg-spinner {
+  display: none;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid color-mix(in srgb, var(--fg) 35%, transparent);
+  border-top-color: var(--fg);
+  border-radius: 50%;
+  animation: generate-msg-spin 0.7s linear infinite;
+}
+
+@keyframes generate-msg-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .form-error {
