@@ -597,6 +597,104 @@ export class GitService implements vscode.Disposable {
 		}
 	}
 
+	/**
+	 * Invoke Cursor / Copilot "Generate Commit Message" and return the SCM input box value.
+	 * Prefer Cursor's built-in command; fall back to GitHub Copilot in VS Code.
+	 */
+	async generateCommitMessageWithAi(
+		checkedChanges: Array<{ repoRoot: string; path: string }>,
+		unversionedPaths?: Array<{ repoRoot: string; path: string }>
+	): Promise<string> {
+		const repo = this.resolveRepoForGenerate(checkedChanges, unversionedPaths);
+		if (!repo) {
+			throw new Error('No repository found.');
+		}
+
+		const commandId = await this.resolveGenerateCommitMessageCommand();
+		if (!commandId) {
+			throw new Error(
+				'Generate Commit Message requires Cursor, or GitHub Copilot in VS Code.'
+			);
+		}
+
+		const previous = repo.inputBox.value;
+		const sentinel = `__pink_hunk_git_generating_${Date.now()}__`;
+		repo.inputBox.value = sentinel;
+
+		try {
+			await vscode.commands.executeCommand(commandId, repo.rootUri);
+		} catch (err) {
+			if (repo.inputBox.value === sentinel) {
+				repo.inputBox.value = previous;
+			}
+			const detail = err instanceof Error ? err.message : String(err);
+			throw new Error(`Failed to generate commit message: ${detail}`);
+		}
+
+		const generated = await this.waitForGeneratedCommitMessage(repo, sentinel, previous);
+		if (!generated.trim()) {
+			throw new Error('No commit message was generated. Ensure there are staged changes.');
+		}
+		return generated;
+	}
+
+	private resolveRepoForGenerate(
+		checkedChanges: Array<{ repoRoot: string; path: string }>,
+		unversionedPaths?: Array<{ repoRoot: string; path: string }>
+	): Repository | undefined {
+		const roots = [
+			...checkedChanges.map((entry) => entry.repoRoot),
+			...(unversionedPaths ?? []).map((entry) => entry.repoRoot),
+		];
+		const active = this.getActiveRepository();
+		if (active && roots.some((root) => pathsEqual(root, active.rootUri.fsPath))) {
+			return active;
+		}
+		const preferred = roots[0];
+		if (preferred) {
+			const match = this.api?.repositories.find((r) => pathsEqual(r.rootUri.fsPath, preferred));
+			if (match) {
+				return match;
+			}
+		}
+		return active ?? this.api?.repositories[0];
+	}
+
+	private async resolveGenerateCommitMessageCommand(): Promise<string | undefined> {
+		const commands = await vscode.commands.getCommands(true);
+		const cursorCmd = 'cursor.generateGitCommitMessage';
+		const copilotCmd = 'github.copilot.git.generateCommitMessage';
+		if (commands.includes(cursorCmd)) {
+			return cursorCmd;
+		}
+		if (commands.includes(copilotCmd)) {
+			return copilotCmd;
+		}
+		return undefined;
+	}
+
+	private async waitForGeneratedCommitMessage(
+		repo: Repository,
+		sentinel: string,
+		previous: string,
+		timeoutMs = 800
+	): Promise<string> {
+		const started = Date.now();
+		while (Date.now() - started < timeoutMs) {
+			const current = repo.inputBox.value;
+			if (current !== sentinel) {
+				return current;
+			}
+			await delay(100);
+		}
+		if (repo.inputBox.value === sentinel) {
+			repo.inputBox.value = previous;
+		}
+		throw new Error(
+			'Failed to generate commit message. Check the notification for details, or try again from the Source Control view.'
+		);
+	}
+
 	private getTrackedChangeItems(snap: RepoSnapshot): ChangeItem[] {
 		const map = new Map<string, ChangeItem>();
 		for (const item of snap.unstaged) {
@@ -1654,6 +1752,10 @@ function parsePushCommits(raw: string): PushCommitItem[] {
 
 function pathsEqual(a: string, b: string): boolean {
 	return normalizePathKey(a) === normalizePathKey(b);
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizePathKey(p: string): string {

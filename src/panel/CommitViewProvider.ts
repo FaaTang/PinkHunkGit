@@ -196,6 +196,29 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
+	private async generateCommitMessage(
+		checkedChanges: Array<{ repoRoot: string; path: string }>,
+		unversionedPaths?: Array<{ repoRoot: string; path: string }>
+	): Promise<void> {
+		this.post({ type: 'generateCommitMessageState', busy: true });
+		try {
+			if (!checkedChanges.length && !(unversionedPaths?.length)) {
+				throw new Error('Select files to include before generating a commit message.');
+			}
+			await this.git.applyCommitSelection(checkedChanges);
+			await this.stageUnversionedPaths(unversionedPaths);
+			await this.git.refresh();
+			const message = await this.git.generateCommitMessageWithAi(checkedChanges, unversionedPaths);
+			this.post({ type: 'setMessage', message });
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.post({ type: 'error', message });
+			vscode.window.showErrorMessage(message);
+		} finally {
+			this.post({ type: 'generateCommitMessageState', busy: false });
+		}
+	}
+
 	private async startRollbackFlow(msg: {
 		repoRoot: string;
 		path: string;
@@ -346,6 +369,9 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 						});
 					});
 					break;
+				case 'generateCommitMessage':
+					await this.generateCommitMessage(msg.checkedChanges ?? [], msg.unversionedPaths);
+					break;
 				case 'updateAllConfirm':
 					this.resolveUpdateAll(true);
 					break;
@@ -443,7 +469,15 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
         <div id="fileList" class="file-list"></div>
       </aside>
       <div class="commit-form">
-        <textarea id="message" placeholder="Commit Message" rows="4"></textarea>
+        <div class="message-field">
+          <textarea id="message" placeholder="Commit Message" rows="4"></textarea>
+          <button id="generateMsgBtn" class="generate-msg-btn" type="button" title="Generate Commit Message" aria-label="Generate Commit Message">
+            <svg class="generate-msg-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M7.5 1.5 8.4 4.2 11 5.1 8.4 6 7.5 8.7 6.6 6 4 5.1 6.6 4.2 7.5 1.5Zm4.3 5.2.6 1.7 1.7.6-1.7.6-.6 1.7-.6-1.7-1.7-.6 1.7-.6.6-1.7Zm-7.6 2.4.9 2.5 2.5.9-2.5.9-.9 2.5-.9-2.5-2.5-.9 2.5-.9.9-2.5Z"/>
+            </svg>
+            <span class="generate-msg-spinner" aria-hidden="true"></span>
+          </button>
+        </div>
         <div id="formError" class="form-error hidden"></div>
         <div class="commit-actions">
           <button id="commitBtn" class="primary" type="button">Commit</button>

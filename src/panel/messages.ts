@@ -117,6 +117,8 @@ export type HostToWebview =
 	| { type: 'showUpdateAllDialog'; payload: { repoCount: number } }
 	| { type: 'clearMessage' }
 	| { type: 'focusMessage' }
+	| { type: 'setMessage'; message: string }
+	| { type: 'generateCommitMessageState'; busy: boolean }
 	| { type: 'expandChanges' }
 	| { type: 'triggerAddToGit' };
 
@@ -158,4 +160,9 @@ export type WebviewToHost =
 	| { type: 'updateAllCancel' }
 	| { type: 'refresh' }
 	| { type: 'installKeybindings' }
-	| { type: 'openGitExtension' };
+	| { type: 'openGitExtension' }
+	| {
+			type: 'generateCommitMessage';
+			checkedChanges?: Array<{ repoRoot: string; path: string }>;
+			unversionedPaths?: Array<{ repoRoot: string; path: string }>;
+	  };
