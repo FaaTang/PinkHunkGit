@@ -286,6 +286,26 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async onMessage(msg: WebviewToHost): Promise<void> {
+		// Lightweight messages: do not run a full git refresh (avoids UI freezes).
+		if (msg.type === 'loadCommitLog') {
+			await this.pushCommitLog(msg.repoRoot);
+			return;
+		}
+		if (msg.type === 'updateSelection') {
+			this.setSelection(msg.repoRoot, msg.path, msg.staged);
+			return;
+		}
+		if (msg.type === 'switchRepo') {
+			try {
+				this.git.setActiveRepository(msg.repoRoot);
+				this.setSelection(msg.repoRoot, null, false);
+				await this.pushSnapshot();
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				this.post({ type: 'error', message });
+			}
+			return;
+		}
 		try {
 			switch (msg.type) {
 				case 'ready':
@@ -300,10 +320,6 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					}
 					this.tryShowUpdateAllDialog();
 					break;
-				case 'switchRepo':
-					this.git.setActiveRepository(msg.repoRoot);
-					this.setSelection(msg.repoRoot, null, false);
-					break;
 				case 'addToGit':
 					await this.withBusy(async () => {
 						for (const { repoRoot, path } of msg.paths) {
@@ -315,9 +331,6 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					await this.withBusy(async () => {
 						await this.git.stageAll(msg.staged);
 					});
-					break;
-				case 'updateSelection':
-					this.setSelection(msg.repoRoot, msg.path, msg.staged);
 					break;
 				case 'openDiff':
 					await this.git.openDiffInEditor(msg.path, msg.staged, msg.repoRoot);
@@ -414,6 +427,16 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		await run;
 	}
 
+	private async pushCommitLog(repoRoot?: string): Promise<void> {
+		try {
+			const payload = await this.git.getCommitLog(repoRoot);
+			this.post({ type: 'commitLog', payload });
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.post({ type: 'error', message });
+		}
+	}
+
 	private async pushSnapshot(): Promise<void> {
 		const snapshot = this.git.getWorkspaceSnapshot();
 		this.post({ type: 'snapshot', payload: { ...snapshot, busy: this.busy } });
@@ -485,6 +508,15 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
           <button id="commitPushBtn" type="button">Commit and Push</button>
         </div>
       </div>
+      <section id="commitLogPane" class="commit-log-pane collapsed">
+        <div class="commit-log-header">
+          <button id="commitLogToggle" class="commit-log-toggle" type="button" title="Expand or collapse commit log" aria-expanded="false">▸</button>
+          <span class="commit-log-title">Commit Log</span>
+          <select id="commitLogRepo" title="Repository for commit history" aria-label="Commit log repository"></select>
+          <button id="commitLogRefresh" type="button" title="Refresh commit log">↻</button>
+        </div>
+        <div id="commitLogList" class="commit-log-list"></div>
+      </section>
     </div>
   </div>
 

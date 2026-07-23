@@ -15,6 +15,7 @@ import {
 } from './gitOutput';
 import {
 	ChangeItem,
+	CommitLogItem,
 	CommitRepoResult,
 	DiffResult,
 	RepoSnapshot,
@@ -602,6 +603,38 @@ export class GitService implements vscode.Disposable {
 					repo.revert(toUnstage)
 				);
 			}
+		}
+	}
+
+	/**
+	 * Recent commit history for the Commit Log panel (follows selected repository).
+	 */
+	async getCommitLog(
+		repoRoot?: string,
+		limit = 40
+	): Promise<{
+		repoRoot: string;
+		repoName: string;
+		branch?: string;
+		commits: CommitLogItem[];
+	}> {
+		const repo = repoRoot ? this.requireRepoByRoot(repoRoot) : this.requireActiveRepo();
+		const root = repo.rootUri.fsPath;
+		const name = path.basename(root);
+		const branch = repo.state.HEAD?.name;
+		const max = Math.max(1, Math.min(limit, 100));
+		try {
+			const raw = await this.queryGit(root, [
+				'log',
+				'-n',
+				String(max),
+				'--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ad%x1f%D',
+				'--date=short',
+			]);
+			return { repoRoot: root, repoName: name, branch, commits: parseCommitLog(raw) };
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			throw new Error(`Failed to load commit log: ${detail}`);
 		}
 	}
 
@@ -1805,6 +1838,24 @@ function parsePushCommits(raw: string): PushCommitItem[] {
 	return raw.split('\n').map((line) => {
 		const [hash = '', shortHash = '', subject = '', author = '', date = ''] = line.split('|');
 		return { hash, shortHash, subject, author, date };
+	});
+}
+
+function parseCommitLog(raw: string): CommitLogItem[] {
+	if (!raw.trim()) {
+		return [];
+	}
+	return raw.split('\n').map((line) => {
+		const [hash = '', shortHash = '', subject = '', author = '', date = '', refs = ''] =
+			line.split('\x1f');
+		return {
+			hash,
+			shortHash,
+			subject,
+			author,
+			date,
+			refs: refs.trim() || undefined,
+		};
 	});
 }
 

@@ -53,6 +53,22 @@ export type CommitRepoResult = {
 	branch?: string;
 };
 
+export type CommitLogItem = {
+	hash: string;
+	shortHash: string;
+	subject: string;
+	author: string;
+	date: string;
+	refs?: string;
+};
+
+export type CommitLogPayload = {
+	repoRoot: string;
+	repoName: string;
+	branch?: string;
+	commits: CommitLogItem[];
+};
+
 export type DiffResult = {
 	path: string;
 	staged: boolean;
@@ -119,6 +135,7 @@ export type HostToWebview =
 	| { type: 'focusMessage' }
 	| { type: 'setMessage'; message: string }
 	| { type: 'generateCommitMessageState'; busy: boolean }
+	| { type: 'commitLog'; payload: CommitLogPayload }
 	| { type: 'expandChanges' }
 	| { type: 'triggerAddToGit' };
 
@@ -165,4 +182,5 @@ export type WebviewToHost =
 			type: 'generateCommitMessage';
 			checkedChanges?: Array<{ repoRoot: string; path: string }>;
 			unversionedPaths?: Array<{ repoRoot: string; path: string }>;
-	  };
+	  }
+	| { type: 'loadCommitLog'; repoRoot: string };
