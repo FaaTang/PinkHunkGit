@@ -291,6 +291,33 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			await this.pushCommitLog(msg.repoRoot);
 			return;
 		}
+		if (msg.type === 'openCommitChanges') {
+			try {
+				await this.git.openCommitChanges(msg.repoRoot, msg.hash);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				this.post({ type: 'error', message });
+				vscode.window.showErrorMessage(message);
+			}
+			return;
+		}
+		if (msg.type === 'copyCommitHash') {
+			await vscode.env.clipboard.writeText(msg.hash);
+			vscode.window.setStatusBarMessage('Commit hash copied', 2000);
+			return;
+		}
+		if (msg.type === 'copyCommitMessage') {
+			try {
+				const text = await this.git.getCommitMessageText(msg.repoRoot, msg.hash);
+				await vscode.env.clipboard.writeText(text);
+				vscode.window.setStatusBarMessage('Commit message copied', 2000);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				this.post({ type: 'error', message });
+				vscode.window.showErrorMessage(message);
+			}
+			return;
+		}
 		if (msg.type === 'updateSelection') {
 			this.setSelection(msg.repoRoot, msg.path, msg.staged);
 			return;

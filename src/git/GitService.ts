@@ -638,6 +638,44 @@ export class GitService implements vscode.Disposable {
 		}
 	}
 
+	/** Open the selected commit's changes (multi-diff when available, otherwise patch preview). */
+	async openCommitChanges(repoRoot: string, hash: string): Promise<void> {
+		const repo = this.requireRepoByRoot(repoRoot);
+		const commit = hash.trim();
+		if (!commit) {
+			throw new Error('Commit hash is empty.');
+		}
+
+		try {
+			await vscode.commands.executeCommand('git.viewCommit', repo.rootUri, commit);
+			return;
+		} catch {
+			// Fall through to patch preview when the built-in command is unavailable.
+		}
+
+		const patch = await this.queryGit(repo.rootUri.fsPath, [
+			'show',
+			'--stat',
+			'--patch',
+			'--format=fuller',
+			commit,
+		]);
+		const doc = await vscode.workspace.openTextDocument({
+			content: patch || `(empty commit ${commit})`,
+			language: 'diff',
+		});
+		await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+	}
+
+	async getCommitMessageText(repoRoot: string, hash: string): Promise<string> {
+		const commit = hash.trim();
+		if (!commit) {
+			throw new Error('Commit hash is empty.');
+		}
+		const message = await this.queryGit(repoRoot, ['log', '-1', '--pretty=format:%B', commit]);
+		return message.replace(/\s+$/u, '');
+	}
+
 	/**
 	 * Generate a commit message for the current selection.
 	 * 1) vscode.lm when available (VS Code + Copilot)

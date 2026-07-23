@@ -253,11 +253,16 @@ body.sidebar-mode .commit-log-pane:not(.collapsed) .commit-log-list {
   grid-template-columns: 10px 1fr;
   gap: 8px;
   padding: 6px 10px 6px 12px;
-  cursor: default;
+  cursor: pointer;
 }
 
 .commit-log-row:hover {
   background: var(--list-hover);
+}
+
+.commit-log-row.selected {
+  background: var(--list-active);
+  color: var(--list-active-fg);
 }
 
 .commit-log-dot {

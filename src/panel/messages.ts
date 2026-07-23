@@ -183,4 +183,7 @@ export type WebviewToHost =
 			checkedChanges?: Array<{ repoRoot: string; path: string }>;
 			unversionedPaths?: Array<{ repoRoot: string; path: string }>;
 	  }
-	| { type: 'loadCommitLog'; repoRoot: string };
+	| { type: 'loadCommitLog'; repoRoot: string }
+	| { type: 'openCommitChanges'; repoRoot: string; hash: string }
+	| { type: 'copyCommitHash'; hash: string }
+	| { type: 'copyCommitMessage'; repoRoot: string; hash: string };
