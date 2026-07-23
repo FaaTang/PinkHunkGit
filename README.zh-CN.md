@@ -1,4 +1,4 @@
-# Copy IDEA Git UI
+# PinkHunkGit
 
 [English](README.md)
 
@@ -37,7 +37,7 @@ npm run compile
 
 ```bash
 npm run package
-# 生成 copy-idea-git-ui-x.y.z.vsix
+# 生成 pink-hunk-git-x.y.z.vsix（与 package name 对应）
 ```
 
 ## 功能
@@ -51,12 +51,12 @@ npm run package
 
 ### 更新所有仓库
 
-运行 **Copy IDEA Git UI: Update All Git Repositories** 会依次对 VS Code / Cursor
+运行 **PinkHunkGit: Update All Git Repositories** 会依次对 VS Code / Cursor
 当前已识别的每个 Git 仓库执行 `git pull`。可以通过以下任一方式手动运行：
 
 - 按 `Ctrl+T`（macOS 为 `Cmd+T`）
 - 点击 Commit 面板标题栏中的同步按钮
-- 从命令面板运行 **Copy IDEA Git UI: Update All Git Repositories**
+- 从命令面板运行 **PinkHunkGit: Update All Git Repositories**
 
 更新过程中会显示当前仓库和总体进度。某个仓库更新失败时，插件会继续更新其余仓库，
 最后汇总成功数量以及失败原因。仓库需要已配置上游分支；本地改动、合并冲突、认证失败等
@@ -75,7 +75,7 @@ npm run package
 
 面板顶部 **⌨** 可一键安装上述快捷键（会提示可能覆盖现有绑定）。
 `Ctrl+T` / `Cmd+T` 与编辑器原有快捷键可能冲突；如需保留原绑定，可在 Keyboard
-Shortcuts 中删除或修改 **Copy IDEA Git UI: Update All Git Repositories** 的快捷键，手动入口仍可使用。
+Shortcuts 中删除或修改 **PinkHunkGit: Update All Git Repositories** 的快捷键，手动入口仍可使用。
 
 ## 要求
 

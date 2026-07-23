@@ -1,4 +1,4 @@
-# Copy IDEA Git UI
+# PinkHunkGit
 
 [中文](README.zh-CN.md)
 
@@ -37,7 +37,7 @@ Package locally:
 
 ```bash
 npm run package
-# Produces copy-idea-git-ui-x.y.z.vsix
+# Produces pink-hunk-git-x.y.z.vsix (from package name)
 ```
 
 ## Features
@@ -51,11 +51,11 @@ npm run package
 
 ### Update All Repositories
 
-Run **Copy IDEA Git UI: Update All Git Repositories** to `git pull` each Git repository VS Code / Cursor has detected. You can trigger it via:
+Run **PinkHunkGit: Update All Git Repositories** to `git pull` each Git repository VS Code / Cursor has detected. You can trigger it via:
 
 - `Ctrl+T` (macOS: `Cmd+T`)
 - The sync button in the Commit panel title bar
-- Command Palette: **Copy IDEA Git UI: Update All Git Repositories**
+- Command Palette: **PinkHunkGit: Update All Git Repositories**
 
 Progress shows the current repository and overall status. If one repository fails, the extension continues with the rest and summarizes successes and failures. Repositories need an upstream branch configured; local changes, merge conflicts, auth failures, etc. follow normal Git rules and are not discarded automatically.
 
@@ -71,7 +71,7 @@ Progress shows the current repository and overall status. If one repository fail
 | `Ctrl+Alt+Z` | Rollback selected file |
 
 Click **⌨** at the top of the panel to install these keybindings (you will be warned about possible conflicts).
-`Ctrl+T` / `Cmd+T` may conflict with built-in editor shortcuts; remove or change **Copy IDEA Git UI: Update All Git Repositories** in Keyboard Shortcuts if you want to keep the original binding. Manual entry points still work.
+`Ctrl+T` / `Cmd+T` may conflict with built-in editor shortcuts; remove or change **PinkHunkGit: Update All Git Repositories** in Keyboard Shortcuts if you want to keep the original binding. Manual entry points still work.
 
 ## Requirements
 
