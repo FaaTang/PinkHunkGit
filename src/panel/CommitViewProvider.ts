@@ -470,6 +470,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
       </aside>
       <div class="commit-form">
         <div class="message-field">
+          <div id="messageResize" class="message-resize" title="Drag to resize" role="separator" aria-orientation="horizontal" tabindex="0"></div>
           <textarea id="message" placeholder="Commit Message" rows="4"></textarea>
           <button id="generateMsgBtn" class="generate-msg-btn" type="button" title="Generate Commit Message" aria-label="Generate Commit Message">
             <svg class="generate-msg-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">

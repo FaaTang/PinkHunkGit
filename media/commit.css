@@ -499,16 +499,49 @@ body.sidebar-mode .commit-form {
 .message-field {
   position: relative;
   display: flex;
+  flex-direction: column;
+}
+
+.message-resize {
+  height: 8px;
+  margin: 0 0 2px;
+  cursor: ns-resize;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  user-select: none;
+}
+
+.message-resize::before {
+  content: '';
+  width: 36px;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fg) 28%, transparent);
+}
+
+.message-resize:hover::before,
+.message-resize:focus-visible::before,
+.message-field.is-resizing .message-resize::before {
+  background: color-mix(in srgb, var(--fg) 55%, transparent);
+}
+
+.message-resize:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 1px;
 }
 
 textarea {
   width: 100%;
-  resize: vertical;
+  resize: none;
   min-height: 72px;
+  max-height: min(60vh, 420px);
   background: var(--input-bg);
   color: var(--input-fg);
   border: 1px solid var(--input-border);
-  padding: 8px 36px 8px 8px;
+  padding: 8px 36px 10px 8px;
   font-family: inherit;
   font-size: 13px;
 }
@@ -529,6 +562,7 @@ textarea {
   color: var(--fg);
   opacity: 0.7;
   border: none;
+  z-index: 1;
 }
 
 .generate-msg-btn:hover:not(:disabled) {
