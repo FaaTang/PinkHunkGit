@@ -1604,18 +1604,24 @@
     pendingRollback = payload;
     if (payload.batch) {
       if (payload.allUntracked) {
-        rollbackTitle.textContent = 'Delete Untracked Files';
-        rollbackSummary.textContent = `Will delete ${payload.paths.length} untracked files. This cannot be undone.`;
+        rollbackTitle.textContent = 'Delete Files';
+        rollbackSummary.textContent = `Will delete ${payload.paths.length} unversioned files. This cannot be undone.`;
+      } else if (payload.paths.every((p) => p.staged)) {
+        rollbackTitle.textContent = 'Unstage Files';
+        rollbackSummary.textContent = `Will unstage ${payload.paths.length} files (one step back). Staged new files return to Unversioned.`;
       } else {
         rollbackTitle.textContent = 'Rollback Files';
-        rollbackSummary.textContent = `Will restore ${payload.paths.length} files to the version in Git (discarding all local changes). This cannot be undone.`;
+        rollbackSummary.textContent = `Will roll back ${payload.paths.length} files one step (unstage if staged, otherwise restore to Git HEAD).`;
       }
     } else if (payload.isUntracked) {
-      rollbackTitle.textContent = 'Delete Untracked File';
-      rollbackSummary.textContent = `Will delete "${payload.path}". This cannot be undone.`;
+      rollbackTitle.textContent = 'Delete File';
+      rollbackSummary.textContent = `Will delete unversioned file "${payload.path}". This cannot be undone.`;
+    } else if (payload.staged) {
+      rollbackTitle.textContent = 'Unstage File';
+      rollbackSummary.textContent = `Will unstage "${payload.path}" (one step back). New files return to Unversioned; the file is not deleted.`;
     } else {
       rollbackTitle.textContent = 'Rollback File';
-      rollbackSummary.textContent = `Will restore "${payload.path}" to the version in Git (discarding all local changes). This cannot be undone.`;
+      rollbackSummary.textContent = `Will restore "${payload.path}" to the version in Git (discarding local changes). This cannot be undone.`;
     }
     rollbackModal.classList.remove('hidden');
     rollbackConfirmBtn.focus();

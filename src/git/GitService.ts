@@ -1399,7 +1399,6 @@ export class GitService implements vscode.Disposable {
 		const repo = this.requireRepoByRoot(repoRoot);
 		const root = repo.rootUri.fsPath;
 		const fsPath = path.join(root, relativePath);
-		const fileUri = vscode.Uri.file(fsPath);
 		await this.ensureSaved(fsPath);
 
 		const fileName = path.basename(relativePath);
@@ -1410,17 +1409,43 @@ export class GitService implements vscode.Disposable {
 			viewColumn: vscode.ViewColumn.Active,
 		};
 
-		// IDEA Commit diff: left = before (HEAD), right = current working version.
-		const before = this.api.toGitUri(fileUri, 'HEAD');
-		await vscode.commands.executeCommand('vscode.diff', before, fileUri, title, diffOptions);
+		await this.openHeadWorkingDiff(repo, relativePath, fsPath, title, diffOptions);
 	}
 
-	async rollbackFile(relativePath: string, repoRoot: string): Promise<void> {
+	/**
+	 * True when path is untracked or newly added and not present in HEAD
+	 * (cannot open a valid HEAD-side diff URI).
+	 */
+	async isAbsentFromHead(relativePath: string, repoRoot: string): Promise<boolean> {
+		if (this.isUntracked(relativePath, repoRoot)) {
+			return true;
+		}
+		const repo = this.requireRepoByRoot(repoRoot);
+		return this.isNewToHead(repo, relativePath);
+	}
+
+	/**
+	 * Step back one level:
+	 * - Unversioned → delete from disk
+	 * - Staged Changes → unstage (INDEX_ADDED becomes Unversioned)
+	 * - Unstaged tracked → restore working tree to HEAD
+	 */
+	async rollbackFile(relativePath: string, repoRoot: string, staged?: boolean): Promise<void> {
 		const repo = this.requireRepoByRoot(repoRoot);
 		const fsPath = path.join(repo.rootUri.fsPath, relativePath);
 
 		if (this.isUntracked(relativePath, repoRoot)) {
 			await this.runGitApi(repo, 'clean (untracked)', relativePath, () => repo.clean([fsPath]));
+			if (await fileExists(fsPath)) {
+				await fs.unlink(fsPath);
+			}
+			await this.refresh();
+			return;
+		}
+
+		const treatAsStaged = staged ?? this.isStaged(relativePath, repoRoot);
+		if (treatAsStaged) {
+			await this.runGitApi(repo, 'revert (unstage)', relativePath, () => repo.revert([fsPath]));
 			await this.refresh();
 			return;
 		}
@@ -1435,27 +1460,62 @@ export class GitService implements vscode.Disposable {
 		return snap.unversioned.some((i) => pathsEqual(i.path, relativePath));
 	}
 
+	isStaged(relativePath: string, repoRoot: string): boolean {
+		const repo = this.requireRepoByRoot(repoRoot);
+		const snap = this.buildSnapshotForRepo(repo);
+		return snap.staged.some((i) => pathsEqual(i.path, relativePath));
+	}
+
+	/** True when the path is untracked/new and does not exist in HEAD (no valid HEAD blob). */
+	private async isNewToHead(repo: Repository, relativePath: string): Promise<boolean> {
+		const root = repo.rootUri.fsPath;
+		const matchesPath = (change: Change): boolean =>
+			pathsEqual(path.relative(root, change.uri.fsPath).replace(/\\/g, '/'), relativePath);
+
+		const allChanges = [
+			...repo.state.indexChanges,
+			...repo.state.workingTreeChanges,
+			...(repo.state.untrackedChanges ?? []),
+			...repo.state.mergeChanges,
+		];
+		const matched = allChanges.filter(matchesPath);
+		if (matched.length) {
+			// Untracked files often appear in workingTreeChanges with Status.UNTRACKED;
+			// they must NOT use toGitUri(..., 'HEAD') or the editor reports "file not found".
+			if (matched.some((c) => c.status === Status.UNTRACKED)) {
+				return true;
+			}
+			const addedOnly = new Set<Status>([Status.INDEX_ADDED, Status.INTENT_TO_ADD]);
+			return matched.every((c) => addedOnly.has(c.status));
+		}
+
+		const headPath = relativePath.replace(/\\/g, '/');
+		try {
+			await execFile('git', ['cat-file', '-e', `HEAD:${headPath}`], {
+				cwd: root,
+				maxBuffer: 1024 * 1024,
+			});
+			return false;
+		} catch {
+			return true;
+		}
+	}
+
+	/** Restore working tree to HEAD for an unstaged tracked change. */
 	private async discardFileToHead(repo: Repository, relativePath: string, fsPath: string): Promise<void> {
 		const restoreFn = (repo as Repository & { restore?: typeof repo.restore }).restore;
 		if (typeof restoreFn === 'function') {
 			try {
-				await this.runGitApi(repo, 'restore (staged)', relativePath, () =>
-					restoreFn.call(repo, [fsPath], { staged: true, ref: 'HEAD' })
-				);
 				await this.runGitApi(repo, 'restore (working tree)', relativePath, () =>
 					restoreFn.call(repo, [fsPath], { ref: 'HEAD' })
 				);
 				return;
 			} catch {
-				// Fall through to git checkout / clean
+				// Fall through to git checkout
 			}
 		}
 
-		try {
-			await this.execGit(repo.rootUri.fsPath, ['checkout', 'HEAD', '--', relativePath]);
-		} catch {
-			await this.runGitApi(repo, 'clean', relativePath, () => repo.clean([fsPath]));
-		}
+		await this.execGit(repo.rootUri.fsPath, ['checkout', 'HEAD', '--', relativePath]);
 	}
 
 	private async runGitApi<T>(
@@ -1536,12 +1596,58 @@ export class GitService implements vscode.Disposable {
 
 		const repo = this.requireRepoByRoot(repoRoot);
 		const fsPath = path.join(repo.rootUri.fsPath, relativePath);
-		const fileUri = vscode.Uri.file(fsPath);
 		await this.ensureSaved(fsPath);
 
-		const head = this.api.toGitUri(fileUri, 'HEAD');
 		const title = `${relativePath} (Rollback preview)`;
-		await vscode.commands.executeCommand('vscode.diff', head, fileUri, title);
+		await this.openHeadWorkingDiff(repo, relativePath, fsPath, title);
+	}
+
+	/**
+	 * Open left/right diff for HEAD vs working tree.
+	 * New/untracked files use an empty left document (HEAD blob does not exist).
+	 * Deleted files use an empty right document (working tree file missing).
+	 */
+	private async openHeadWorkingDiff(
+		repo: Repository,
+		relativePath: string,
+		fsPath: string,
+		title: string,
+		diffOptions?: vscode.TextDocumentShowOptions
+	): Promise<void> {
+		if (!this.api) {
+			throw new Error('VS Code Git extension is not available.');
+		}
+
+		const fileUri = vscode.Uri.file(fsPath);
+		const workingExists = await fileExists(fsPath);
+		const root = repo.rootUri.fsPath;
+		const absentFromHead =
+			this.isUntracked(relativePath, root) || (await this.isNewToHead(repo, relativePath));
+
+		let left: vscode.Uri;
+		if (absentFromHead) {
+			left = (await vscode.workspace.openTextDocument({ content: '' })).uri;
+		} else {
+			left = this.api.toGitUri(fileUri, 'HEAD');
+		}
+
+		let right: vscode.Uri;
+		if (workingExists) {
+			right = fileUri;
+		} else {
+			right = (await vscode.workspace.openTextDocument({ content: '' })).uri;
+		}
+
+		if (absentFromHead && !workingExists) {
+			await vscode.window.showTextDocument(right, {
+				preview: false,
+				preserveFocus: false,
+				...(diffOptions ?? {}),
+			});
+			return;
+		}
+
+		await vscode.commands.executeCommand('vscode.diff', left, right, title, diffOptions);
 	}
 
 	async getDiff(relativePath: string, staged: boolean, repoRoot?: string): Promise<DiffResult> {

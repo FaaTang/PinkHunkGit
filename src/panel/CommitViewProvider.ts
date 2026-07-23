@@ -162,13 +162,27 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async openFile(repoRoot: string, relativePath: string): Promise<void> {
-		const uri = vscode.Uri.file(this.toFsPath(repoRoot, relativePath));
+		const fsPath = this.toFsPath(repoRoot, relativePath);
+		try {
+			await vscode.workspace.fs.stat(vscode.Uri.file(fsPath));
+		} catch {
+			vscode.window.showErrorMessage(`File not found on disk: ${relativePath}`);
+			return;
+		}
+		const uri = vscode.Uri.file(fsPath);
 		const doc = await vscode.workspace.openTextDocument(uri);
 		await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: false });
 	}
 
 	private async revealInExplorer(repoRoot: string, relativePath: string): Promise<void> {
-		const uri = vscode.Uri.file(this.toFsPath(repoRoot, relativePath));
+		const fsPath = this.toFsPath(repoRoot, relativePath);
+		const uri = vscode.Uri.file(fsPath);
+		try {
+			await vscode.workspace.fs.stat(uri);
+		} catch {
+			vscode.window.showErrorMessage(`File not found on disk: ${relativePath}`);
+			return;
+		}
 		await vscode.commands.executeCommand('revealInExplorer', uri);
 	}
 
@@ -226,9 +240,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	}): Promise<void> {
 		const isUntracked = this.git.isUntracked(msg.path, msg.repoRoot);
 		try {
-			if (!isUntracked) {
-				await this.git.openRollbackDiff(msg.path, msg.repoRoot);
-			}
+			await this.git.openRollbackDiff(msg.path, msg.repoRoot);
 		} catch {
 			// Diff may fail for some edge cases; still show confirm dialog
 		}
@@ -247,10 +259,11 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		}
 		const allUntracked =
 			unversionedGroup || paths.every((p) => this.git.isUntracked(p.path, p.repoRoot));
-		const firstTracked = paths.find((p) => !this.git.isUntracked(p.path, p.repoRoot));
-		if (firstTracked) {
+		const allStaged = !allUntracked && paths.every((p) => p.staged);
+		const previewTarget = paths[0];
+		if (previewTarget) {
 			try {
-				await this.git.openRollbackDiff(firstTracked.path, firstTracked.repoRoot);
+				await this.git.openRollbackDiff(previewTarget.path, previewTarget.repoRoot);
 			} catch {
 				// Diff may fail for some edge cases; still show confirm dialog
 			}
@@ -260,7 +273,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			payload: {
 				repoRoot: paths[0].repoRoot,
 				path: paths[0].path,
-				staged: paths[0].staged,
+				staged: allStaged || paths[0].staged,
 				isUntracked: allUntracked,
 				batch: true,
 				allUntracked,
@@ -376,13 +389,13 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'rollbackConfirm':
 					await this.withBusy(async () => {
-						await this.git.rollbackFile(msg.path, msg.repoRoot);
+						await this.git.rollbackFile(msg.path, msg.repoRoot, msg.staged);
 					});
 					break;
 				case 'rollbackBatchConfirm':
 					await this.withBusy(async () => {
-						for (const { repoRoot, path } of msg.paths) {
-							await this.git.rollbackFile(path, repoRoot);
+						for (const { repoRoot, path, staged } of msg.paths) {
+							await this.git.rollbackFile(path, repoRoot, staged);
 						}
 					});
 					break;
