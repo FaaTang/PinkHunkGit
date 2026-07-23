@@ -37,17 +37,31 @@
   };
   const webviewState = vscode.getState() || {};
   const collapsedGroups = new Set(webviewState.collapsedGroups || []);
-  /** IDEA-style repo color palette (stable hash per rootPath). */
+  /**
+   * IDEA-style repo color palette.
+   * Prefer hash → index; collisions among currently visible repos are resolved
+   * so each rootPath gets a distinct color in the same workspace snapshot.
+   */
   const REPO_COLORS = [
-    '#8b4049',
-    '#3d6b4f',
-    '#4a6082',
-    '#6b4c8b',
-    '#8b6914',
-    '#3d6b6b',
-    '#6b523d',
-    '#4a6b3d',
+    '#8b4049', // rose
+    '#3d6b4f', // forest
+    '#4a6082', // slate blue
+    '#6b4c8b', // purple
+    '#8b6914', // amber
+    '#3d6b6b', // teal
+    '#6b523d', // brown
+    '#4a6b3d', // olive
+    '#8b4557', // cranberry
+    '#2f6b7a', // cyan-steel
+    '#7a5a2f', // bronze
+    '#5a4a8b', // indigo
+    '#6b3d5a', // plum
+    '#3d5a6b', // steel
+    '#7a6b2f', // mustard
+    '#2f7a4a', // emerald
   ];
+  /** rootPath key → assigned hex/hsl; rebuilt on each files render. */
+  let repoColorByKey = new Map();
   const checkedUnversioned = new Set(webviewState.checkedUnversioned || []);
   const changeIncludeState = new Map(Object.entries(webviewState.changeIncludeState || {}));
   let lastCommitMessage = webviewState.lastCommitMessage || '';
@@ -130,14 +144,65 @@
     vscode.setState(state);
   }
 
-  function repoColor(root) {
-    const s = repoKey(root);
+  function hashRepoKey(s) {
     let hash = 0;
     for (let i = 0; i < s.length; i += 1) {
       hash = (hash << 5) - hash + s.charCodeAt(i);
       hash |= 0;
     }
-    return REPO_COLORS[Math.abs(hash) % REPO_COLORS.length];
+    return Math.abs(hash);
+  }
+
+  function colorForIndex(index) {
+    if (index < REPO_COLORS.length) {
+      return REPO_COLORS[index];
+    }
+    // Past the fixed palette: golden-angle hues stay visually distinct.
+    const hue = Math.round((index * 137.508) % 360);
+    return `hsl(${hue} 48% 45%)`;
+  }
+
+  /**
+   * Assign a unique color to every currently visible repository.
+   * Preferred slot = hash(root) % slotCount; if taken, probe the next free slot.
+   * Same repo set → stable colors; colliding paths (e.g. PinkHunkGit / PinkHunkDB)
+   * no longer share one swatch.
+   */
+  function rebuildRepoColors() {
+    const keys = [
+      ...new Set(
+        allRepos()
+          .map((r) => repoKey(r && r.rootPath))
+          .filter(Boolean)
+      ),
+    ].sort();
+    const slotCount = Math.max(REPO_COLORS.length, keys.length);
+    const used = new Set();
+    const map = new Map();
+
+    for (const key of keys) {
+      const preferred = hashRepoKey(key) % slotCount;
+      let assigned = preferred;
+      for (let probe = 0; probe < slotCount; probe += 1) {
+        const tryIdx = (preferred + probe) % slotCount;
+        if (!used.has(tryIdx)) {
+          assigned = tryIdx;
+          break;
+        }
+      }
+      used.add(assigned);
+      map.set(key, colorForIndex(assigned));
+    }
+
+    repoColorByKey = map;
+  }
+
+  function repoColor(root) {
+    const key = repoKey(root);
+    if (repoColorByKey.has(key)) {
+      return repoColorByKey.get(key);
+    }
+    return colorForIndex(hashRepoKey(key) % REPO_COLORS.length);
   }
 
   function categoryCollapseKey(groupId) {
@@ -809,6 +874,8 @@
       fileList.appendChild(empty);
       return;
     }
+
+    rebuildRepoColors();
 
     const focused = activeRepoRoot();
     const changesEntries = repos.map((repo) => ({ repo, items: getMergedChanges(repo) }));
