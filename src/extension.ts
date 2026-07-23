@@ -17,7 +17,7 @@ let gitInitPromise: Promise<void> | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-	outputChannel = vscode.window.createOutputChannel('Copy IDEA Git UI');
+	outputChannel = vscode.window.createOutputChannel('Pink Hunk Git');
 	context.subscriptions.push(outputChannel);
 	initGitOutput(outputChannel);
 
@@ -173,7 +173,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		logExtension(`Activation failed: ${message}`);
-		vscode.window.showErrorMessage(`Copy IDEA Git UI activation failed: ${message}`);
+		vscode.window.showErrorMessage(`Pink Hunk Git activation failed: ${message}`);
 		throw err;
 	}
 }
@@ -201,7 +201,7 @@ async function initializeGit(context: vscode.ExtensionContext): Promise<void> {
 		void promptInstallKeybindings(context);
 	} else {
 		vscode.window.showWarningMessage(
-			`Copy IDEA Git UI: ${gitInitError || 'Git not ready'}. Keybindings remain available; details will be shown when opening the panel.`
+			`Pink Hunk Git: ${gitInitError || 'Git not ready'}. Keybindings remain available; details will be shown when opening the panel.`
 		);
 	}
 }

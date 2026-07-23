@@ -23,7 +23,7 @@ export async function promptInstallKeybindings(context: vscode.ExtensionContext)
 	}
 
 	const choice = await vscode.window.showInformationMessage(
-		'Copy IDEA Git UI: Ctrl+K / Ctrl+Shift+K / Ctrl+T conflict with built-in VS Code shortcuts. Write user keybindings to mimic IDEA?',
+		'Pink Hunk Git: Ctrl+K / Ctrl+Shift+K / Ctrl+T conflict with built-in VS Code shortcuts. Write user keybindings to mimic IDEA?',
 		'Install',
 		'Later'
 	);

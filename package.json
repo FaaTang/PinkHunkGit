@@ -1,8 +1,8 @@
 {
-  "name": "copy-idea-git-ui",
-  "displayName": "Copy IDEA Git UI",
+  "name": "pink-hunk-git",
+  "displayName": "Pink Hunk Git",
   "description": "IDEA-like Git commit panel for VS Code",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "publisher": "FaaTang",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -36,53 +36,53 @@
       {
         "command": "copyIdeaGitUi.openCommit",
         "title": "Open Commit",
-        "category": "Copy IDEA Git UI"
+        "category": "Pink Hunk Git"
       },
       {
         "command": "copyIdeaGitUi.openPush",
         "title": "Open Push",
-        "category": "Copy IDEA Git UI"
+        "category": "Pink Hunk Git"
       },
       {
         "command": "copyIdeaGitUi.updateAllRepositories",
         "title": "Update All Git Repositories",
-        "category": "Copy IDEA Git UI",
+        "category": "Pink Hunk Git",
         "icon": "$(sync)"
       },
       {
         "command": "copyIdeaGitUi.showDiff",
         "title": "Show Diff",
-        "category": "Copy IDEA Git UI"
+        "category": "Pink Hunk Git"
       },
       {
         "command": "copyIdeaGitUi.openFile",
         "title": "Open File",
-        "category": "Copy IDEA Git UI"
+        "category": "Pink Hunk Git"
       },
       {
         "command": "copyIdeaGitUi.revealInExplorer",
         "title": "Reveal in Explorer",
-        "category": "Copy IDEA Git UI"
+        "category": "Pink Hunk Git"
       },
       {
         "command": "copyIdeaGitUi.rollback",
         "title": "Rollback",
-        "category": "Copy IDEA Git UI"
+        "category": "Pink Hunk Git"
       },
       {
         "command": "copyIdeaGitUi.addToGit",
         "title": "Add to Git",
-        "category": "Copy IDEA Git UI"
+        "category": "Pink Hunk Git"
       },
       {
         "command": "copyIdeaGitUi.openExplorer",
         "title": "Open Explorer",
-        "category": "Copy IDEA Git UI"
+        "category": "Pink Hunk Git"
       },
       {
         "command": "copyIdeaGitUi.installKeybindings",
         "title": "Install IDEA Keybindings",
-        "category": "Copy IDEA Git UI"
+        "category": "Pink Hunk Git"
       }
     ],
     "viewsContainers": {

@@ -207,7 +207,7 @@ export class GitService implements vscode.Disposable {
 				// Continue with best-effort Git API access; blocking init leaves the
 				// Commit webview blank because the extension never finishes activating.
 				console.warn(
-					'Copy IDEA Git UI: timed out waiting for Git API initialization; continuing anyway.'
+					'Pink Hunk Git: timed out waiting for Git API initialization; continuing anyway.'
 				);
 				finish();
 			}, timeoutMs);

@@ -78,7 +78,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			webviewView.webview.html = this.getHtml(webviewView.webview);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
-			webviewView.webview.html = `<!DOCTYPE html><html><body><p>Copy IDEA Git UI failed to load: ${message}</p></body></html>`;
+			webviewView.webview.html = `<!DOCTYPE html><html><body><p>Pink Hunk Git failed to load: ${message}</p></body></html>`;
 		}
 
 		this.disposables.push(

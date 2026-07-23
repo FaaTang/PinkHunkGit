@@ -82,13 +82,13 @@ jobs:
         run: npm run compile
 
       - name: Package VSIX
-        run: npx @vscode/vsce package --no-dependencies -o "copy-idea-git-ui-${{ needs.gate.outputs.version }}.vsix"
+        run: npx @vscode/vsce package --no-dependencies -o "pink-hunk-git-${{ needs.gate.outputs.version }}.vsix"
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
           name: vsix
-          path: copy-idea-git-ui-*.vsix
+          path: pink-hunk-git-*.vsix
           if-no-files-found: error
           retention-days: 7
 
@@ -126,11 +126,11 @@ jobs:
 
           COMMITS=$(git log "$RANGE" --no-merges --pretty=format:'- %s' 2>/dev/null || true)
           {
-            echo "# Copy IDEA Git UI ${TAG}"
+            echo "# Pink Hunk Git ${TAG}"
             echo
             echo "## Installation (manual)"
             echo
-            echo "1. Download the attachment \`copy-idea-git-ui-${{ needs.gate.outputs.version }}.vsix\` below"
+            echo "1. Download the attachment \`pink-hunk-git-${{ needs.gate.outputs.version }}.vsix\` below"
             echo "2. Open VS Code / Cursor"
             echo "3. Run \`Extensions: Install from VSIX...\` from the Command Palette"
             echo "4. Select the downloaded \`.vsix\` file and install"
@@ -153,7 +153,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Copy IDEA Git UI ${{ github.ref_name }}
+          name: Pink Hunk Git ${{ github.ref_name }}
           files: release-assets/*
           draft: false
           prerelease: false
