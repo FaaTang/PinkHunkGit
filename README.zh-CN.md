@@ -6,7 +6,7 @@
 
 ## 安装（从 GitHub Release 手动安装）
 
-1. 打开 [Releases](https://github.com/FaaTang/CopyIDEAGitUI/releases) 下载最新的 `.vsix`
+1. 打开 [Releases](https://github.com/FaaTang/PinkHunkGit/releases) 下载最新的 `.vsix`
 2. VS Code / Cursor 命令面板运行：`Extensions: Install from VSIX...`
 3. 选择下载的 `.vsix` 安装，必要时重载窗口
 

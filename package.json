@@ -2,7 +2,7 @@
   "name": "copy-idea-git-ui",
   "displayName": "Copy IDEA Git UI",
   "description": "IDEA-like Git commit panel for VS Code",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "publisher": "FaaTang",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -171,12 +171,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/FaaTang/CopyIDEAGitUI.git"
+    "url": "https://github.com/FaaTang/PinkHunkGit.git"
   },
   "bugs": {
-    "url": "https://github.com/FaaTang/CopyIDEAGitUI/issues"
+    "url": "https://github.com/FaaTang/PinkHunkGit/issues"
   },
-  "homepage": "https://github.com/FaaTang/CopyIDEAGitUI#readme",
+  "homepage": "https://github.com/FaaTang/PinkHunkGit#readme",
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
