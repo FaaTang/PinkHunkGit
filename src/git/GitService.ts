@@ -22,6 +22,14 @@ import {
 	WorkspaceSnapshot,
 } from '../panel/messages';
 import { PushCommitItem, PushTarget } from '../panel/pushMessages';
+import {
+	buildLocaleFallbackMessage,
+	formatCommitMessageStyle,
+	generateCommitMessageWithLanguageModel,
+	resolveCommitMessageLocale,
+	rewriteCommitMessageForLocale,
+	withTemporaryCommitLanguageRule,
+} from '../commitMessage/generateCommitMessage';
 
 const MAX_DIFF_BYTES = 1_000_000;
 
@@ -598,8 +606,10 @@ export class GitService implements vscode.Disposable {
 	}
 
 	/**
-	 * Invoke Cursor / Copilot "Generate Commit Message" and return the SCM input box value.
-	 * Prefer Cursor's built-in command; fall back to GitHub Copilot in VS Code.
+	 * Generate a commit message for the current selection.
+	 * 1) vscode.lm when available (VS Code + Copilot)
+	 * 2) Cursor/Copilot SCM command with a temporary `.cursorrules` language hint
+	 * 3) Locale fallback (Chinese summary) if AI still returns the wrong language
 	 */
 	async generateCommitMessageWithAi(
 		checkedChanges: Array<{ repoRoot: string; path: string }>,
@@ -610,6 +620,50 @@ export class GitService implements vscode.Disposable {
 			throw new Error('No repository found.');
 		}
 
+		const relativePaths = [
+			...checkedChanges
+				.filter((entry) => pathsEqual(entry.repoRoot, repo.rootUri.fsPath))
+				.map((entry) => entry.path),
+			...(unversionedPaths ?? [])
+				.filter((entry) => pathsEqual(entry.repoRoot, repo.rootUri.fsPath))
+				.map((entry) => entry.path),
+		];
+
+		try {
+			const viaLm = await generateCommitMessageWithLanguageModel(repo, relativePaths);
+			if (viaLm?.trim()) {
+				const normalized = this.ensureLocaleCommitMessage(viaLm.trim(), relativePaths);
+				repo.inputBox.value = normalized;
+				return normalized;
+			}
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			if (typeof vscode.lm?.selectChatModels === 'function') {
+				const models = await Promise.resolve(vscode.lm.selectChatModels()).catch(() => []);
+				if (models.length) {
+					throw new Error(`Failed to generate commit message: ${detail}`);
+				}
+			}
+		}
+
+		const viaScm = await withTemporaryCommitLanguageRule(repo.rootUri.fsPath, () =>
+			this.generateCommitMessageViaScmCommand(repo)
+		);
+		const normalized = this.ensureLocaleCommitMessage(viaScm.trim(), relativePaths);
+		repo.inputBox.value = normalized;
+		return normalized;
+	}
+
+	private ensureLocaleCommitMessage(message: string, relativePaths: string[]): string {
+		const locale = resolveCommitMessageLocale();
+		let text = message.trim();
+		if (locale.wantsCjk && !/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u.test(text)) {
+			text = buildLocaleFallbackMessage(relativePaths, text) ?? text;
+		}
+		return formatCommitMessageStyle(text, relativePaths);
+	}
+
+	private async generateCommitMessageViaScmCommand(repo: Repository): Promise<string> {
 		const commandId = await this.resolveGenerateCommitMessageCommand();
 		if (!commandId) {
 			throw new Error(
@@ -634,6 +688,10 @@ export class GitService implements vscode.Disposable {
 		const generated = await this.waitForGeneratedCommitMessage(repo, sentinel, previous);
 		if (!generated.trim()) {
 			throw new Error('No commit message was generated. Ensure there are staged changes.');
+		}
+		const rewritten = await rewriteCommitMessageForLocale(generated);
+		if (rewritten?.trim()) {
+			return rewritten.trim();
 		}
 		return generated;
 	}

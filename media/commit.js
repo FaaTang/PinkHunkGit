@@ -6,6 +6,8 @@
   const repoSelect = document.getElementById('repoSelect');
   const fileList = document.getElementById('fileList');
   const messageEl = document.getElementById('message');
+  const messageResizeEl = document.getElementById('messageResize');
+  const messageFieldEl = messageEl ? messageEl.closest('.message-field') : null;
   const generateMsgBtn = document.getElementById('generateMsgBtn');
   const formError = document.getElementById('formError');
   const commitBtn = document.getElementById('commitBtn');
@@ -1426,6 +1428,78 @@
     const checkedChanges = collectCheckedChangesPaths();
     post({ type: 'generateCommitMessage', checkedChanges, unversionedPaths });
   });
+
+  (function setupMessageResize() {
+    if (!messageEl || !messageResizeEl || !messageFieldEl) {
+      return;
+    }
+
+    const MIN_HEIGHT = 72;
+    const MAX_HEIGHT = () => Math.min(Math.floor(window.innerHeight * 0.6), 420);
+
+    function applyHeight(px) {
+      const next = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT(), Math.round(px)));
+      messageEl.style.height = `${next}px`;
+      saveWebviewState({ messageHeight: next });
+    }
+
+    const savedHeight = Number(webviewState.messageHeight);
+    if (Number.isFinite(savedHeight) && savedHeight >= MIN_HEIGHT) {
+      applyHeight(savedHeight);
+    }
+
+    let dragging = false;
+    let startY = 0;
+    let startHeight = 0;
+
+    function onPointerMove(e) {
+      if (!dragging) {
+        return;
+      }
+      // Handle is on the top edge: drag up => taller, drag down => shorter.
+      applyHeight(startHeight + (startY - e.clientY));
+    }
+
+    function onPointerUp(e) {
+      if (!dragging) {
+        return;
+      }
+      dragging = false;
+      messageFieldEl.classList.remove('is-resizing');
+      try {
+        messageResizeEl.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    }
+
+    messageResizeEl.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) {
+        return;
+      }
+      e.preventDefault();
+      dragging = true;
+      startY = e.clientY;
+      startHeight = messageEl.getBoundingClientRect().height;
+      messageFieldEl.classList.add('is-resizing');
+      messageResizeEl.setPointerCapture(e.pointerId);
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+    });
+
+    messageResizeEl.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 24 : 8;
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        applyHeight(messageEl.getBoundingClientRect().height + step);
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        applyHeight(messageEl.getBoundingClientRect().height - step);
+      }
+    });
+  })();
 
   messageEl.addEventListener('input', () => {
     saveMessageDraft();
