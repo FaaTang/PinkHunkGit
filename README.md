@@ -6,7 +6,7 @@ An IntelliJ IDEA–style **Commit** panel for VS Code / Cursor: stage files from
 
 ## Install (manual from GitHub Release)
 
-1. Open [Releases](https://github.com/FaaTang/CopyIDEAGitUI/releases) and download the latest `.vsix`
+1. Open [Releases](https://github.com/FaaTang/PinkHunkGit/releases) and download the latest `.vsix`
 2. In VS Code / Cursor, run from the Command Palette: `Extensions: Install from VSIX...`
 3. Select the downloaded `.vsix` and reload the window if prompted
 

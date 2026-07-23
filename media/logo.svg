@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="48" x2="448" y2="464" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ff8fc7"/>
+      <stop offset="48%" stop-color="#ff4da6"/>
+      <stop offset="100%" stop-color="#ff006e"/>
+    </linearGradient>
+    <linearGradient id="bgShine" x1="256" y1="32" x2="256" y2="240" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="nodeFill" x1="256" y1="90" x2="256" y2="430" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.98"/>
+      <stop offset="100%" stop-color="#ffe4f0" stop-opacity="0.92"/>
+    </linearGradient>
+    <filter id="softShadow" x="-25%" y="-15%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#b8004d" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="112" fill="url(#bgShine)"/>
+  <rect x="28" y="28" width="456" height="456" rx="92" stroke="#ffffff" stroke-opacity="0.22" stroke-width="1.5"/>
+
+  <g filter="url(#softShadow)">
+    <g stroke="#ffffff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M168 88 L168 424"/>
+      <path d="M168 184 C168 184 168 236 268 236 C368 236 368 288 368 288"/>
+      <path d="M368 288 L368 360 C368 400 308 416 248 416 L168 416"/>
+    </g>
+
+    <circle cx="168" cy="88" r="42" fill="url(#nodeFill)" stroke="#ffffff" stroke-width="6"/>
+    <circle cx="168" cy="184" r="34" fill="url(#nodeFill)" stroke="#ffffff" stroke-width="5"/>
+    <circle cx="368" cy="288" r="40" fill="url(#nodeFill)" stroke="#ffffff" stroke-width="6"/>
+    <circle cx="168" cy="424" r="42" fill="url(#nodeFill)" stroke="#ffffff" stroke-width="6"/>
+
+    <circle cx="168" cy="88" r="15" fill="#ff4da6" fill-opacity="0.35"/>
+    <circle cx="368" cy="288" r="14" fill="#ff4da6" fill-opacity="0.28"/>
+    <circle cx="168" cy="424" r="15" fill="#ff4da6" fill-opacity="0.22"/>
+  </g>
+</svg>
