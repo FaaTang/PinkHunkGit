@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService, PushRejectedError, isValidTagName } from '../git/GitService';
+import { showTimedInfoMessage } from '../ui/notify';
 import {
 	PushDialogPayload,
 	PushHostToWebview,
@@ -99,7 +100,7 @@ export class PushDialogProvider implements vscode.Disposable {
 			try {
 				await this.git.push(resolvedRoot, { pushTags });
 				const tagsNote = pushTags ? ' (with tags)' : '';
-				vscode.window.showInformationMessage(
+				showTimedInfoMessage(
 					`Pushed ${label}${upstream ? ` → ${upstream}` : ''}${tagsNote}.`
 				);
 				continue;
@@ -129,7 +130,7 @@ export class PushDialogProvider implements vscode.Disposable {
 				try {
 					await this.git.push(resolvedRoot, { pushTags });
 					this.close();
-					vscode.window.showInformationMessage(
+					showTimedInfoMessage(
 						`Merged and pushed ${label}${upstream ? ` → ${upstream}` : ''}${
 							pushTags ? ' (with tags)' : ''
 						}.`
@@ -291,7 +292,7 @@ export class PushDialogProvider implements vscode.Disposable {
 					await this.withBusy(async () => {
 						await this.git.abortSync(msg.repoRoot);
 						this.conflictContext = undefined;
-						vscode.window.showInformationMessage('Merge / Rebase aborted.');
+						showTimedInfoMessage('Merge / Rebase aborted.');
 						this.close();
 					});
 					break;
@@ -379,10 +380,10 @@ export class PushDialogProvider implements vscode.Disposable {
 			await this.git.push(repoRoot, { pushTags });
 			this.close();
 			if (ahead === 0 && pushTags) {
-				vscode.window.showInformationMessage(`Pushed tags for ${label}.`);
+				showTimedInfoMessage(`Pushed tags for ${label}.`);
 			} else {
 				const tagsNote = pushTags ? ' (with tags)' : '';
-				vscode.window.showInformationMessage(
+				showTimedInfoMessage(
 					`Pushed ${label}${upstream ? ` → ${upstream}` : ''}${tagsNote}.`
 				);
 			}
@@ -438,7 +439,7 @@ export class PushDialogProvider implements vscode.Disposable {
 					? `Created tag ${trimmed} on ${succeeded[0]}.`
 					: `Created tag ${trimmed} on ${succeeded.length} repositories.`;
 			this.post({ type: 'tagResult', success: true, message });
-			vscode.window.showInformationMessage(message);
+			showTimedInfoMessage(message);
 		} else if (succeeded.length && failed.length) {
 			const details = failed.map((f) => `${f.name}: ${f.error}`).join('\n');
 			const message = `Tag ${trimmed} created on ${succeeded.length} repo(s); ${failed.length} failed.`;

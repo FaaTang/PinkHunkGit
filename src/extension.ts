@@ -7,6 +7,7 @@ import {
 import { CommitViewProvider } from './panel/CommitViewProvider';
 import { PushDialogProvider } from './panel/PushDialogProvider';
 import { initGitOutput, logExtension } from './git/gitOutput';
+import { showTimedInfoMessage } from './ui/notify';
 
 let gitService: GitService | undefined;
 let commitViewProvider: CommitViewProvider | undefined;
@@ -116,7 +117,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				);
 
 				if (!result.failed.length) {
-					vscode.window.showInformationMessage(
+					showTimedInfoMessage(
 						`Updated ${result.succeeded.length} Git repositories.`
 					);
 					return;

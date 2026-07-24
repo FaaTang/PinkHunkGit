@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { showTimedInfoMessage } from '../ui/notify';
 
 const MARKER = 'copyIdeaGitUi.keybindings';
 
@@ -64,7 +65,7 @@ export async function installRecommendedKeybindings(
 
 		if (!toAdd.length) {
 			await context.globalState.update(MARKER, true);
-			vscode.window.showInformationMessage('IDEA keybindings already installed.');
+			showTimedInfoMessage('IDEA keybindings already installed.');
 			return { ok: true };
 		}
 

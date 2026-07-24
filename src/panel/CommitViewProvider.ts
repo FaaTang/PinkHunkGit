@@ -3,6 +3,7 @@ import * as path from 'path';
 import { bumpTrailingVTag, GitService } from '../git/GitService';
 import { FastPushFlags, FastPushSettingsStore } from '../fastPush/settings';
 import { UpdateAllSelectionStore } from '../updateAll/selectionStore';
+import { showTimedInfoMessage } from '../ui/notify';
 import { CommitRepoResult, HostToWebview, WebviewToHost } from './messages';
 import { PushDialogProvider } from './PushDialogProvider';
 
@@ -419,7 +420,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 
 		report('Committing…');
 		const committed = await this.git.commitAllStaged(message);
-		vscode.window.showInformationMessage(formatCommittedMessage(committed));
+		showTimedInfoMessage(formatCommittedMessage(committed));
 		this.post({ type: 'clearMessage' });
 		completeStep();
 
@@ -471,7 +472,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				tagPlans.length === 1
 					? `Created tag ${tagPlans[0].nextTag}.`
 					: `Created tags: ${tagPlans.map((p) => `${p.name}=${p.nextTag}`).join(', ')}.`;
-			vscode.window.showInformationMessage(tagSummary);
+			showTimedInfoMessage(tagSummary);
 			completeStep();
 		}
 
@@ -518,7 +519,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		const capability = await this.git.getCommitMessageGeneratorAvailability();
 		const payload = await this.fastPushSettings.save(workspace, global, capability);
 		this.post({ type: 'fastPushSettings', payload });
-		vscode.window.showInformationMessage('Fast Push settings saved. Workspace overrides Global in this folder.');
+		showTimedInfoMessage('Fast Push settings saved. Workspace overrides Global in this folder.');
 	}
 
 	private async startRollbackFlow(msg: {
@@ -695,7 +696,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 						await this.git.applyCommitSelection(msg.checkedChanges ?? []);
 						await this.stageUnversionedPaths(msg.unversionedPaths);
 						const committed = await this.git.commitAllStaged(msg.message);
-						vscode.window.showInformationMessage(formatCommittedMessage(committed));
+						showTimedInfoMessage(formatCommittedMessage(committed));
 						this.post({ type: 'clearMessage' });
 					});
 					break;
@@ -704,7 +705,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 						await this.git.applyCommitSelection(msg.checkedChanges ?? []);
 						await this.stageUnversionedPaths(msg.unversionedPaths);
 						const committed = await this.git.commitAllStaged(msg.message);
-						vscode.window.showInformationMessage(formatCommittedMessage(committed));
+						showTimedInfoMessage(formatCommittedMessage(committed));
 						this.post({ type: 'clearMessage' });
 						await this.pushDialog.show({
 							pendingPushRoots: committed.map((repo) => repo.rootPath),
