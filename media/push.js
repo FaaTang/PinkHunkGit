@@ -945,6 +945,28 @@
       case 'state':
         showConfirmView(msg.payload);
         break;
+      case 'openNewTag': {
+        const roots =
+          msg.repoRoots?.length
+            ? msg.repoRoots
+            : getCheckedRepoRoots().length
+              ? getCheckedRepoRoots()
+              : payload.targets.map((t) => t.repoRoot);
+        if (!roots.length) {
+          showFooterError('Select at least one branch to tag.');
+          break;
+        }
+        // Ensure targets for these roots are checked so Create applies to them.
+        targetSelectionInitialized = true;
+        checkedRoots = new Set(roots.map(normalizeRepoRoot));
+        renderTargets();
+        if (pushTagsCheckbox) {
+          pushTagsCheckbox.checked = true;
+          savePushTagsPreference();
+        }
+        openNewTagModal(roots);
+        break;
+      }
       case 'busy':
         setBusy(msg.busy, msg.message);
         break;

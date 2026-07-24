@@ -10,6 +10,9 @@ export class PushDialogProvider implements vscode.Disposable {
 	private panel?: vscode.WebviewPanel;
 	private busy = false;
 	private pendingPushRoots?: string[];
+	private pendingOpenNewTag = false;
+	private webviewReady = false;
+	private readyWaiters: Array<() => void> = [];
 	private dialogPhase: 'confirm' | 'alt' = 'confirm';
 	private conflictContext?: { mode: import('./messages').SyncMode; repoRoot?: string };
 	private refreshTimer?: ReturnType<typeof setTimeout>;
@@ -27,20 +30,24 @@ export class PushDialogProvider implements vscode.Disposable {
 		this.disposables.forEach((d) => d.dispose());
 	}
 
-	async show(options?: { pendingPushRoots?: string[] }): Promise<void> {
+	async show(options?: { pendingPushRoots?: string[]; openNewTag?: boolean }): Promise<void> {
 		this.pendingPushRoots = options?.pendingPushRoots;
+		this.pendingOpenNewTag = !!options?.openNewTag;
 		this.dialogPhase = 'confirm';
+		this.conflictContext = undefined;
 		await this.git.refresh();
 
 		if (this.panel) {
 			this.panel.reveal(vscode.ViewColumn.Active, false);
 			await this.sendState();
+			this.flushOpenNewTag();
 			return;
 		}
 
 		const active = this.git.getWorkspaceSnapshot().active;
 		const title = active.name ? `Push Commits to ${active.name}` : 'Push';
 
+		this.webviewReady = false;
 		this.panel = vscode.window.createWebviewPanel(
 			'copyIdeaGitUi.pushDialog',
 			title,
@@ -60,10 +67,130 @@ export class PushDialogProvider implements vscode.Disposable {
 			this.panel.onDidDispose(() => {
 				this.panel = undefined;
 				this.pendingPushRoots = undefined;
+				this.pendingOpenNewTag = false;
+				this.webviewReady = false;
+				this.conflictContext = undefined;
+				this.dialogPhase = 'confirm';
+				this.flushReadyWaiters();
 			})
 		);
 
 		await this.sendState();
+	}
+
+	/**
+	 * Push selected repos with tags. On rejection, auto-merge; if merge conflicts,
+	 * open the existing conflict UI for manual resolution.
+	 */
+	async pushWithAutoMerge(repoRoots: string[], options?: { pushTags?: boolean }): Promise<void> {
+		const pushTags = options?.pushTags !== false;
+		const roots = repoRoots.length ? repoRoots : [undefined];
+
+		for (const root of roots) {
+			const workspace = this.git.getWorkspaceSnapshot();
+			const snap = root
+				? workspace.repositories.find(
+						(r) =>
+							r.rootPath.replace(/\\/g, '/').toLowerCase() ===
+							root.replace(/\\/g, '/').toLowerCase()
+					)
+				: workspace.active;
+			const label = snap?.name ?? 'repository';
+			const upstream = snap?.upstream;
+			const resolvedRoot = snap?.rootPath || root;
+
+			try {
+				await this.git.push(resolvedRoot, { pushTags });
+				const tagsNote = pushTags ? ' (with tags)' : '';
+				vscode.window.showInformationMessage(
+					`Pushed ${label}${upstream ? ` → ${upstream}` : ''}${tagsNote}.`
+				);
+				continue;
+			} catch (err) {
+				if (!(err instanceof PushRejectedError)) {
+					throw err;
+				}
+
+				await this.ensureOpen({ pendingPushRoots: resolvedRoot ? [resolvedRoot] : repoRoots });
+				this.post({ type: 'busy', busy: true, message: 'Push rejected. Auto-merging…' });
+				let syncResult: Awaited<ReturnType<GitService['syncWithUpstream']>>;
+				try {
+					syncResult = await this.git.syncWithUpstream('merge', resolvedRoot);
+				} finally {
+					this.post({ type: 'busy', busy: false });
+				}
+
+				if (syncResult.status === 'conflict') {
+					await this.handleSyncResult(syncResult, resolvedRoot);
+					return;
+				}
+				if (syncResult.status === 'failed') {
+					this.postPushRejected(syncResult.message, resolvedRoot);
+					return;
+				}
+
+				try {
+					await this.git.push(resolvedRoot, { pushTags });
+					this.close();
+					vscode.window.showInformationMessage(
+						`Merged and pushed ${label}${upstream ? ` → ${upstream}` : ''}${
+							pushTags ? ' (with tags)' : ''
+						}.`
+					);
+				} catch (retryErr) {
+					if (retryErr instanceof PushRejectedError) {
+						this.postPushRejected(retryErr.message, resolvedRoot);
+						return;
+					}
+					throw retryErr;
+				}
+			}
+		}
+	}
+
+	private async ensureOpen(options?: { pendingPushRoots?: string[] }): Promise<void> {
+		if (this.panel) {
+			if (options?.pendingPushRoots?.length) {
+				this.pendingPushRoots = options.pendingPushRoots;
+			}
+			this.panel.reveal(vscode.ViewColumn.Active, false);
+			await this.sendState();
+			await this.waitUntilReady();
+			return;
+		}
+		await this.show({ pendingPushRoots: options?.pendingPushRoots });
+		await this.waitUntilReady();
+	}
+
+	private waitUntilReady(): Promise<void> {
+		if (this.webviewReady && this.panel) {
+			return Promise.resolve();
+		}
+		return new Promise((resolve) => {
+			this.readyWaiters.push(resolve);
+		});
+	}
+
+	private flushReadyWaiters(): void {
+		const waiters = this.readyWaiters.splice(0);
+		for (const resolve of waiters) {
+			resolve();
+		}
+	}
+
+	private flushOpenNewTag(): void {
+		if (!this.pendingOpenNewTag || !this.panel || !this.webviewReady) {
+			return;
+		}
+		this.pendingOpenNewTag = false;
+		const roots =
+			this.pendingPushRoots?.length
+				? [...this.pendingPushRoots]
+				: this.git
+						.getWorkspaceSnapshot()
+						.repositories.filter((r) => r.ok && r.rootPath)
+						.map((r) => r.rootPath);
+		this.post({ type: 'openNewTag', repoRoots: roots });
 	}
 
 	close(): void {
@@ -74,6 +201,8 @@ export class PushDialogProvider implements vscode.Disposable {
 		this.panel?.dispose();
 		this.panel = undefined;
 		this.pendingPushRoots = undefined;
+		this.pendingOpenNewTag = false;
+		this.webviewReady = false;
 	}
 
 	private scheduleRefreshIfOpen(): void {
@@ -124,7 +253,10 @@ export class PushDialogProvider implements vscode.Disposable {
 		try {
 			switch (msg.type) {
 				case 'ready':
+					this.webviewReady = true;
 					await this.sendState();
+					this.flushOpenNewTag();
+					this.flushReadyWaiters();
 					break;
 				case 'cancel':
 				case 'askPushCancel':

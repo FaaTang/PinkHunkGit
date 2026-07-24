@@ -82,6 +82,7 @@ export type PushHostToWebview =
 	| { type: 'error'; message: string }
 	| { type: 'tagResult'; success: boolean; message: string }
 	| { type: 'previousRemoteTags'; requestId: number; items: PreviousRemoteTagItem[] }
+	| { type: 'openNewTag'; repoRoots: string[] }
 	| { type: 'showRejected'; payload: PushRejectedPayload }
 	| { type: 'showSyncPreview'; payload: SyncPreviewPayload }
 	| { type: 'showSyncConflict'; payload: SyncConflictPayload }

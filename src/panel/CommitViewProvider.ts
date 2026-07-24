@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { GitService } from '../git/GitService';
+import { bumpTrailingVTag, GitService } from '../git/GitService';
 import { CommitRepoResult, HostToWebview, WebviewToHost } from './messages';
 import { PushDialogProvider } from './PushDialogProvider';
 
@@ -233,6 +233,83 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
+	/**
+	 * Fast Push: generate commit message → commit → auto bump v-tag → push (with tags).
+	 * On push rejection auto-merge; unresolved conflicts fall back to Push conflict UI.
+	 * If tag cannot be auto-bumped, open Push dialog + New Tag modal.
+	 */
+	private async handleFastPush(
+		checkedChanges: Array<{ repoRoot: string; path: string }>,
+		unversionedPaths?: Array<{ repoRoot: string; path: string }>
+	): Promise<void> {
+		if (!checkedChanges.length && !(unversionedPaths?.length)) {
+			throw new Error('Select files to include before Fast Push.');
+		}
+
+		this.post({ type: 'generateCommitMessageState', busy: true });
+		let message: string;
+		try {
+			await this.git.applyCommitSelection(checkedChanges);
+			await this.stageUnversionedPaths(unversionedPaths);
+			await this.git.refresh();
+			message = await this.git.generateCommitMessageWithAi(checkedChanges, unversionedPaths);
+			this.post({ type: 'setMessage', message });
+		} finally {
+			this.post({ type: 'generateCommitMessageState', busy: false });
+		}
+
+		const committed = await this.git.commitAllStaged(message);
+		vscode.window.showInformationMessage(formatCommittedMessage(committed));
+		this.post({ type: 'clearMessage' });
+
+		const roots = committed.map((repo) => repo.rootPath);
+		const tagPlans: Array<{ root: string; name: string; nextTag: string }> = [];
+
+		for (const root of roots) {
+			const snap = this.git.getWorkspaceSnapshot().repositories.find(
+				(r) =>
+					r.rootPath.replace(/\\/g, '/').toLowerCase() === root.replace(/\\/g, '/').toLowerCase()
+			);
+			const name = snap?.name ?? root;
+			let latest: string | undefined;
+			try {
+				latest = await this.git.getLatestRemoteTag(root);
+			} catch {
+				latest = undefined;
+			}
+			const nextTag = bumpTrailingVTag(latest);
+			if (!nextTag) {
+				vscode.window.showWarningMessage(
+					`Cannot auto-increment tag${latest ? ` from "${latest}"` : ''} for ${name}. Create a tag manually.`
+				);
+				await this.pushDialog.show({ pendingPushRoots: roots, openNewTag: true });
+				return;
+			}
+			tagPlans.push({ root, name, nextTag });
+		}
+
+		for (const plan of tagPlans) {
+			try {
+				await this.git.createTagAtHead(plan.root, plan.nextTag);
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				vscode.window.showWarningMessage(
+					`Failed to create tag ${plan.nextTag} on ${plan.name}: ${detail}. Create a tag manually.`
+				);
+				await this.pushDialog.show({ pendingPushRoots: roots, openNewTag: true });
+				return;
+			}
+		}
+
+		const tagSummary =
+			tagPlans.length === 1
+				? `Created tag ${tagPlans[0].nextTag}.`
+				: `Created tags: ${tagPlans.map((p) => `${p.name}=${p.nextTag}`).join(', ')}.`;
+		vscode.window.showInformationMessage(tagSummary);
+
+		await this.pushDialog.pushWithAutoMerge(roots, { pushTags: true });
+	}
+
 	private async startRollbackFlow(msg: {
 		repoRoot: string;
 		path: string;
@@ -422,6 +499,11 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 						});
 					});
 					break;
+				case 'fastPush':
+					await this.withBusy(async () => {
+						await this.handleFastPush(msg.checkedChanges ?? [], msg.unversionedPaths);
+					});
+					break;
 				case 'generateCommitMessage':
 					await this.generateCommitMessage(msg.checkedChanges ?? [], msg.unversionedPaths);
 					break;
@@ -546,6 +628,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
         <div class="commit-actions">
           <button id="commitBtn" class="primary" type="button">Commit</button>
           <button id="commitPushBtn" type="button">Commit and Push</button>
+          <button id="fastPushBtn" type="button" title="Generate commit message, auto-bump the latest v* remote tag, then push with tags. On push rejection, auto-merge; unresolved conflicts open the manual merge UI. If the tag cannot be auto-incremented, opens Push + New Tag for manual tagging.">Fast Push</button>
         </div>
       </div>
       <section id="commitLogPane" class="commit-log-pane collapsed">

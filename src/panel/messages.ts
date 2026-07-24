@@ -165,6 +165,11 @@ export type WebviewToHost =
 			checkedChanges?: Array<{ repoRoot: string; path: string }>;
 			unversionedPaths?: Array<{ repoRoot: string; path: string }>;
 	  }
+	| {
+			type: 'fastPush';
+			checkedChanges?: Array<{ repoRoot: string; path: string }>;
+			unversionedPaths?: Array<{ repoRoot: string; path: string }>;
+	  }
 	| { type: 'push'; repoRoot?: string; pushTags?: boolean }
 	| { type: 'pushSync'; mode: SyncMode; repoRoot?: string }
 	| { type: 'syncAbort'; repoRoot?: string }
