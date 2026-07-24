@@ -20,6 +20,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private updateAllOpen = false;
 	private updateAllResolver?: (repoRoots: string[] | undefined) => void;
 	private pendingUpdateAllRepos?: Array<{ rootPath: string; name: string; checked: boolean }>;
+	private fastPushConfirmOpen = false;
 	private fastPushCommitResolver?: (message: string | undefined) => void;
 	private readonly fastPushSettings: FastPushSettingsStore;
 	private readonly updateAllSelection: UpdateAllSelectionStore;
@@ -40,11 +41,24 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	dispose(): void {
 		this.resolveUpdateAll(undefined);
 		this.resolveFastPushCommit(undefined);
+		this.fastPushConfirmOpen = false;
 		this.disposables.forEach((d) => d.dispose());
 	}
 
 	isUpdateAllDialogOpen(): boolean {
 		return this.updateAllOpen;
+	}
+
+	isFastPushConfirmOpen(): boolean {
+		return this.fastPushConfirmOpen;
+	}
+
+	/** Ask the open Fast Push confirm dialog to proceed (second Ctrl+Alt+K). */
+	submitFastPushConfirm(): void {
+		if (!this.fastPushConfirmOpen) {
+			return;
+		}
+		this.post({ type: 'fastPushConfirmSubmit' });
 	}
 
 	/** Ask the open Update All dialog to submit the current selection (second Ctrl+T). */
@@ -238,8 +252,36 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'triggerCommitAndPush' });
 	}
 
-	async triggerFastPush(): Promise<void> {
+	async triggerFastPush(options?: { requireConfirm?: boolean }): Promise<void> {
 		await this.reveal();
+		if (options?.requireConfirm) {
+			const capability = await this.git.getCommitMessageGeneratorAvailability();
+			const settings = this.fastPushSettings.getEffective(capability);
+			const wantedGenerate =
+				(this.fastPushSettings.getWorkspace() ?? this.fastPushSettings.getGlobal())
+					.autoGenerateCommit;
+			const steps = [
+				wantedGenerate ? 'Prepare commit message (AI or manual fallback)' : 'Use Commit Message box',
+				'Commit',
+			];
+			if (settings.autoNewTag) {
+				steps.push('Auto-bump remote v* tag');
+			}
+			if (settings.autoPush) {
+				steps.push('Push (auto-merge on reject)');
+			} else {
+				steps.push('Open Push dialog');
+			}
+			this.fastPushConfirmOpen = true;
+			this.post({
+				type: 'showFastPushConfirmDialog',
+				payload: {
+					steps,
+					shortcutLabel: process.platform === 'darwin' ? 'Cmd+Alt+K' : 'Ctrl+Alt+K',
+				},
+			});
+			return;
+		}
 		this.post({ type: 'triggerFastPush' });
 	}
 
@@ -682,6 +724,12 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				case 'fastPushCommitCancel':
 					this.resolveFastPushCommit(undefined);
 					break;
+				case 'fastPushConfirmAck':
+					this.fastPushConfirmOpen = false;
+					break;
+				case 'fastPushConfirmCancel':
+					this.fastPushConfirmOpen = false;
+					break;
 				case 'getFastPushSettings':
 					await this.postFastPushSettings();
 					break;
@@ -888,6 +936,19 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
       <div class="modal-actions">
         <button id="updateAllCancel" type="button">Cancel</button>
         <button id="updateAllConfirm" class="primary" type="button">Pull</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="fastPushConfirmModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Confirm Fast Push</h2>
+      <p id="fastPushConfirmSummary" class="fast-push-confirm-summary"></p>
+      <ol id="fastPushConfirmSteps" class="fast-push-confirm-steps"></ol>
+      <p id="fastPushConfirmHint" class="fast-push-confirm-hint"></p>
+      <div class="modal-actions">
+        <button id="fastPushConfirmCancel" type="button">Cancel</button>
+        <button id="fastPushConfirmOk" class="primary" type="button">Fast Push</button>
       </div>
     </div>
   </div>

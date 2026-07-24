@@ -189,7 +189,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				if (!commitViewProvider) {
 					return;
 				}
-				await commitViewProvider.triggerFastPush();
+				if (commitViewProvider.isFastPushConfirmOpen()) {
+					commitViewProvider.submitFastPushConfirm();
+					return;
+				}
+				await commitViewProvider.triggerFastPush({ requireConfirm: true });
 			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.installKeybindings', async () => {
 				const choice = await vscode.window.showWarningMessage(

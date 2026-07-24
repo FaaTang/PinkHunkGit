@@ -138,6 +138,14 @@ export type HostToWebview =
 			type: 'showFastPushCommitDialog';
 			payload: { reason: string; draft?: string };
 	  }
+	| {
+			type: 'showFastPushConfirmDialog';
+			payload: {
+				steps: string[];
+				shortcutLabel: string;
+			};
+	  }
+	| { type: 'fastPushConfirmSubmit' }
 	| { type: 'clearMessage' }
 	| { type: 'focusMessage' }
 	| { type: 'setMessage'; message: string }
@@ -190,6 +198,8 @@ export type WebviewToHost =
 	  }
 	| { type: 'fastPushCommitConfirm'; message: string }
 	| { type: 'fastPushCommitCancel' }
+	| { type: 'fastPushConfirmAck' }
+	| { type: 'fastPushConfirmCancel' }
 	| { type: 'getFastPushSettings' }
 	| {
 			type: 'saveFastPushSettings';
