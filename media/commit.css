@@ -764,10 +764,211 @@ textarea {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+  align-items: center;
 }
 
 .commit-actions button {
   white-space: nowrap;
+}
+
+.commit-push-split {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.commit-push-split > #commitPushBtn {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
+}
+
+.commit-push-caret {
+  width: 24px;
+  min-width: 24px;
+  padding: 5px 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.commit-push-split.is-open .commit-push-caret {
+  filter: brightness(1.08);
+}
+
+.commit-push-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 15;
+  min-width: 220px;
+  padding: 4px;
+  background: var(--vscode-menu-background, var(--bg));
+  color: var(--vscode-menu-foreground, var(--fg));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.commit-push-menu-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.commit-push-menu-item {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  text-align: left;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+.commit-push-menu-item:hover:not(:disabled) {
+  background: var(--vscode-list-hoverBackground, rgba(127, 127, 127, 0.15));
+  filter: none;
+}
+
+.commit-push-menu-gear {
+  flex: 0 0 auto;
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.commit-push-menu-gear:hover:not(:disabled) {
+  background: var(--vscode-list-hoverBackground, rgba(127, 127, 127, 0.15));
+  filter: none;
+}
+
+.fast-push-commit-reason {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0.9;
+  white-space: pre-wrap;
+}
+
+.fast-push-commit-label {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.fast-push-commit-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 8px;
+  padding: 8px;
+  resize: vertical;
+  min-height: 88px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--input-fg);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 2px;
+}
+
+.fast-push-commit-input:focus {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+.fast-push-settings-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.fast-push-settings-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.fast-push-settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px 64px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fast-push-settings-row:last-child {
+  border-bottom: none;
+}
+
+.fast-push-settings-row.head {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.9;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.fast-push-settings-feature {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.fast-push-settings-scope {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.fast-push-settings-scope input {
+  margin: 0;
+}
+
+.fast-push-settings-row.is-disabled {
+  opacity: 0.55;
+}
+
+.fast-push-settings-row.is-disabled .fast-push-settings-scope {
+  cursor: default;
+}
+
+.fast-push-settings-note {
+  margin: -1px 0 0;
+  padding: 6px 10px 8px;
+  border: 1px solid var(--border);
+  border-top: none;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--vscode-inputValidation-warningForeground, #cca700);
+  background: color-mix(in srgb, var(--vscode-inputValidation-warningBackground, #5a4a00) 35%, transparent);
+}
+
+.fast-push-settings-table .fast-push-settings-note {
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
+}
+
+.fast-push-settings-table .fast-push-settings-row + .fast-push-settings-note + .fast-push-settings-row {
+  border-top: 1px solid var(--border);
 }
 
 button {
@@ -821,6 +1022,62 @@ button.danger {
 
 .modal-card-wide {
   width: min(520px, calc(100% - 32px));
+}
+
+.update-all-repo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: min(280px, 40vh);
+  overflow: auto;
+  margin: 0 0 12px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.update-all-repo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.update-all-repo-item:hover {
+  background: var(--vscode-list-hoverBackground, rgba(127, 127, 127, 0.15));
+}
+
+.update-all-repo-item input {
+  margin: 2px 0 0;
+  flex-shrink: 0;
+}
+
+.update-all-repo-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.update-all-repo-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.update-all-repo-path {
+  font-size: 11px;
+  opacity: 0.7;
+  word-break: break-all;
+}
+
+.update-all-hint {
+  margin: 0 0 16px;
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0.85;
 }
 
 .modal-card h2 {

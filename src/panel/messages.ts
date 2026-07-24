@@ -7,6 +7,8 @@ export type ChangeItem = {
 	conflict?: boolean;
 };
 
+export type { FastPushFlags, FastPushSettingsPayload } from '../fastPush/settings';
+
 export type RepoSnapshot = {
 	ok: boolean;
 	error?: string;
@@ -130,14 +132,23 @@ export type HostToWebview =
 	| { type: 'showAskPush'; payload: AskPushPayload }
 	| { type: 'closePushDialog' }
 	| { type: 'showRollbackDialog'; payload: RollbackDialogPayload }
-	| { type: 'showUpdateAllDialog'; payload: { repoCount: number } }
+	| { type: 'showUpdateAllDialog'; payload: { repos: Array<{ rootPath: string; name: string; checked: boolean }> } }
+	| { type: 'updateAllSubmit' }
+	| {
+			type: 'showFastPushCommitDialog';
+			payload: { reason: string; draft?: string };
+	  }
 	| { type: 'clearMessage' }
 	| { type: 'focusMessage' }
 	| { type: 'setMessage'; message: string }
 	| { type: 'generateCommitMessageState'; busy: boolean }
+	| { type: 'fastPushSettings'; payload: import('../fastPush/settings').FastPushSettingsPayload }
 	| { type: 'commitLog'; payload: CommitLogPayload }
 	| { type: 'expandChanges' }
-	| { type: 'triggerAddToGit' };
+	| { type: 'triggerAddToGit' }
+	| { type: 'triggerCommit' }
+	| { type: 'triggerCommitAndPush' }
+	| { type: 'triggerFastPush' };
 
 export type WebviewToHost =
 	| { type: 'ready' }
@@ -167,8 +178,17 @@ export type WebviewToHost =
 	  }
 	| {
 			type: 'fastPush';
+			message?: string;
 			checkedChanges?: Array<{ repoRoot: string; path: string }>;
 			unversionedPaths?: Array<{ repoRoot: string; path: string }>;
+	  }
+	| { type: 'fastPushCommitConfirm'; message: string }
+	| { type: 'fastPushCommitCancel' }
+	| { type: 'getFastPushSettings' }
+	| {
+			type: 'saveFastPushSettings';
+			workspace: import('../fastPush/settings').FastPushFlags;
+			global: import('../fastPush/settings').FastPushFlags;
 	  }
 	| { type: 'push'; repoRoot?: string; pushTags?: boolean }
 	| { type: 'pushSync'; mode: SyncMode; repoRoot?: string }
@@ -178,8 +198,12 @@ export type WebviewToHost =
 	| { type: 'askPushConfirm'; repoRoot?: string; pushTags?: boolean }
 	| { type: 'askPushCancel' }
 	| { type: 'pushDialogCancel' }
-	| { type: 'updateAllConfirm' }
+	| { type: 'updateAllConfirm'; repoRoots: string[]; selections?: Array<{ rootPath: string; checked: boolean }> }
 	| { type: 'updateAllCancel' }
+	| {
+			type: 'updateAllSelectionChanged';
+			selections: Array<{ rootPath: string; checked: boolean }>;
+	  }
 	| { type: 'refresh' }
 	| { type: 'installKeybindings' }
 	| { type: 'openGitExtension' }

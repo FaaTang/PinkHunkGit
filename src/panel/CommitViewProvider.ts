@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { bumpTrailingVTag, GitService } from '../git/GitService';
+import { FastPushFlags, FastPushSettingsStore } from '../fastPush/settings';
+import { UpdateAllSelectionStore } from '../updateAll/selectionStore';
 import { CommitRepoResult, HostToWebview, WebviewToHost } from './messages';
 import { PushDialogProvider } from './PushDialogProvider';
 
@@ -15,51 +17,78 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private operationChain: Promise<void> = Promise.resolve();
 	private pendingFocusMessage = false;
 	private pendingExpandChanges = false;
-	private pendingUpdateAllRepoCount?: number;
-	private updateAllResolver?: (confirmed: boolean) => void;
+	private updateAllOpen = false;
+	private updateAllResolver?: (repoRoots: string[] | undefined) => void;
+	private pendingUpdateAllRepos?: Array<{ rootPath: string; name: string; checked: boolean }>;
+	private fastPushCommitResolver?: (message: string | undefined) => void;
+	private readonly fastPushSettings: FastPushSettingsStore;
+	private readonly updateAllSelection: UpdateAllSelectionStore;
 
 	constructor(
 		private readonly extensionUri: vscode.Uri,
 		private readonly git: GitService,
 		private readonly pushDialog: PushDialogProvider,
 		private readonly onInstallKeybindings: () => Promise<void>,
-		private readonly waitForGitInit: () => Promise<void>
+		private readonly waitForGitInit: () => Promise<void>,
+		context: vscode.ExtensionContext
 	) {
+		this.fastPushSettings = new FastPushSettingsStore(context);
+		this.updateAllSelection = new UpdateAllSelectionStore(context);
 		this.disposables.push(this.git.onDidChange(() => void this.pushSnapshot()));
 	}
 
 	dispose(): void {
-		this.resolveUpdateAll(false);
+		this.resolveUpdateAll(undefined);
+		this.resolveFastPushCommit(undefined);
 		this.disposables.forEach((d) => d.dispose());
 	}
 
-	/** Show a Cursor-themed confirm dialog in the Commit panel before pull-all. */
-	async confirmUpdateAll(repoCount: number): Promise<boolean> {
-		this.resolveUpdateAll(false);
-		const confirmed = new Promise<boolean>((resolve) => {
+	isUpdateAllDialogOpen(): boolean {
+		return this.updateAllOpen;
+	}
+
+	/** Ask the open Update All dialog to submit the current selection (second Ctrl+T). */
+	submitUpdateAllDialog(): void {
+		if (!this.updateAllOpen) {
+			return;
+		}
+		this.post({ type: 'updateAllSubmit' });
+	}
+
+	/**
+	 * Show repository selection dialog before pull-all.
+	 * Resolves to selected repo roots, or undefined when cancelled.
+	 */
+	async confirmUpdateAll(
+		repos: Array<{ rootPath: string; name: string }>
+	): Promise<string[] | undefined> {
+		this.resolveUpdateAll(undefined);
+		const confirmed = new Promise<string[] | undefined>((resolve) => {
 			this.updateAllResolver = resolve;
 		});
-		this.pendingUpdateAllRepoCount = repoCount;
+		this.updateAllOpen = true;
+		this.pendingUpdateAllRepos = this.updateAllSelection.resolve(repos);
 		await this.reveal(false, false);
 		this.tryShowUpdateAllDialog();
 		return confirmed;
 	}
 
 	private tryShowUpdateAllDialog(): void {
-		if (this.pendingUpdateAllRepoCount == null || !this.view || !this.updateAllResolver) {
+		if (!this.updateAllOpen || !this.pendingUpdateAllRepos || !this.view || !this.updateAllResolver) {
 			return;
 		}
 		this.post({
 			type: 'showUpdateAllDialog',
-			payload: { repoCount: this.pendingUpdateAllRepoCount },
+			payload: { repos: this.pendingUpdateAllRepos },
 		});
 	}
 
-	private resolveUpdateAll(confirmed: boolean): void {
+	private resolveUpdateAll(repoRoots: string[] | undefined): void {
 		const resolve = this.updateAllResolver;
 		this.updateAllResolver = undefined;
-		this.pendingUpdateAllRepoCount = undefined;
-		resolve?.(confirmed);
+		this.updateAllOpen = false;
+		this.pendingUpdateAllRepos = undefined;
+		resolve?.(repoRoots);
 	}
 
 	resolveWebviewView(
@@ -199,6 +228,21 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'triggerAddToGit' });
 	}
 
+	async triggerCommit(): Promise<void> {
+		await this.reveal(true, false);
+		this.post({ type: 'triggerCommit' });
+	}
+
+	async triggerCommitAndPush(): Promise<void> {
+		await this.reveal(true, false);
+		this.post({ type: 'triggerCommitAndPush' });
+	}
+
+	async triggerFastPush(): Promise<void> {
+		await this.reveal();
+		this.post({ type: 'triggerFastPush' });
+	}
+
 	private async stageUnversionedPaths(
 		paths?: Array<{ repoRoot: string; path: string }>
 	): Promise<void> {
@@ -234,28 +278,69 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	/**
-	 * Fast Push: generate commit message → commit → auto bump v-tag → push (with tags).
+	 * Fast Push: optionally generate commit message → commit → optionally auto bump v-tag → optionally push.
+	 * Steps follow Fast Push settings (workspace overrides global).
+	 * If auto-generate is blocked or fails, prompt for a manual commit message and continue.
 	 * On push rejection auto-merge; unresolved conflicts fall back to Push conflict UI.
-	 * If tag cannot be auto-bumped, open Push dialog + New Tag modal.
+	 * If auto-tag is on but cannot bump, open Push dialog + New Tag modal.
 	 */
 	private async handleFastPush(
 		checkedChanges: Array<{ repoRoot: string; path: string }>,
-		unversionedPaths?: Array<{ repoRoot: string; path: string }>
+		unversionedPaths?: Array<{ repoRoot: string; path: string }>,
+		providedMessage?: string
 	): Promise<void> {
 		if (!checkedChanges.length && !(unversionedPaths?.length)) {
 			throw new Error('Select files to include before Fast Push.');
 		}
 
-		this.post({ type: 'generateCommitMessageState', busy: true });
-		let message: string;
-		try {
-			await this.git.applyCommitSelection(checkedChanges);
-			await this.stageUnversionedPaths(unversionedPaths);
-			await this.git.refresh();
-			message = await this.git.generateCommitMessageWithAi(checkedChanges, unversionedPaths);
+		const capability = await this.git.getCommitMessageGeneratorAvailability();
+		const settings = this.fastPushSettings.getEffective(capability);
+		const wantedGenerate =
+			(this.fastPushSettings.getWorkspace() ?? this.fastPushSettings.getGlobal()).autoGenerateCommit;
+
+		await this.git.applyCommitSelection(checkedChanges);
+		await this.stageUnversionedPaths(unversionedPaths);
+		await this.git.refresh();
+
+		let message = '';
+		let generateBlockReason: string | undefined;
+
+		if (wantedGenerate) {
+			if (!capability.available) {
+				generateBlockReason =
+					capability.reason ||
+					'Auto-generate commit requires Cursor (generate commit command) or GitHub Copilot in VS Code.';
+			} else {
+				this.post({ type: 'generateCommitMessageState', busy: true });
+				try {
+					message = (await this.git.generateCommitMessageWithAi(checkedChanges, unversionedPaths)).trim();
+					if (message) {
+						this.post({ type: 'setMessage', message });
+					} else {
+						generateBlockReason = 'Auto-generate commit returned an empty message.';
+					}
+				} catch (err) {
+					generateBlockReason = err instanceof Error ? err.message : String(err);
+				} finally {
+					this.post({ type: 'generateCommitMessageState', busy: false });
+				}
+			}
+		} else {
+			message = (providedMessage || '').trim();
+		}
+
+		if (!message) {
+			const reason =
+				generateBlockReason ||
+				(wantedGenerate
+					? 'Auto-generate commit was blocked. Enter a commit message to continue Fast Push.'
+					: 'Enter a commit message to continue Fast Push.');
+			const entered = await this.promptFastPushCommitMessage(reason, providedMessage);
+			if (!entered) {
+				return;
+			}
+			message = entered;
 			this.post({ type: 'setMessage', message });
-		} finally {
-			this.post({ type: 'generateCommitMessageState', busy: false });
 		}
 
 		const committed = await this.git.commitAllStaged(message);
@@ -263,51 +348,101 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'clearMessage' });
 
 		const roots = committed.map((repo) => repo.rootPath);
-		const tagPlans: Array<{ root: string; name: string; nextTag: string }> = [];
+		let createdTags = false;
 
-		for (const root of roots) {
-			const snap = this.git.getWorkspaceSnapshot().repositories.find(
-				(r) =>
-					r.rootPath.replace(/\\/g, '/').toLowerCase() === root.replace(/\\/g, '/').toLowerCase()
-			);
-			const name = snap?.name ?? root;
-			let latest: string | undefined;
-			try {
-				latest = await this.git.getLatestRemoteTag(root);
-			} catch {
-				latest = undefined;
-			}
-			const nextTag = bumpTrailingVTag(latest);
-			if (!nextTag) {
-				vscode.window.showWarningMessage(
-					`Cannot auto-increment tag${latest ? ` from "${latest}"` : ''} for ${name}. Create a tag manually.`
+		if (settings.autoNewTag) {
+			const tagPlans: Array<{ root: string; name: string; nextTag: string }> = [];
+			for (const root of roots) {
+				const snap = this.git.getWorkspaceSnapshot().repositories.find(
+					(r) =>
+						r.rootPath.replace(/\\/g, '/').toLowerCase() ===
+						root.replace(/\\/g, '/').toLowerCase()
 				);
-				await this.pushDialog.show({ pendingPushRoots: roots, openNewTag: true });
-				return;
+				const name = snap?.name ?? root;
+				let latest: string | undefined;
+				try {
+					latest = await this.git.getLatestRemoteTag(root);
+				} catch {
+					latest = undefined;
+				}
+				const nextTag = bumpTrailingVTag(latest);
+				if (!nextTag) {
+					vscode.window.showWarningMessage(
+						`Cannot auto-increment tag${latest ? ` from "${latest}"` : ''} for ${name}. Create a tag manually.`
+					);
+					await this.pushDialog.show({ pendingPushRoots: roots, openNewTag: true });
+					return;
+				}
+				tagPlans.push({ root, name, nextTag });
 			}
-			tagPlans.push({ root, name, nextTag });
+
+			for (const plan of tagPlans) {
+				try {
+					await this.git.createTagAtHead(plan.root, plan.nextTag);
+				} catch (err) {
+					const detail = err instanceof Error ? err.message : String(err);
+					vscode.window.showWarningMessage(
+						`Failed to create tag ${plan.nextTag} on ${plan.name}: ${detail}. Create a tag manually.`
+					);
+					await this.pushDialog.show({ pendingPushRoots: roots, openNewTag: true });
+					return;
+				}
+			}
+
+			createdTags = true;
+			const tagSummary =
+				tagPlans.length === 1
+					? `Created tag ${tagPlans[0].nextTag}.`
+					: `Created tags: ${tagPlans.map((p) => `${p.name}=${p.nextTag}`).join(', ')}.`;
+			vscode.window.showInformationMessage(tagSummary);
 		}
 
-		for (const plan of tagPlans) {
-			try {
-				await this.git.createTagAtHead(plan.root, plan.nextTag);
-			} catch (err) {
-				const detail = err instanceof Error ? err.message : String(err);
-				vscode.window.showWarningMessage(
-					`Failed to create tag ${plan.nextTag} on ${plan.name}: ${detail}. Create a tag manually.`
-				);
-				await this.pushDialog.show({ pendingPushRoots: roots, openNewTag: true });
-				return;
-			}
+		if (settings.autoPush) {
+			await this.pushDialog.pushWithAutoMerge(roots, { pushTags: createdTags });
+			return;
 		}
 
-		const tagSummary =
-			tagPlans.length === 1
-				? `Created tag ${tagPlans[0].nextTag}.`
-				: `Created tags: ${tagPlans.map((p) => `${p.name}=${p.nextTag}`).join(', ')}.`;
-		vscode.window.showInformationMessage(tagSummary);
+		await this.pushDialog.show({
+			pendingPushRoots: roots,
+			openNewTag: false,
+		});
+	}
 
-		await this.pushDialog.pushWithAutoMerge(roots, { pushTags: true });
+	private async promptFastPushCommitMessage(
+		reason: string,
+		draft?: string
+	): Promise<string | undefined> {
+		this.resolveFastPushCommit(undefined);
+		// Allow typing while Fast Push is mid-flight (outer withBusy keeps busy=true).
+		this.post({ type: 'busy', busy: false });
+		const result = new Promise<string | undefined>((resolve) => {
+			this.fastPushCommitResolver = resolve;
+		});
+		this.post({
+			type: 'showFastPushCommitDialog',
+			payload: { reason, draft: (draft || '').trim() },
+		});
+		const message = await result;
+		this.post({ type: 'busy', busy: true });
+		return message;
+	}
+
+	private resolveFastPushCommit(message: string | undefined): void {
+		const resolve = this.fastPushCommitResolver;
+		this.fastPushCommitResolver = undefined;
+		resolve?.(message);
+	}
+
+	private async postFastPushSettings(): Promise<void> {
+		const capability = await this.git.getCommitMessageGeneratorAvailability();
+		this.post({ type: 'fastPushSettings', payload: this.fastPushSettings.getPayload(capability) });
+	}
+
+	private async saveFastPushSettings(workspace: FastPushFlags, global: FastPushFlags): Promise<void> {
+		const capability = await this.git.getCommitMessageGeneratorAvailability();
+		const payload = await this.fastPushSettings.save(workspace, global, capability);
+		this.post({ type: 'fastPushSettings', payload });
+		vscode.window.showInformationMessage('Fast Push settings saved. Workspace overrides Global in this folder.');
 	}
 
 	private async startRollbackFlow(msg: {
@@ -427,6 +562,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			switch (msg.type) {
 				case 'ready':
 					await this.refreshAndPush();
+					await this.postFastPushSettings();
 					if (this.pendingExpandChanges) {
 						this.pendingExpandChanges = false;
 						this.expandChangesGroups();
@@ -501,17 +637,53 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'fastPush':
 					await this.withBusy(async () => {
-						await this.handleFastPush(msg.checkedChanges ?? [], msg.unversionedPaths);
+						await this.handleFastPush(
+							msg.checkedChanges ?? [],
+							msg.unversionedPaths,
+							msg.message
+						);
 					});
+					break;
+				case 'fastPushCommitConfirm':
+					this.resolveFastPushCommit((msg.message || '').trim() || undefined);
+					break;
+				case 'fastPushCommitCancel':
+					this.resolveFastPushCommit(undefined);
+					break;
+				case 'getFastPushSettings':
+					await this.postFastPushSettings();
+					break;
+				case 'saveFastPushSettings':
+					await this.saveFastPushSettings(msg.workspace, msg.global);
 					break;
 				case 'generateCommitMessage':
 					await this.generateCommitMessage(msg.checkedChanges ?? [], msg.unversionedPaths);
 					break;
 				case 'updateAllConfirm':
-					this.resolveUpdateAll(true);
+					if (msg.selections?.length) {
+						await this.updateAllSelection.setMany(msg.selections);
+					}
+					this.resolveUpdateAll(msg.repoRoots ?? []);
 					break;
 				case 'updateAllCancel':
-					this.resolveUpdateAll(false);
+					this.resolveUpdateAll(undefined);
+					break;
+				case 'updateAllSelectionChanged':
+					await this.updateAllSelection.setMany(msg.selections ?? []);
+					if (this.pendingUpdateAllRepos) {
+						const checked = new Map(
+							(msg.selections ?? []).map((s) => [
+								s.rootPath.replace(/\\/g, '/').toLowerCase(),
+								s.checked,
+							])
+						);
+						this.pendingUpdateAllRepos = this.pendingUpdateAllRepos.map((repo) => ({
+							...repo,
+							checked:
+								checked.get(repo.rootPath.replace(/\\/g, '/').toLowerCase()) ??
+								repo.checked,
+						}));
+					}
 					break;
 				case 'refresh':
 					await this.withBusy(async () => {
@@ -626,9 +798,17 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
         </div>
         <div id="formError" class="form-error hidden"></div>
         <div class="commit-actions">
-          <button id="commitBtn" class="primary" type="button">Commit</button>
-          <button id="commitPushBtn" type="button">Commit and Push</button>
-          <button id="fastPushBtn" type="button" title="Generate commit message, auto-bump the latest v* remote tag, then push with tags. On push rejection, auto-merge; unresolved conflicts open the manual merge UI. If the tag cannot be auto-incremented, opens Push + New Tag for manual tagging.">Fast Push</button>
+          <button id="commitBtn" class="primary" type="button" title="Commit (Ctrl+Enter)">Commit</button>
+          <div id="commitPushSplit" class="commit-push-split">
+            <button id="commitPushBtn" type="button" title="Commit and Push (Ctrl+Shift+Enter)">Commit and Push</button>
+            <button id="commitPushMenuBtn" class="commit-push-caret" type="button" title="More push options" aria-label="More push options" aria-haspopup="menu" aria-expanded="false">▾</button>
+            <div id="commitPushMenu" class="commit-push-menu hidden" role="menu">
+              <div class="commit-push-menu-row">
+                <button id="fastPushBtn" class="commit-push-menu-item" type="button" role="menuitem" title="Fast Push (Ctrl+Alt+K)">Fast Push</button>
+                <button id="fastPushSettingsBtn" class="commit-push-menu-gear" type="button" title="Fast Push settings" aria-label="Fast Push settings">⚙</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <section id="commitLogPane" class="commit-log-pane collapsed">
@@ -659,7 +839,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
   <div id="keysModal" class="modal hidden">
     <div class="modal-card">
       <h2>Install Keybindings</h2>
-      <p id="keysSummary">This will write extension keybindings to your user keybindings.json and may override existing bindings (Ctrl+K, Ctrl+Shift+K, Ctrl+D, F4, Ctrl+Alt+Z). Continue?</p>
+      <p id="keysSummary">This will write extension keybindings to your user keybindings.json and may override existing bindings (Ctrl+K, Ctrl+Shift+K, Ctrl+Enter, Ctrl+Shift+Enter, Ctrl+D, F4, Ctrl+Alt+Z, Ctrl+Alt+K). Continue?</p>
       <div class="modal-actions">
         <button id="keysCancel" type="button">Cancel</button>
         <button id="keysConfirm" class="primary" type="button">Install</button>
@@ -668,12 +848,62 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
   </div>
 
   <div id="updateAllModal" class="modal hidden">
-    <div class="modal-card">
-      <h2>Update All Repositories</h2>
-      <p id="updateAllSummary"></p>
+    <div class="modal-card modal-card-wide">
+      <h2>Update Repositories</h2>
+      <p id="updateAllSummary">Select repositories to pull and update.</p>
+      <div id="updateAllRepoList" class="update-all-repo-list" role="group" aria-label="Repositories"></div>
+      <p id="updateAllHint" class="update-all-hint">Press Ctrl+T again or click Pull to update the selected repositories. Checkmarks are remembered for next time.</p>
       <div class="modal-actions">
         <button id="updateAllCancel" type="button">Cancel</button>
-        <button id="updateAllConfirm" class="primary" type="button">Update</button>
+        <button id="updateAllConfirm" class="primary" type="button">Pull</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="fastPushCommitModal" class="modal hidden">
+    <div class="modal-card modal-card-wide">
+      <h2>Commit Message Required</h2>
+      <p id="fastPushCommitReason" class="fast-push-commit-reason"></p>
+      <label class="fast-push-commit-label" for="fastPushCommitInput">Commit message</label>
+      <textarea id="fastPushCommitInput" class="fast-push-commit-input" rows="4" placeholder="Enter commit message" spellcheck="true"></textarea>
+      <div id="fastPushCommitError" class="form-error hidden"></div>
+      <div class="modal-actions">
+        <button id="fastPushCommitCancel" type="button">Cancel</button>
+        <button id="fastPushCommitConfirm" class="primary" type="button">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="fastPushSettingsModal" class="modal hidden">
+    <div class="modal-card modal-card-wide">
+      <h2>Fast Push Settings</h2>
+      <p class="fast-push-settings-hint">Choose which steps Fast Push runs. Each option has Workspace and Global checkboxes. Workspace overrides Global in the current folder. Defaults: Auto-generate commit on, Auto new tag off, Auto push on.</p>
+      <div class="fast-push-settings-table" role="table" aria-label="Fast Push settings">
+        <div class="fast-push-settings-row head" role="row">
+          <span class="fast-push-settings-feature" role="columnheader">Step</span>
+          <label class="fast-push-settings-scope" role="columnheader" title="Applies only to this workspace and overrides Global">Workspace</label>
+          <label class="fast-push-settings-scope" role="columnheader" title="Default for all workspaces that have no Workspace override">Global</label>
+        </div>
+        <div class="fast-push-settings-row" id="fpGenerateRow" role="row">
+          <span class="fast-push-settings-feature" title="When on, generate a commit message with AI before committing. When off, the Commit Message box is used.">Auto-generate commit</span>
+          <label class="fast-push-settings-scope"><input id="fpWsGenerate" type="checkbox" /></label>
+          <label class="fast-push-settings-scope"><input id="fpGlGenerate" type="checkbox" /></label>
+        </div>
+        <div id="fpGenerateUnavailable" class="fast-push-settings-note hidden" role="note"></div>
+        <div class="fast-push-settings-row" role="row">
+          <span class="fast-push-settings-feature" title="When on, bump the latest remote v* tag (trailing number +1) after commit. If bump fails, opens Push + New Tag. When off, skip tagging.">Auto new tag</span>
+          <label class="fast-push-settings-scope"><input id="fpWsTag" type="checkbox" /></label>
+          <label class="fast-push-settings-scope"><input id="fpGlTag" type="checkbox" /></label>
+        </div>
+        <div class="fast-push-settings-row" role="row">
+          <span class="fast-push-settings-feature" title="When on, push after commit/tag (auto-merge on reject; conflicts use manual merge UI). When off, open the Push dialog for manual push.">Auto push</span>
+          <label class="fast-push-settings-scope"><input id="fpWsPush" type="checkbox" /></label>
+          <label class="fast-push-settings-scope"><input id="fpGlPush" type="checkbox" /></label>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="fastPushSettingsCancel" type="button">Cancel</button>
+        <button id="fastPushSettingsSave" class="primary" type="button">Save</button>
       </div>
     </div>
   </div>

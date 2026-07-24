@@ -65,6 +65,21 @@
         "category": "Pink Hunk Git"
       },
       {
+        "command": "copyIdeaGitUi.commit",
+        "title": "Commit",
+        "category": "Pink Hunk Git"
+      },
+      {
+        "command": "copyIdeaGitUi.commitAndPush",
+        "title": "Commit and Push",
+        "category": "Pink Hunk Git"
+      },
+      {
+        "command": "copyIdeaGitUi.fastPush",
+        "title": "Fast Push",
+        "category": "Pink Hunk Git"
+      },
+      {
         "command": "copyIdeaGitUi.openExplorer",
         "title": "Open Explorer",
         "category": "Pink Hunk Git"
@@ -149,6 +164,23 @@
         "key": "ctrl+alt+a",
         "mac": "cmd+alt+a",
         "when": "view == copyIdeaGitUi.commitView"
+      },
+      {
+        "command": "copyIdeaGitUi.commit",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "view == copyIdeaGitUi.commitView"
+      },
+      {
+        "command": "copyIdeaGitUi.commitAndPush",
+        "key": "ctrl+shift+enter",
+        "mac": "cmd+shift+enter",
+        "when": "view == copyIdeaGitUi.commitView"
+      },
+      {
+        "command": "copyIdeaGitUi.fastPush",
+        "key": "ctrl+alt+k",
+        "mac": "cmd+alt+k"
       }
     ]
   },
