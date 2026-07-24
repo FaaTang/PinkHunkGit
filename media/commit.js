@@ -12,6 +12,7 @@
   const formError = document.getElementById('formError');
   const commitBtn = document.getElementById('commitBtn');
   const commitPushBtn = document.getElementById('commitPushBtn');
+  const fastPushBtn = document.getElementById('fastPushBtn');
   const stageAllBtn = document.getElementById('stageAll');
   const unstageAllBtn = document.getElementById('unstageAll');
   const refreshBtn = document.getElementById('refreshBtn');
@@ -878,6 +879,9 @@
     const disabled = panelBusy || !workspace.ok;
     commitBtn.disabled = disabled;
     commitPushBtn.disabled = disabled;
+    if (fastPushBtn) {
+      fastPushBtn.disabled = disabled;
+    }
     stageAllBtn.disabled = disabled;
     unstageAllBtn.disabled = disabled;
     refreshBtn.disabled = disabled;
@@ -1659,6 +1663,23 @@
     post({ type: 'commitAndPush', message, checkedChanges, unversionedPaths });
   });
 
+  if (fastPushBtn) {
+    fastPushBtn.addEventListener('click', () => {
+      if (generatingMessage || workspace.busy) {
+        return;
+      }
+      if (!totalIncludableCount()) {
+        showFormError('Select files to include before Fast Push.');
+        return;
+      }
+      showFormError('');
+      const unversionedPaths = collectCheckedUnversionedPaths();
+      const checkedChanges = collectCheckedChangesPaths();
+      clearUnversionedChecks(unversionedPaths);
+      post({ type: 'fastPush', checkedChanges, unversionedPaths });
+    });
+  }
+
   generateMsgBtn.addEventListener('click', () => {
     if (generatingMessage || workspace.busy) {
       return;
@@ -1946,8 +1967,7 @@
         break;
       case 'setMessage': {
         messageEl.value = msg.message || '';
-        messageDraft = messageEl.value;
-        saveWebviewState({ messageDraft, lastCommitMessage });
+        cacheLastCommitMessage(messageEl.value);
         showFormError('');
         messageEl.focus();
         const end = messageEl.value.length;

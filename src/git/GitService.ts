@@ -2186,3 +2186,20 @@ export function isValidTagName(name: string): boolean {
 	}
 	return /^[^\s~^:?*[\]\\]+$/.test(name);
 }
+
+/**
+ * If tag starts with `v` and ends with digits, return the same tag with the
+ * trailing number incremented (e.g. `v1.0.3` → `v1.0.4`). Otherwise undefined.
+ */
+export function bumpTrailingVTag(tagName: string | undefined): string | undefined {
+	const name = tagName?.trim();
+	if (!name || !name.startsWith('v')) {
+		return undefined;
+	}
+	const match = /^(.*)(\d+)$/.exec(name);
+	if (!match) {
+		return undefined;
+	}
+	const next = `${match[1]}${Number(match[2]) + 1}`;
+	return isValidTagName(next) ? next : undefined;
+}
