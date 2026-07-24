@@ -31,6 +31,12 @@
   const fastPushCommitError = document.getElementById('fastPushCommitError');
   const fastPushCommitCancel = document.getElementById('fastPushCommitCancel');
   const fastPushCommitConfirm = document.getElementById('fastPushCommitConfirm');
+  const fastPushConfirmModal = document.getElementById('fastPushConfirmModal');
+  const fastPushConfirmSummary = document.getElementById('fastPushConfirmSummary');
+  const fastPushConfirmSteps = document.getElementById('fastPushConfirmSteps');
+  const fastPushConfirmHint = document.getElementById('fastPushConfirmHint');
+  const fastPushConfirmCancel = document.getElementById('fastPushConfirmCancel');
+  const fastPushConfirmOk = document.getElementById('fastPushConfirmOk');
   const fpWsGenerate = document.getElementById('fpWsGenerate');
   const fpGlGenerate = document.getElementById('fpGlGenerate');
   const fpWsTag = document.getElementById('fpWsTag');
@@ -996,6 +1002,12 @@
     if (fastPushCommitInput) {
       fastPushCommitInput.disabled = false;
     }
+    if (fastPushConfirmCancel) {
+      fastPushConfirmCancel.disabled = panelBusy;
+    }
+    if (fastPushConfirmOk) {
+      fastPushConfirmOk.disabled = panelBusy;
+    }
     stageAllBtn.disabled = disabled;
     unstageAllBtn.disabled = disabled;
     refreshBtn.disabled = disabled;
@@ -1958,6 +1970,44 @@
     fastPushCommitError.classList.remove('hidden');
   }
 
+  function openFastPushConfirmModal(payload) {
+    if (!fastPushConfirmModal) {
+      return;
+    }
+    const steps = payload && Array.isArray(payload.steps) ? payload.steps : [];
+    const shortcut = (payload && payload.shortcutLabel) || 'Ctrl+Alt+K';
+    if (fastPushConfirmSummary) {
+      fastPushConfirmSummary.textContent =
+        'Fast Push will run the currently enabled steps on the checked files:';
+    }
+    if (fastPushConfirmSteps) {
+      fastPushConfirmSteps.innerHTML = '';
+      for (const step of steps) {
+        const li = document.createElement('li');
+        li.textContent = step;
+        fastPushConfirmSteps.appendChild(li);
+      }
+    }
+    if (fastPushConfirmHint) {
+      fastPushConfirmHint.textContent = `Press Enter or ${shortcut} again to confirm. Press Esc to cancel. This extra step avoids accidental Fast Push from the shortcut.`;
+    }
+    fastPushConfirmModal.classList.remove('hidden');
+    fastPushConfirmOk?.focus();
+  }
+
+  function closeFastPushConfirmModal(confirmed) {
+    if (!fastPushConfirmModal) {
+      return;
+    }
+    fastPushConfirmModal.classList.add('hidden');
+    if (confirmed) {
+      post({ type: 'fastPushConfirmAck' });
+      runFastPush();
+      return;
+    }
+    post({ type: 'fastPushConfirmCancel' });
+  }
+
   function openFastPushCommitModal(payload) {
     if (!fastPushCommitModal) {
       return;
@@ -2042,6 +2092,25 @@
     fastPushSettingsModal.addEventListener('click', (e) => {
       if (e.target === fastPushSettingsModal) {
         closeFastPushSettingsModal();
+      }
+    });
+  }
+  if (fastPushConfirmCancel) {
+    fastPushConfirmCancel.addEventListener('click', () => closeFastPushConfirmModal(false));
+  }
+  if (fastPushConfirmOk) {
+    fastPushConfirmOk.addEventListener('click', () => closeFastPushConfirmModal(true));
+  }
+  if (fastPushConfirmModal) {
+    fastPushConfirmModal.addEventListener('click', (e) => {
+      if (e.target === fastPushConfirmModal) {
+        closeFastPushConfirmModal(false);
+      }
+    });
+    fastPushConfirmModal.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        closeFastPushConfirmModal(true);
       }
     });
   }
@@ -2341,6 +2410,11 @@
   });
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && fastPushConfirmModal && !fastPushConfirmModal.classList.contains('hidden')) {
+      e.preventDefault();
+      closeFastPushConfirmModal(false);
+      return;
+    }
     if (e.key === 'Escape' && fastPushCommitModal && !fastPushCommitModal.classList.contains('hidden')) {
       e.preventDefault();
       closeFastPushCommitModal(false);
@@ -2464,6 +2538,12 @@
         break;
       case 'showFastPushCommitDialog':
         openFastPushCommitModal(msg.payload);
+        break;
+      case 'showFastPushConfirmDialog':
+        openFastPushConfirmModal(msg.payload);
+        break;
+      case 'fastPushConfirmSubmit':
+        closeFastPushConfirmModal(true);
         break;
       case 'setMessage': {
         messageEl.value = msg.message || '';
