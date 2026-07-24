@@ -12,7 +12,28 @@
   const formError = document.getElementById('formError');
   const commitBtn = document.getElementById('commitBtn');
   const commitPushBtn = document.getElementById('commitPushBtn');
+  const commitPushSplit = document.getElementById('commitPushSplit');
+  const commitPushMenuBtn = document.getElementById('commitPushMenuBtn');
+  const commitPushMenu = document.getElementById('commitPushMenu');
   const fastPushBtn = document.getElementById('fastPushBtn');
+  const fastPushSettingsBtn = document.getElementById('fastPushSettingsBtn');
+  const fastPushSettingsModal = document.getElementById('fastPushSettingsModal');
+  const fastPushSettingsCancel = document.getElementById('fastPushSettingsCancel');
+  const fastPushSettingsSave = document.getElementById('fastPushSettingsSave');
+  const fastPushCommitModal = document.getElementById('fastPushCommitModal');
+  const fastPushCommitReason = document.getElementById('fastPushCommitReason');
+  const fastPushCommitInput = document.getElementById('fastPushCommitInput');
+  const fastPushCommitError = document.getElementById('fastPushCommitError');
+  const fastPushCommitCancel = document.getElementById('fastPushCommitCancel');
+  const fastPushCommitConfirm = document.getElementById('fastPushCommitConfirm');
+  const fpWsGenerate = document.getElementById('fpWsGenerate');
+  const fpGlGenerate = document.getElementById('fpGlGenerate');
+  const fpWsTag = document.getElementById('fpWsTag');
+  const fpGlTag = document.getElementById('fpGlTag');
+  const fpWsPush = document.getElementById('fpWsPush');
+  const fpGlPush = document.getElementById('fpGlPush');
+  const fpGenerateRow = document.getElementById('fpGenerateRow');
+  const fpGenerateUnavailable = document.getElementById('fpGenerateUnavailable');
   const stageAllBtn = document.getElementById('stageAll');
   const unstageAllBtn = document.getElementById('unstageAll');
   const refreshBtn = document.getElementById('refreshBtn');
@@ -28,6 +49,8 @@
   const keysConfirm = document.getElementById('keysConfirm');
   const updateAllModal = document.getElementById('updateAllModal');
   const updateAllSummary = document.getElementById('updateAllSummary');
+  const updateAllRepoList = document.getElementById('updateAllRepoList');
+  const updateAllHint = document.getElementById('updateAllHint');
   const updateAllCancel = document.getElementById('updateAllCancel');
   const updateAllConfirmBtn = document.getElementById('updateAllConfirm');
   const contextMenu = document.getElementById('contextMenu');
@@ -39,6 +62,13 @@
 
   const webviewState = vscode.getState() || {};
   let generatingMessage = false;
+  let fastPushSettings = {
+    workspace: { autoGenerateCommit: true, autoNewTag: false, autoPush: true },
+    global: { autoGenerateCommit: true, autoNewTag: false, autoPush: true },
+    workspaceConfigured: false,
+    effective: { autoGenerateCommit: true, autoNewTag: false, autoPush: true },
+    autoGenerateCommitCapability: { available: true },
+  };
   let commitLogExpanded = webviewState.commitLogExpanded === true;
   let commitLogRepoRoot = webviewState.commitLogRepoRoot || '';
   let commitLogLoading = false;
@@ -879,8 +909,32 @@
     const disabled = panelBusy || !workspace.ok;
     commitBtn.disabled = disabled;
     commitPushBtn.disabled = disabled;
+    if (commitPushMenuBtn) {
+      commitPushMenuBtn.disabled = disabled;
+    }
     if (fastPushBtn) {
       fastPushBtn.disabled = disabled;
+    }
+    if (fastPushSettingsBtn) {
+      fastPushSettingsBtn.disabled = panelBusy;
+    }
+    if (disabled) {
+      closeCommitPushMenu();
+    }
+    if (fastPushSettingsSave) {
+      fastPushSettingsSave.disabled = panelBusy;
+    }
+    if (fastPushSettingsCancel) {
+      fastPushSettingsCancel.disabled = panelBusy;
+    }
+    if (fastPushCommitCancel) {
+      fastPushCommitCancel.disabled = false;
+    }
+    if (fastPushCommitConfirm) {
+      fastPushCommitConfirm.disabled = false;
+    }
+    if (fastPushCommitInput) {
+      fastPushCommitInput.disabled = false;
     }
     stageAllBtn.disabled = disabled;
     unstageAllBtn.disabled = disabled;
@@ -1639,7 +1693,7 @@
     }
   });
 
-  commitBtn.addEventListener('click', () => {
+  function runCommit() {
     const message = validateBeforeCommit();
     if (!message) {
       return;
@@ -1649,9 +1703,10 @@
     clearUnversionedChecks(unversionedPaths);
     cacheLastCommitMessage(message);
     post({ type: 'commit', message, checkedChanges, unversionedPaths });
-  });
+  }
 
-  commitPushBtn.addEventListener('click', () => {
+  function runCommitAndPush() {
+    closeCommitPushMenu();
     const message = validateBeforeCommit();
     if (!message) {
       return;
@@ -1661,22 +1716,294 @@
     clearUnversionedChecks(unversionedPaths);
     cacheLastCommitMessage(message);
     post({ type: 'commitAndPush', message, checkedChanges, unversionedPaths });
+  }
+
+  commitBtn.addEventListener('click', () => {
+    runCommit();
   });
+
+  commitPushBtn.addEventListener('click', () => {
+    runCommitAndPush();
+  });
+
+  function isCommitPushMenuOpen() {
+    return !!(commitPushMenu && !commitPushMenu.classList.contains('hidden'));
+  }
+
+  function openCommitPushMenu() {
+    if (!commitPushMenu || !commitPushSplit || !commitPushMenuBtn) {
+      return;
+    }
+    commitPushMenu.classList.remove('hidden');
+    commitPushSplit.classList.add('is-open');
+    commitPushMenuBtn.setAttribute('aria-expanded', 'true');
+  }
+
+  function closeCommitPushMenu() {
+    if (!commitPushMenu || !commitPushSplit || !commitPushMenuBtn) {
+      return;
+    }
+    commitPushMenu.classList.add('hidden');
+    commitPushSplit.classList.remove('is-open');
+    commitPushMenuBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  function toggleCommitPushMenu() {
+    if (isCommitPushMenuOpen()) {
+      closeCommitPushMenu();
+    } else {
+      openCommitPushMenu();
+    }
+  }
+
+  function updateFastPushTitle() {
+    if (!fastPushBtn) {
+      return;
+    }
+    const e = fastPushSettings.effective || {};
+    const steps = [
+      e.autoGenerateCommit ? 'generate commit message' : 'use Commit Message box',
+      'commit',
+      e.autoNewTag ? 'auto-bump latest remote v* tag' : 'skip new tag',
+      e.autoPush ? 'push (auto-merge on reject; conflicts → manual merge)' : 'open Push dialog',
+    ];
+    const isMac = navigator.platform.toLowerCase().includes('mac');
+    const shortcut = isMac ? 'Cmd+Alt+K' : 'Ctrl+Alt+K';
+    fastPushBtn.title =
+      `Fast Push (${shortcut}): ${steps.join(' → ')}. Use ⚙ for settings. Workspace overrides Global. ` +
+      'Defaults: generate on, tag off, push on.';
+  }
+
+  function updateCommitActionTitles() {
+    const isMac = navigator.platform.toLowerCase().includes('mac');
+    if (commitBtn) {
+      commitBtn.title = isMac ? 'Commit (Cmd+Enter)' : 'Commit (Ctrl+Enter)';
+    }
+    if (commitPushBtn) {
+      commitPushBtn.title = isMac
+        ? 'Commit and Push (Cmd+Shift+Enter)'
+        : 'Commit and Push (Ctrl+Shift+Enter)';
+    }
+    updateFastPushTitle();
+  }
+
+  function fillFastPushSettingsForm(payload) {
+    fastPushSettings = payload || fastPushSettings;
+    const ws = fastPushSettings.workspace || {};
+    const gl = fastPushSettings.global || {};
+    const capability = fastPushSettings.autoGenerateCommitCapability || { available: true };
+    const generateAvailable = capability.available !== false;
+
+    if (fpWsGenerate) {
+      fpWsGenerate.checked = generateAvailable && !!ws.autoGenerateCommit;
+      fpWsGenerate.disabled = !generateAvailable;
+    }
+    if (fpGlGenerate) {
+      fpGlGenerate.checked = generateAvailable && !!gl.autoGenerateCommit;
+      fpGlGenerate.disabled = !generateAvailable;
+    }
+    if (fpWsTag) {
+      fpWsTag.checked = !!ws.autoNewTag;
+    }
+    if (fpGlTag) {
+      fpGlTag.checked = !!gl.autoNewTag;
+    }
+    if (fpWsPush) {
+      fpWsPush.checked = !!ws.autoPush;
+    }
+    if (fpGlPush) {
+      fpGlPush.checked = !!gl.autoPush;
+    }
+
+    if (fpGenerateRow) {
+      fpGenerateRow.classList.toggle('is-disabled', !generateAvailable);
+    }
+    if (fpGenerateUnavailable) {
+      if (generateAvailable) {
+        fpGenerateUnavailable.textContent = '';
+        fpGenerateUnavailable.classList.add('hidden');
+      } else {
+        fpGenerateUnavailable.textContent =
+          capability.reason ||
+          'Auto-generate commit requires Cursor (generate commit command) or GitHub Copilot in VS Code.';
+        fpGenerateUnavailable.classList.remove('hidden');
+      }
+    }
+
+    updateCommitActionTitles();
+  }
+
+  function readFastPushSettingsForm() {
+    const capability = fastPushSettings.autoGenerateCommitCapability || { available: true };
+    const generateAvailable = capability.available !== false;
+    return {
+      workspace: {
+        autoGenerateCommit: generateAvailable && !!(fpWsGenerate && fpWsGenerate.checked),
+        autoNewTag: !!(fpWsTag && fpWsTag.checked),
+        autoPush: !!(fpWsPush && fpWsPush.checked),
+      },
+      global: {
+        autoGenerateCommit: generateAvailable && !!(fpGlGenerate && fpGlGenerate.checked),
+        autoNewTag: !!(fpGlTag && fpGlTag.checked),
+        autoPush: !!(fpGlPush && fpGlPush.checked),
+      },
+    };
+  }
+
+  function openFastPushSettingsModal() {
+    if (!fastPushSettingsModal) {
+      return;
+    }
+    closeCommitPushMenu();
+    post({ type: 'getFastPushSettings' });
+    fastPushSettingsModal.classList.remove('hidden');
+  }
+
+  function closeFastPushSettingsModal() {
+    if (!fastPushSettingsModal) {
+      return;
+    }
+    fastPushSettingsModal.classList.add('hidden');
+  }
+
+  function runFastPush() {
+    if (generatingMessage || workspace.busy) {
+      return;
+    }
+    if (!totalIncludableCount()) {
+      showFormError('Select files to include before Fast Push.');
+      return;
+    }
+    showFormError('');
+    const message = (messageEl.value || '').trim() || undefined;
+    if (message) {
+      cacheLastCommitMessage(message);
+    }
+    const unversionedPaths = collectCheckedUnversionedPaths();
+    const checkedChanges = collectCheckedChangesPaths();
+    clearUnversionedChecks(unversionedPaths);
+    post({ type: 'fastPush', message, checkedChanges, unversionedPaths });
+  }
+
+  function showFastPushCommitError(text) {
+    if (!fastPushCommitError) {
+      return;
+    }
+    if (!text) {
+      fastPushCommitError.textContent = '';
+      fastPushCommitError.classList.add('hidden');
+      return;
+    }
+    fastPushCommitError.textContent = text;
+    fastPushCommitError.classList.remove('hidden');
+  }
+
+  function openFastPushCommitModal(payload) {
+    if (!fastPushCommitModal) {
+      return;
+    }
+    if (fastPushCommitReason) {
+      fastPushCommitReason.textContent =
+        (payload && payload.reason) ||
+        'Auto-generate commit was blocked. Enter a commit message to continue Fast Push.';
+    }
+    if (fastPushCommitInput) {
+      fastPushCommitInput.value = (payload && payload.draft) || messageEl.value || '';
+      fastPushCommitInput.focus();
+      const end = fastPushCommitInput.value.length;
+      fastPushCommitInput.setSelectionRange(end, end);
+    }
+    showFastPushCommitError('');
+    fastPushCommitModal.classList.remove('hidden');
+  }
+
+  function closeFastPushCommitModal(confirmed) {
+    if (!fastPushCommitModal) {
+      return;
+    }
+    if (!confirmed) {
+      fastPushCommitModal.classList.add('hidden');
+      showFastPushCommitError('');
+      post({ type: 'fastPushCommitCancel' });
+      return;
+    }
+    const message = (fastPushCommitInput?.value || '').trim();
+    if (!message) {
+      showFastPushCommitError('Commit message cannot be empty.');
+      fastPushCommitInput?.focus();
+      return;
+    }
+    fastPushCommitModal.classList.add('hidden');
+    showFastPushCommitError('');
+    cacheLastCommitMessage(message);
+    messageEl.value = message;
+    post({ type: 'fastPushCommitConfirm', message });
+  }
+
+  if (commitPushMenuBtn) {
+    commitPushMenuBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (commitPushMenuBtn.disabled) {
+        return;
+      }
+      toggleCommitPushMenu();
+    });
+  }
 
   if (fastPushBtn) {
     fastPushBtn.addEventListener('click', () => {
-      if (generatingMessage || workspace.busy) {
+      closeCommitPushMenu();
+      runFastPush();
+    });
+  }
+
+  if (fastPushSettingsBtn) {
+    fastPushSettingsBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (workspace.busy) {
         return;
       }
-      if (!totalIncludableCount()) {
-        showFormError('Select files to include before Fast Push.');
-        return;
+      openFastPushSettingsModal();
+    });
+  }
+  if (fastPushSettingsCancel) {
+    fastPushSettingsCancel.addEventListener('click', closeFastPushSettingsModal);
+  }
+  if (fastPushSettingsSave) {
+    fastPushSettingsSave.addEventListener('click', () => {
+      const { workspace: ws, global: gl } = readFastPushSettingsForm();
+      post({ type: 'saveFastPushSettings', workspace: ws, global: gl });
+      closeFastPushSettingsModal();
+    });
+  }
+  if (fastPushSettingsModal) {
+    fastPushSettingsModal.addEventListener('click', (e) => {
+      if (e.target === fastPushSettingsModal) {
+        closeFastPushSettingsModal();
       }
-      showFormError('');
-      const unversionedPaths = collectCheckedUnversionedPaths();
-      const checkedChanges = collectCheckedChangesPaths();
-      clearUnversionedChecks(unversionedPaths);
-      post({ type: 'fastPush', checkedChanges, unversionedPaths });
+    });
+  }
+  if (fastPushCommitCancel) {
+    fastPushCommitCancel.addEventListener('click', () => closeFastPushCommitModal(false));
+  }
+  if (fastPushCommitConfirm) {
+    fastPushCommitConfirm.addEventListener('click', () => closeFastPushCommitModal(true));
+  }
+  if (fastPushCommitInput) {
+    fastPushCommitInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        closeFastPushCommitModal(true);
+      }
+    });
+  }
+  if (fastPushCommitModal) {
+    fastPushCommitModal.addEventListener('click', (e) => {
+      if (e.target === fastPushCommitModal) {
+        closeFastPushCommitModal(false);
+      }
     });
   }
 
@@ -1821,15 +2148,94 @@
     post({ type: 'installKeybindings' });
   });
   function closeUpdateAllModal(confirmed) {
+    if (!updateAllModal) {
+      return;
+    }
     updateAllModal.classList.add('hidden');
-    post({ type: confirmed ? 'updateAllConfirm' : 'updateAllCancel' });
+    if (!confirmed) {
+      post({ type: 'updateAllCancel' });
+      return;
+    }
+    const selections = collectUpdateAllSelections();
+    const repoRoots = selections.filter((s) => s.checked).map((s) => s.rootPath);
+    post({ type: 'updateAllConfirm', repoRoots, selections });
   }
+
+  function collectUpdateAllSelections() {
+    if (!updateAllRepoList) {
+      return [];
+    }
+    return Array.from(updateAllRepoList.querySelectorAll('input[type="checkbox"][data-root]')).map(
+      (input) => ({
+        rootPath: input.getAttribute('data-root') || '',
+        checked: !!input.checked,
+      })
+    );
+  }
+
+  function persistUpdateAllSelections() {
+    const selections = collectUpdateAllSelections();
+    post({ type: 'updateAllSelectionChanged', selections });
+    updateUpdateAllSummary(selections);
+  }
+
+  function updateUpdateAllSummary(selections) {
+    if (!updateAllSummary) {
+      return;
+    }
+    const total = selections.length;
+    const checked = selections.filter((s) => s.checked).length;
+    updateAllSummary.textContent =
+      total === 0
+        ? 'No Git repositories detected.'
+        : `Select repositories to pull (${checked} of ${total} selected).`;
+  }
+
   function openUpdateAllModal(payload) {
-    const count = payload && payload.repoCount != null ? payload.repoCount : 0;
-    updateAllSummary.textContent = `Will pull and update ${count} Git repositories in the workspace. Continue?`;
+    const repos = payload && Array.isArray(payload.repos) ? payload.repos : [];
+    if (updateAllRepoList) {
+      updateAllRepoList.innerHTML = '';
+      for (const repo of repos) {
+        const label = document.createElement('label');
+        label.className = 'update-all-repo-item';
+
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = repo.checked !== false;
+        input.setAttribute('data-root', repo.rootPath || '');
+        input.addEventListener('change', persistUpdateAllSelections);
+
+        const meta = document.createElement('span');
+        meta.className = 'update-all-repo-meta';
+        const name = document.createElement('span');
+        name.className = 'update-all-repo-name';
+        name.textContent = repo.name || repo.rootPath || 'repository';
+        const pathEl = document.createElement('span');
+        pathEl.className = 'update-all-repo-path';
+        pathEl.textContent = repo.rootPath || '';
+        meta.appendChild(name);
+        if (repo.rootPath && repo.rootPath !== repo.name) {
+          meta.appendChild(pathEl);
+        }
+
+        label.appendChild(input);
+        label.appendChild(meta);
+        updateAllRepoList.appendChild(label);
+      }
+    }
+
+    if (updateAllHint) {
+      const isMac = navigator.platform.toLowerCase().includes('mac');
+      updateAllHint.textContent = isMac
+        ? 'Press Cmd+T again or click Pull to update the selected repositories. Checkmarks are remembered for next time.'
+        : 'Press Ctrl+T again or click Pull to update the selected repositories. Checkmarks are remembered for next time.';
+    }
+
+    updateUpdateAllSummary(collectUpdateAllSelections());
     updateAllModal.classList.remove('hidden');
-    updateAllConfirmBtn.focus();
+    updateAllConfirmBtn?.focus();
   }
+
   updateAllCancel.addEventListener('click', () => closeUpdateAllModal(false));
   updateAllConfirmBtn.addEventListener('click', () => closeUpdateAllModal(true));
   updateAllModal.addEventListener('keydown', (e) => {
@@ -1861,10 +2267,35 @@
     if (!contextMenu.contains(e.target)) {
       hideContextMenu();
     }
+    if (
+      commitPushSplit &&
+      isCommitPushMenuOpen() &&
+      !commitPushSplit.contains(e.target)
+    ) {
+      closeCommitPushMenu();
+    }
   });
-  window.addEventListener('blur', hideContextMenu);
+  window.addEventListener('blur', () => {
+    hideContextMenu();
+    closeCommitPushMenu();
+  });
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && fastPushCommitModal && !fastPushCommitModal.classList.contains('hidden')) {
+      e.preventDefault();
+      closeFastPushCommitModal(false);
+      return;
+    }
+    if (e.key === 'Escape' && fastPushSettingsModal && !fastPushSettingsModal.classList.contains('hidden')) {
+      e.preventDefault();
+      closeFastPushSettingsModal();
+      return;
+    }
+    if (e.key === 'Escape' && isCommitPushMenuOpen()) {
+      e.preventDefault();
+      closeCommitPushMenu();
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'a' && !e.shiftKey) {
       e.preventDefault();
       performAddToGit();
@@ -1965,6 +2396,12 @@
       case 'generateCommitMessageState':
         setGenerateBusy(msg.busy);
         break;
+      case 'fastPushSettings':
+        fillFastPushSettingsForm(msg.payload);
+        break;
+      case 'showFastPushCommitDialog':
+        openFastPushCommitModal(msg.payload);
+        break;
       case 'setMessage': {
         messageEl.value = msg.message || '';
         cacheLastCommitMessage(messageEl.value);
@@ -1979,6 +2416,9 @@
         break;
       case 'showUpdateAllDialog':
         openUpdateAllModal(msg.payload);
+        break;
+      case 'updateAllSubmit':
+        closeUpdateAllModal(true);
         break;
       case 'clearMessage': {
         messageEl.value = lastCommitMessage || '';
@@ -1998,8 +2438,18 @@
       case 'triggerAddToGit':
         performAddToGit();
         break;
+      case 'triggerCommit':
+        runCommit();
+        break;
+      case 'triggerCommitAndPush':
+        runCommitAndPush();
+        break;
+      case 'triggerFastPush':
+        runFastPush();
+        break;
     }
   });
 
+  updateCommitActionTitles();
   post({ type: 'ready' });
 })();

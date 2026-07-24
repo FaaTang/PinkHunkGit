@@ -250,16 +250,37 @@ export class GitService implements vscode.Disposable {
 		return this.api?.repositories.length ?? 0;
 	}
 
+	getRepositoryList(): Array<{ rootPath: string; name: string }> {
+		if (!this.api) {
+			return [];
+		}
+		return this.api.repositories.map((repo) => ({
+			rootPath: repo.rootUri.fsPath,
+			name: this.repoDisplayName(repo.rootUri.fsPath),
+		}));
+	}
+
 	async pullAllRepositories(
-		onProgress?: (repository: string, index: number, total: number) => void
+		onProgress?: (repository: string, index: number, total: number) => void,
+		repoRoots?: string[]
 	): Promise<PullAllResult> {
 		if (!this.api) {
 			throw new Error('VS Code Git extension is not available.');
 		}
 
-		const repositories = [...this.api.repositories];
+		let repositories = [...this.api.repositories];
+		if (repoRoots?.length) {
+			const wanted = new Set(repoRoots.map((root) => root.replace(/\\/g, '/').toLowerCase()));
+			repositories = repositories.filter((repo) =>
+				wanted.has(repo.rootUri.fsPath.replace(/\\/g, '/').toLowerCase())
+			);
+		}
 		if (!repositories.length) {
-			throw new Error('Current workspace does not contain a Git repository.');
+			throw new Error(
+				repoRoots?.length
+					? 'No selected Git repositories to update.'
+					: 'Current workspace does not contain a Git repository.'
+			);
 		}
 
 		const result: PullAllResult = { succeeded: [], failed: [] };
@@ -800,6 +821,41 @@ export class GitService implements vscode.Disposable {
 			return copilotCmd;
 		}
 		return undefined;
+	}
+
+	/**
+	 * Whether AI commit-message generation can run in this environment.
+	 * Needs a vscode.lm chat model, or Cursor / GitHub Copilot generate-commit command.
+	 */
+	async getCommitMessageGeneratorAvailability(): Promise<{
+		available: boolean;
+		reason?: string;
+		provider?: 'language-model' | 'cursor' | 'copilot';
+	}> {
+		if (typeof vscode.lm?.selectChatModels === 'function') {
+			try {
+				const models = await Promise.resolve(vscode.lm.selectChatModels());
+				if (models.length) {
+					return { available: true, provider: 'language-model' };
+				}
+			} catch {
+				// fall through to SCM commands
+			}
+		}
+
+		const commandId = await this.resolveGenerateCommitMessageCommand();
+		if (commandId === 'cursor.generateGitCommitMessage') {
+			return { available: true, provider: 'cursor' };
+		}
+		if (commandId === 'github.copilot.git.generateCommitMessage') {
+			return { available: true, provider: 'copilot' };
+		}
+
+		return {
+			available: false,
+			reason:
+				'Auto-generate commit requires Cursor (generate commit command) or GitHub Copilot in VS Code.',
+		};
 	}
 
 	private async waitForGeneratedCommitMessage(

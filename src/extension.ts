@@ -35,7 +35,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				vscode.window.showErrorMessage(result.error);
 			}
 		},
-			() => gitInitPromise ?? Promise.resolve()
+			() => gitInitPromise ?? Promise.resolve(),
+			context
 		);
 
 		context.subscriptions.push(gitService, pushDialogProvider, commitViewProvider);
@@ -79,28 +80,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				if (!(await ensureGitReady(true)) || !gitService || !commitViewProvider) {
 					return;
 				}
-				const repoCount = gitService.getRepositoryCount();
-				if (!repoCount) {
+
+				if (commitViewProvider.isUpdateAllDialogOpen()) {
+					commitViewProvider.submitUpdateAllDialog();
+					return;
+				}
+
+				const repos = gitService.getRepositoryList();
+				if (!repos.length) {
 					vscode.window.showWarningMessage('No Git repositories detected in the current workspace.');
 					return;
 				}
 
-				const confirmed = await commitViewProvider.confirmUpdateAll(repoCount);
-				if (!confirmed) {
+				const selectedRoots = await commitViewProvider.confirmUpdateAll(repos);
+				if (!selectedRoots) {
+					return;
+				}
+				if (!selectedRoots.length) {
+					vscode.window.showWarningMessage('Select at least one repository to pull.');
 					return;
 				}
 
 				const result = await vscode.window.withProgress(
 					{
 						location: vscode.ProgressLocation.Notification,
-						title: 'Updating all Git repositories',
+						title: 'Updating Git repositories',
 						cancellable: false,
 					},
 					async (progress) =>
 						gitService!.runWithUserLogging(() =>
 							gitService!.pullAllRepositories((repository, index, total) => {
 								progress.report({ message: `${repository} (${index}/${total})` });
-							})
+							}, selectedRoots)
 						)
 				);
 
@@ -153,9 +164,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				}
 				await commitViewProvider.addToGit();
 			}),
+			vscode.commands.registerCommand('copyIdeaGitUi.commit', async () => {
+				if (!(await ensureGitReady(true))) {
+					return;
+				}
+				if (!commitViewProvider) {
+					return;
+				}
+				await commitViewProvider.triggerCommit();
+			}),
+			vscode.commands.registerCommand('copyIdeaGitUi.commitAndPush', async () => {
+				if (!(await ensureGitReady(true))) {
+					return;
+				}
+				if (!commitViewProvider) {
+					return;
+				}
+				await commitViewProvider.triggerCommitAndPush();
+			}),
+			vscode.commands.registerCommand('copyIdeaGitUi.fastPush', async () => {
+				if (!(await ensureGitReady(true))) {
+					return;
+				}
+				if (!commitViewProvider) {
+					return;
+				}
+				await commitViewProvider.triggerFastPush();
+			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.installKeybindings', async () => {
 				const choice = await vscode.window.showWarningMessage(
-					'Installing extension keybindings will write to your user keybindings.json and may override existing bindings (Ctrl+K, Ctrl+Shift+K, Ctrl+T, Ctrl+D, F4, Ctrl+Alt+Z). Continue?',
+					'Installing extension keybindings will write to your user keybindings.json and may override existing bindings (Ctrl+K, Ctrl+Shift+K, Ctrl+T, Ctrl+D, F4, Ctrl+Alt+Z, Ctrl+Alt+K). Continue?',
 					{ modal: true },
 					'Install'
 				);
