@@ -125,7 +125,7 @@ export type HostToWebview =
 	| { type: 'snapshot'; payload: WorkspaceSnapshot }
 	| { type: 'diff'; payload: DiffResult }
 	| { type: 'error'; message: string }
-	| { type: 'busy'; busy: boolean }
+	| { type: 'busy'; busy: boolean; message?: string }
 	| { type: 'showPushDialog'; payload: WorkspaceSnapshot }
 	| { type: 'showPushRejected'; payload: PushRejectedPayload }
 	| { type: 'showSyncConflict'; payload: SyncConflictPayload }
@@ -142,6 +142,12 @@ export type HostToWebview =
 	| { type: 'focusMessage' }
 	| { type: 'setMessage'; message: string }
 	| { type: 'generateCommitMessageState'; busy: boolean }
+	| {
+			type: 'fastPushProgress';
+			current: number;
+			total: number;
+			label: string;
+	  }
 	| { type: 'fastPushSettings'; payload: import('../fastPush/settings').FastPushSettingsPayload }
 	| { type: 'commitLog'; payload: CommitLogPayload }
 	| { type: 'expandChanges' }

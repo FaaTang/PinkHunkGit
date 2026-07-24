@@ -2,6 +2,11 @@
   const vscode = acquireVsCodeApi();
 
   const banner = document.getElementById('banner');
+  const panelLoadingOverlay = document.getElementById('panelLoadingOverlay');
+  const panelLoadingTitle = document.getElementById('panelLoadingTitle');
+  const panelLoadingProgress = document.getElementById('panelLoadingProgress');
+  const panelLoadingBar = document.getElementById('panelLoadingBar');
+  const panelLoadingBarFill = document.getElementById('panelLoadingBarFill');
   const repoBar = document.getElementById('repoBar');
   const repoSelect = document.getElementById('repoSelect');
   const fileList = document.getElementById('fileList');
@@ -890,9 +895,64 @@
     saveWebviewState({ lastCommitMessage, messageDraft });
   }
 
-  function setBusy(busy) {
+  function setBusy(busy, message) {
     workspace.busy = busy;
+    document.body.classList.toggle('panel-busy', !!busy);
+    if (panelLoadingOverlay) {
+      panelLoadingOverlay.classList.toggle('hidden', !busy);
+    }
+    if (!busy) {
+      clearFastPushProgress();
+      if (panelLoadingTitle) {
+        panelLoadingTitle.textContent = 'Working…';
+      }
+    } else if (panelLoadingTitle && message) {
+      panelLoadingTitle.textContent = message;
+    } else if (panelLoadingTitle && !panelLoadingProgress?.classList.contains('hidden')) {
+      // keep progress-driven title
+    } else if (panelLoadingTitle) {
+      panelLoadingTitle.textContent = 'Working…';
+    }
     applyBusyState();
+  }
+
+  function clearFastPushProgress() {
+    if (panelLoadingProgress) {
+      panelLoadingProgress.textContent = '0/0';
+      panelLoadingProgress.classList.add('hidden');
+    }
+    if (panelLoadingBar) {
+      panelLoadingBar.classList.add('hidden');
+    }
+    if (panelLoadingBarFill) {
+      panelLoadingBarFill.style.width = '0%';
+    }
+  }
+
+  function setFastPushProgress(progress) {
+    if (!progress) {
+      clearFastPushProgress();
+      return;
+    }
+    const current = Math.max(0, Number(progress.current) || 0);
+    const total = Math.max(0, Number(progress.total) || 0);
+    const label = progress.label || 'Working…';
+    if (panelLoadingTitle) {
+      panelLoadingTitle.textContent = label;
+    }
+    if (panelLoadingProgress) {
+      panelLoadingProgress.textContent = total > 0 ? `${current}/${total}` : `${current}`;
+      panelLoadingProgress.classList.remove('hidden');
+    }
+    if (panelLoadingBar && panelLoadingBarFill) {
+      panelLoadingBar.classList.remove('hidden');
+      const ratio = total > 0 ? Math.min(1, current / total) : 0;
+      panelLoadingBarFill.style.width = `${Math.round(ratio * 100)}%`;
+    }
+    if (panelLoadingOverlay) {
+      panelLoadingOverlay.classList.remove('hidden');
+    }
+    document.body.classList.add('panel-busy');
   }
 
   function setGenerateBusy(busy) {
@@ -2391,7 +2451,10 @@
         renderCommitLog(msg.payload || { commits: [] });
         break;
       case 'busy':
-        setBusy(msg.busy);
+        setBusy(msg.busy, msg.message);
+        break;
+      case 'fastPushProgress':
+        setFastPushProgress(msg);
         break;
       case 'generateCommitMessageState':
         setGenerateBusy(msg.busy);

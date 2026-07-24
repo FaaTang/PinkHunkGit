@@ -298,10 +298,38 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		const wantedGenerate =
 			(this.fastPushSettings.getWorkspace() ?? this.fastPushSettings.getGlobal()).autoGenerateCommit;
 
+		const stepLabels = ['Commit message', 'Commit'];
+		if (settings.autoNewTag) {
+			stepLabels.push('New tag');
+		}
+		if (settings.autoPush) {
+			stepLabels.push('Push');
+		}
+		const total = stepLabels.length;
+		let completed = 0;
+		const report = (label: string) => {
+			this.post({
+				type: 'fastPushProgress',
+				current: completed,
+				total,
+				label,
+			});
+		};
+		const completeStep = () => {
+			completed = Math.min(completed + 1, total);
+			this.post({
+				type: 'fastPushProgress',
+				current: completed,
+				total,
+				label: completed >= total ? 'Done' : stepLabels[completed] || 'Working…',
+			});
+		};
+
 		await this.git.applyCommitSelection(checkedChanges);
 		await this.stageUnversionedPaths(unversionedPaths);
 		await this.git.refresh();
 
+		report('Preparing commit message…');
 		let message = '';
 		let generateBlockReason: string | undefined;
 
@@ -335,6 +363,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				(wantedGenerate
 					? 'Auto-generate commit was blocked. Enter a commit message to continue Fast Push.'
 					: 'Enter a commit message to continue Fast Push.');
+			report('Waiting for commit message…');
 			const entered = await this.promptFastPushCommitMessage(reason, providedMessage);
 			if (!entered) {
 				return;
@@ -342,15 +371,19 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			message = entered;
 			this.post({ type: 'setMessage', message });
 		}
+		completeStep();
 
+		report('Committing…');
 		const committed = await this.git.commitAllStaged(message);
 		vscode.window.showInformationMessage(formatCommittedMessage(committed));
 		this.post({ type: 'clearMessage' });
+		completeStep();
 
 		const roots = committed.map((repo) => repo.rootPath);
 		let createdTags = false;
 
 		if (settings.autoNewTag) {
+			report('Creating tag…');
 			const tagPlans: Array<{ root: string; name: string; nextTag: string }> = [];
 			for (const root of roots) {
 				const snap = this.git.getWorkspaceSnapshot().repositories.find(
@@ -395,10 +428,13 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					? `Created tag ${tagPlans[0].nextTag}.`
 					: `Created tags: ${tagPlans.map((p) => `${p.name}=${p.nextTag}`).join(', ')}.`;
 			vscode.window.showInformationMessage(tagSummary);
+			completeStep();
 		}
 
 		if (settings.autoPush) {
+			report('Pushing…');
 			await this.pushDialog.pushWithAutoMerge(roots, { pushTags: createdTags });
+			completeStep();
 			return;
 		}
 
@@ -413,8 +449,6 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		draft?: string
 	): Promise<string | undefined> {
 		this.resolveFastPushCommit(undefined);
-		// Allow typing while Fast Push is mid-flight (outer withBusy keeps busy=true).
-		this.post({ type: 'busy', busy: false });
 		const result = new Promise<string | undefined>((resolve) => {
 			this.fastPushCommitResolver = resolve;
 		});
@@ -422,9 +456,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			type: 'showFastPushCommitDialog',
 			payload: { reason, draft: (draft || '').trim() },
 		});
-		const message = await result;
-		this.post({ type: 'busy', busy: true });
-		return message;
+		return result;
 	}
 
 	private resolveFastPushCommit(message: string | undefined): void {
@@ -642,7 +674,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 							msg.unversionedPaths,
 							msg.message
 						);
-					});
+					}, 'Fast Push…');
 					break;
 				case 'fastPushCommitConfirm':
 					this.resolveFastPushCommit((msg.message || '').trim() || undefined);
@@ -706,10 +738,10 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	private async withBusy(fn: () => Promise<void>): Promise<void> {
+	private async withBusy(fn: () => Promise<void>, message?: string): Promise<void> {
 		const run = this.operationChain.then(async () => {
 			this.busy = true;
-			this.post({ type: 'busy', busy: true });
+			this.post({ type: 'busy', busy: true, message });
 			try {
 				await this.git.runWithUserLogging(fn);
 			} finally {
@@ -904,6 +936,19 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
       <div class="modal-actions">
         <button id="fastPushSettingsCancel" type="button">Cancel</button>
         <button id="fastPushSettingsSave" class="primary" type="button">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="panelLoadingOverlay" class="panel-loading-overlay hidden" aria-live="polite" aria-busy="true">
+    <div class="panel-loading-box">
+      <div class="panel-loading-spinner" aria-hidden="true"></div>
+      <div class="panel-loading-copy">
+        <div id="panelLoadingTitle" class="panel-loading-title">Working…</div>
+        <div id="panelLoadingProgress" class="panel-loading-progress hidden">0/0</div>
+        <div id="panelLoadingBar" class="panel-loading-bar hidden" aria-hidden="true">
+          <div id="panelLoadingBarFill" class="panel-loading-bar-fill"></div>
+        </div>
       </div>
     </div>
   </div>
