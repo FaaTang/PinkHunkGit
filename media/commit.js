@@ -83,6 +83,8 @@
   let commitLogExpanded = webviewState.commitLogExpanded === true;
   let commitLogRepoRoot = webviewState.commitLogRepoRoot || '';
   let commitLogLoading = false;
+  /** Repo root currently being fetched for commit log (dedupe in-flight requests). */
+  let commitLogPendingRoot = '';
   let workspace = {
     ok: true,
     repositories: [],
@@ -449,6 +451,38 @@
     post({ type: 'updateSelection', repoRoot: activeRepoRoot(), path: null, staged: false });
   }
 
+  /** Fingerprint used to detect stale commit-log cache after commit / branch change. */
+  function commitLogRepoFingerprint(repoRoot) {
+    const repo = findRepo(repoRoot);
+    if (!repo) {
+      return '';
+    }
+    return `${repo.branch || ''}|${repo.ahead ?? ''}`;
+  }
+
+  function isCommitLogFresh(repoRoot) {
+    if (!commitLogList || !repoRoot) {
+      return false;
+    }
+    if (repoKey(commitLogList.dataset.loadedRoot || '') !== repoKey(repoRoot)) {
+      return false;
+    }
+    if ((commitLogList.dataset.fingerprint || '') !== commitLogRepoFingerprint(repoRoot)) {
+      return false;
+    }
+    return !!commitLogList.querySelector('.commit-log-row, .commit-log-empty');
+  }
+
+  function selectCommitLogRow(row) {
+    if (!commitLogList || !row) {
+      return;
+    }
+    for (const el of commitLogList.querySelectorAll('.commit-log-row.selected')) {
+      el.classList.remove('selected');
+    }
+    row.classList.add('selected');
+  }
+
   function focusCommitLogRepo(repoRoot, switchActive) {
     if (!repoRoot) {
       return;
@@ -460,12 +494,7 @@
     commitLogRepoRoot = repoRoot;
     saveWebviewState({ commitLogRepoRoot });
     populateCommitLogRepoSelect();
-    if (
-      commitLogExpanded &&
-      (changed ||
-        !commitLogList.dataset.loadedRoot ||
-        repoKey(commitLogList.dataset.loadedRoot) !== repoKey(repoRoot))
-    ) {
+    if (commitLogExpanded && !isCommitLogFresh(repoRoot)) {
       requestCommitLog(repoRoot);
     }
   }
@@ -484,7 +513,10 @@
       if (root) {
         commitLogRepoRoot = root;
         populateCommitLogRepoSelect();
-        requestCommitLog(root);
+        // Reuse cached DOM when the same repo tip is still fresh — avoids git log + re-render lag.
+        if (!isCommitLogFresh(root)) {
+          requestCommitLog(root);
+        }
       }
     }
   }
@@ -514,17 +546,34 @@
     commitLogRepoRoot = commitLogRepo.value;
   }
 
-  function requestCommitLog(repoRoot) {
+  function requestCommitLog(repoRoot, options) {
+    const force = !!(options && options.force);
     const root = repoRoot || commitLogRepoRoot || activeRepoRoot();
     if (!root || !commitLogExpanded || !commitLogList) {
       return;
     }
+    if (!force && isCommitLogFresh(root)) {
+      return;
+    }
+    // Deduplicate overlapping loads for the same repository.
+    if (
+      !force &&
+      commitLogLoading &&
+      repoKey(commitLogPendingRoot) === repoKey(root)
+    ) {
+      return;
+    }
+    commitLogPendingRoot = root;
     commitLogLoading = true;
-    commitLogList.innerHTML = '';
-    const loading = document.createElement('div');
-    loading.className = 'commit-log-loading';
-    loading.textContent = 'Loading commit history…';
-    commitLogList.appendChild(loading);
+    const hasRows = !!commitLogList.querySelector('.commit-log-row, .commit-log-empty');
+    // Keep existing rows visible during background refresh; only flash Loading on empty/forced.
+    if (force || !hasRows) {
+      commitLogList.innerHTML = '';
+      const loading = document.createElement('div');
+      loading.className = 'commit-log-loading';
+      loading.textContent = 'Loading commit history…';
+      commitLogList.appendChild(loading);
+    }
     post({ type: 'loadCommitLog', repoRoot: root });
   }
 
@@ -533,8 +582,10 @@
       return;
     }
     commitLogLoading = false;
+    commitLogPendingRoot = '';
     commitLogList.innerHTML = '';
     commitLogList.dataset.loadedRoot = payload.repoRoot || '';
+    commitLogList.dataset.fingerprint = commitLogRepoFingerprint(payload.repoRoot || '');
     if (payload.repoRoot) {
       commitLogRepoRoot = payload.repoRoot;
       populateCommitLogRepoSelect();
@@ -550,6 +601,7 @@
       commitLogList.appendChild(empty);
       return;
     }
+    const fragment = document.createDocumentFragment();
     for (const commit of commits) {
       const row = document.createElement('div');
       row.className = 'commit-log-row';
@@ -584,40 +636,9 @@
       main.appendChild(meta);
       row.appendChild(dot);
       row.appendChild(main);
-
-      row.addEventListener('click', () => {
-        for (const el of commitLogList.querySelectorAll('.commit-log-row.selected')) {
-          el.classList.remove('selected');
-        }
-        row.classList.add('selected');
-      });
-
-      row.addEventListener('dblclick', (e) => {
-        e.preventDefault();
-        const repoRoot = commitLogRepoRoot || activeRepoRoot();
-        if (!repoRoot || !commit.hash) {
-          return;
-        }
-        post({ type: 'openCommitChanges', repoRoot, hash: commit.hash });
-      });
-
-      row.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        for (const el of commitLogList.querySelectorAll('.commit-log-row.selected')) {
-          el.classList.remove('selected');
-        }
-        row.classList.add('selected');
-        showCommitLogContextMenu(e.clientX, e.clientY, {
-          repoRoot: commitLogRepoRoot || activeRepoRoot(),
-          hash: commit.hash,
-          shortHash: commit.shortHash,
-          subject: commit.subject,
-        });
-      });
-
-      commitLogList.appendChild(row);
+      fragment.appendChild(row);
     }
+    commitLogList.appendChild(fragment);
   }
 
   function showCommitLogContextMenu(x, y, commit) {
@@ -2164,7 +2185,46 @@
     });
 
     commitLogRefresh?.addEventListener('click', () => {
-      requestCommitLog(commitLogRepoRoot || activeRepoRoot());
+      requestCommitLog(commitLogRepoRoot || activeRepoRoot(), { force: true });
+    });
+
+    // Event delegation: one set of listeners instead of 3×N per render.
+    commitLogList?.addEventListener('click', (e) => {
+      const row = e.target?.closest?.('.commit-log-row');
+      if (!row || !commitLogList.contains(row)) {
+        return;
+      }
+      selectCommitLogRow(row);
+    });
+
+    commitLogList?.addEventListener('dblclick', (e) => {
+      const row = e.target?.closest?.('.commit-log-row');
+      if (!row || !commitLogList.contains(row)) {
+        return;
+      }
+      e.preventDefault();
+      const repoRoot = commitLogRepoRoot || activeRepoRoot();
+      const hash = row.dataset.hash;
+      if (!repoRoot || !hash) {
+        return;
+      }
+      post({ type: 'openCommitChanges', repoRoot, hash });
+    });
+
+    commitLogList?.addEventListener('contextmenu', (e) => {
+      const row = e.target?.closest?.('.commit-log-row');
+      if (!row || !commitLogList.contains(row)) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      selectCommitLogRow(row);
+      showCommitLogContextMenu(e.clientX, e.clientY, {
+        repoRoot: commitLogRepoRoot || activeRepoRoot(),
+        hash: row.dataset.hash,
+        shortHash: row.dataset.shortHash,
+        subject: row.dataset.subject,
+      });
     });
 
     if (commitLogPane && commitLogToggle && commitLogRepo && commitLogList) {
@@ -2510,12 +2570,11 @@
           commitLogRepoRoot = activeRepoRoot();
           populateCommitLogRepoSelect();
         }
-        // Only reload history when the active/log repo changed, not on every status refresh.
+        // Only reload history when tip changed / not yet loaded (not on every status refresh).
         if (
           commitLogExpanded &&
           (commitLogRepoRoot || activeRepoRoot()) &&
-          repoKey(commitLogList?.dataset.loadedRoot || '') !==
-            repoKey(commitLogRepoRoot || activeRepoRoot())
+          !isCommitLogFresh(commitLogRepoRoot || activeRepoRoot())
         ) {
           requestCommitLog(commitLogRepoRoot || activeRepoRoot());
         }

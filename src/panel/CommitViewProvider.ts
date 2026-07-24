@@ -22,6 +22,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private pendingUpdateAllRepos?: Array<{ rootPath: string; name: string; checked: boolean }>;
 	private fastPushConfirmOpen = false;
 	private fastPushCommitResolver?: (message: string | undefined) => void;
+	/** In-flight commit-log fetch keyed by normalized repo root (dedupe concurrent loads). */
+	private commitLogInFlight?: { key: string; promise: Promise<void> };
 	private readonly fastPushSettings: FastPushSettingsStore;
 	private readonly updateAllSelection: UpdateAllSelectionStore;
 
@@ -802,13 +804,26 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async pushCommitLog(repoRoot?: string): Promise<void> {
-		try {
-			const payload = await this.git.getCommitLog(repoRoot);
-			this.post({ type: 'commitLog', payload });
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			this.post({ type: 'error', message });
+		const key = (repoRoot || '').replace(/\\/g, '/').toLowerCase();
+		if (this.commitLogInFlight?.key === key) {
+			await this.commitLogInFlight.promise;
+			return;
 		}
+		const promise = (async () => {
+			try {
+				const payload = await this.git.getCommitLog(repoRoot);
+				this.post({ type: 'commitLog', payload });
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				this.post({ type: 'error', message });
+			}
+		})().finally(() => {
+			if (this.commitLogInFlight?.promise === promise) {
+				this.commitLogInFlight = undefined;
+			}
+		});
+		this.commitLogInFlight = { key, promise };
+		await promise;
 	}
 
 	private async pushSnapshot(): Promise<void> {
