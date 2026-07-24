@@ -26,6 +26,9 @@
   const closeBtn = document.getElementById('closeBtn');
   const newTagModal = document.getElementById('newTagModal');
   const newTagSummary = document.getElementById('newTagSummary');
+  const newTagPrevious = document.getElementById('newTagPrevious');
+  const newTagPreviousValue = document.getElementById('newTagPreviousValue');
+  const newTagOverwriteBtn = document.getElementById('newTagOverwriteBtn');
   const newTagInput = document.getElementById('newTagInput');
   const newTagError = document.getElementById('newTagError');
   const newTagCancelBtn = document.getElementById('newTagCancelBtn');
@@ -37,6 +40,8 @@
   let modalState = 'confirm';
   let newTagOpen = false;
   let pendingTagRoots = [];
+  let previousTagRequestId = 0;
+  let previousTagFillName = '';
   let selectedTargetRoot = null;
   let selectedCommitHash = null;
   let checkedRoots = new Set();
@@ -54,7 +59,7 @@
 
   function setBusy(busy, message) {
     document.body.classList.toggle('busy', !!busy);
-    [cancelBtn, pushBtn, mergeBtn, rebaseBtn, abortBtn, continueBtn, laterBtn, newTagBtn, newTagCancelBtn, newTagConfirmBtn, closeBtn].forEach((btn) => {
+    [cancelBtn, pushBtn, mergeBtn, rebaseBtn, abortBtn, continueBtn, laterBtn, newTagBtn, newTagCancelBtn, newTagConfirmBtn, newTagOverwriteBtn, closeBtn].forEach((btn) => {
       if (btn) {
         btn.disabled = !!busy;
       }
@@ -163,6 +168,94 @@
     }
   }
 
+  function setPreviousRemoteTagOverwrite(tagName) {
+    previousTagFillName = tagName || '';
+    if (!newTagOverwriteBtn) {
+      return;
+    }
+    newTagOverwriteBtn.classList.toggle('hidden', !previousTagFillName);
+  }
+
+  function setPreviousRemoteTagLoading(loading, plural) {
+    if (!newTagPrevious) {
+      return;
+    }
+    newTagPrevious.classList.toggle('is-loading', !!loading);
+    newTagPrevious.classList.toggle('is-plural', !!plural);
+    const label = newTagPrevious.querySelector('.new-tag-previous-label');
+    if (label) {
+      label.textContent = plural ? 'Previous remote tags:' : 'Previous remote tag:';
+    }
+    if (loading) {
+      setPreviousRemoteTagOverwrite('');
+    }
+  }
+
+  function setPreviousRemoteTagText(text, options) {
+    if (!newTagPrevious) {
+      return;
+    }
+    const plural = !!options?.plural;
+    const loading = !!options?.loading;
+    setPreviousRemoteTagLoading(loading, plural);
+    if (!newTagPreviousValue) {
+      return;
+    }
+    newTagPreviousValue.textContent = loading ? '' : text || '(none)';
+    newTagPreviousValue.classList.toggle('hidden', !!loading);
+    if (!loading) {
+      setPreviousRemoteTagOverwrite(options?.fillTagName || '');
+    }
+  }
+
+  function formatPreviousRemoteTags(items) {
+    if (!items?.length) {
+      return '(none)';
+    }
+    if (items.length === 1) {
+      const item = items[0];
+      if (item.error) {
+        return '(unavailable)';
+      }
+      return item.tagName || '(none)';
+    }
+    return items
+      .map((item) => {
+        const name = item.repoName || 'repository';
+        if (item.error) {
+          return `${name}: (unavailable)`;
+        }
+        return `${name}: ${item.tagName || '(none)'}`;
+      })
+      .join('\n');
+  }
+
+  function resolveFillablePreviousTag(items) {
+    if (!items?.length) {
+      return '';
+    }
+    const names = items
+      .map((item) => (item.error ? '' : (item.tagName || '').trim()))
+      .filter(Boolean);
+    if (!names.length) {
+      return '';
+    }
+    if (names.every((name) => name === names[0])) {
+      return names[0];
+    }
+    return '';
+  }
+
+  function applyPreviousRemoteTagToInput() {
+    if (!previousTagFillName || !newTagInput) {
+      return;
+    }
+    newTagInput.value = previousTagFillName;
+    newTagInput.focus();
+    newTagInput.select();
+    showNewTagError('');
+  }
+
   function openNewTagModal(roots) {
     pendingTagRoots = roots;
     newTagOpen = true;
@@ -178,20 +271,26 @@
         newTagSummary.textContent = `Create tag on ${roots.length} selected repositories (at each HEAD).`;
       }
     }
+    setPreviousRemoteTagText('', { loading: true, plural: roots.length > 1 });
     if (newTagInput) {
       newTagInput.value = '';
       newTagInput.focus();
     }
     showNewTagError('');
+    const requestId = ++previousTagRequestId;
+    post({ type: 'getPreviousRemoteTags', repoRoots: roots, requestId });
   }
 
   function closeNewTagModal() {
     newTagOpen = false;
     pendingTagRoots = [];
+    previousTagRequestId += 1;
+    previousTagFillName = '';
     if (newTagModal) {
       newTagModal.classList.add('hidden');
     }
     showNewTagError('');
+    setPreviousRemoteTagText('', { loading: true, plural: false });
     if (newTagInput) {
       newTagInput.value = '';
     }
@@ -773,6 +872,9 @@
   if (newTagConfirmBtn) {
     newTagConfirmBtn.addEventListener('click', submitNewTag);
   }
+  if (newTagOverwriteBtn) {
+    newTagOverwriteBtn.addEventListener('click', applyPreviousRemoteTagToInput);
+  }
   if (newTagInput) {
     newTagInput.addEventListener('input', () => showNewTagError(''));
     newTagInput.addEventListener('keydown', (e) => {
@@ -858,6 +960,24 @@
           showNewTagError(msg.message);
         } else {
           showFooterError(msg.message);
+        }
+        break;
+      case 'previousRemoteTags':
+        if (!newTagOpen || msg.requestId !== previousTagRequestId) {
+          break;
+        }
+        if (msg.items?.length === 1) {
+          setPreviousRemoteTagText(formatPreviousRemoteTags(msg.items), {
+            plural: false,
+            fillTagName: resolveFillablePreviousTag(msg.items),
+          });
+        } else if (msg.items?.length > 1) {
+          setPreviousRemoteTagText(formatPreviousRemoteTags(msg.items), {
+            plural: true,
+            fillTagName: resolveFillablePreviousTag(msg.items),
+          });
+        } else {
+          setPreviousRemoteTagText('(none)', { plural: false, fillTagName: '' });
         }
         break;
       case 'showRejected': {

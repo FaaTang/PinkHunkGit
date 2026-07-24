@@ -198,6 +198,9 @@ export class PushDialogProvider implements vscode.Disposable {
 				case 'createTag':
 					await this.handleCreateTags(msg.repoRoots, msg.tagName);
 					break;
+				case 'getPreviousRemoteTags':
+					await this.handleGetPreviousRemoteTags(msg.repoRoots, msg.requestId);
+					break;
 			}
 		} catch (err) {
 			if (err instanceof PushRejectedError) {
@@ -318,6 +321,30 @@ export class PushDialogProvider implements vscode.Disposable {
 			this.post({ type: 'tagResult', success: false, message: `${message}\n${details}` });
 			vscode.window.showErrorMessage(message, { modal: true, detail: details });
 		}
+	}
+
+	private async handleGetPreviousRemoteTags(repoRoots: string[], requestId: number): Promise<void> {
+		if (!repoRoots.length) {
+			this.post({ type: 'previousRemoteTags', requestId, items: [] });
+			return;
+		}
+
+		const items = await Promise.all(
+			repoRoots.map(async (root) => {
+				const snap = this.git.getWorkspaceSnapshot().repositories.find((r) =>
+					r.rootPath.replace(/\\/g, '/').toLowerCase() === root.replace(/\\/g, '/').toLowerCase()
+				);
+				const repoName = snap?.name ?? root;
+				try {
+					const tagName = await this.git.getLatestRemoteTag(root);
+					return { repoRoot: root, repoName, tagName };
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					return { repoRoot: root, repoName, error: message };
+				}
+			})
+		);
+		this.post({ type: 'previousRemoteTags', requestId, items });
 	}
 
 	private async refreshConflictState(): Promise<void> {
@@ -557,6 +584,12 @@ export class PushDialogProvider implements vscode.Disposable {
     <div class="modal-card">
       <h2>New Tag</h2>
       <p id="newTagSummary">Create tag at the current branch HEAD.</p>
+      <p id="newTagPrevious" class="new-tag-previous is-loading" aria-live="polite">
+        <span class="new-tag-previous-label">Previous remote tag:</span>
+        <span class="new-tag-previous-spinner" aria-hidden="true"></span>
+        <span id="newTagPreviousValue" class="new-tag-previous-value hidden"></span>
+        <button id="newTagOverwriteBtn" class="new-tag-overwrite hidden" type="button" title="Overwrite tag name input">Overwrite</button>
+      </p>
       <label class="field-label" for="newTagInput">Tag name</label>
       <input id="newTagInput" class="field-input" type="text" placeholder="v1.0.3" autocomplete="off" spellcheck="false" />
       <div id="newTagError" class="field-error hidden"></div>

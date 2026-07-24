@@ -69,11 +69,19 @@ export type SyncPreviewPayload = {
 	blockers: string[];
 };
 
+export type PreviousRemoteTagItem = {
+	repoRoot: string;
+	repoName: string;
+	tagName?: string;
+	error?: string;
+};
+
 export type PushHostToWebview =
 	| { type: 'state'; payload: PushDialogPayload }
 	| { type: 'busy'; busy: boolean; message?: string }
 	| { type: 'error'; message: string }
 	| { type: 'tagResult'; success: boolean; message: string }
+	| { type: 'previousRemoteTags'; requestId: number; items: PreviousRemoteTagItem[] }
 	| { type: 'showRejected'; payload: PushRejectedPayload }
 	| { type: 'showSyncPreview'; payload: SyncPreviewPayload }
 	| { type: 'showSyncConflict'; payload: SyncConflictPayload }
@@ -94,5 +102,6 @@ export type PushWebviewToHost =
 	| { type: 'askPushConfirm'; repoRoot?: string; pushTags?: boolean }
 	| { type: 'askPushCancel' }
 	| { type: 'createTag'; repoRoots: string[]; tagName: string }
+	| { type: 'getPreviousRemoteTags'; repoRoots: string[]; requestId: number }
 	| { type: 'selectTarget'; repoRoot: string }
 	| { type: 'refresh' };

@@ -991,19 +991,58 @@ export class GitService implements vscode.Disposable {
 		this._onDidChange.fire();
 	}
 
+	/**
+	 * Latest remote tag name for the default / upstream remote (version-sorted).
+	 * Returns undefined when there is no remote, no tags, or the lookup fails.
+	 */
+	async getLatestRemoteTag(repoRoot: string): Promise<string | undefined> {
+		const repo = this.requireRepoByRoot(repoRoot);
+		const remote = this.resolveDefaultRemote(repo);
+		if (!remote) {
+			return undefined;
+		}
+		const raw = await this.queryGit(repo.rootUri.fsPath, ['ls-remote', '--tags', '--refs', remote]);
+		if (!raw) {
+			return undefined;
+		}
+		const tags: string[] = [];
+		for (const line of raw.split(/\r?\n/)) {
+			const trimmed = line.trim();
+			if (!trimmed) {
+				continue;
+			}
+			const tab = trimmed.lastIndexOf('\t');
+			const ref = tab >= 0 ? trimmed.slice(tab + 1) : trimmed.split(/\s+/).pop() || '';
+			const prefix = 'refs/tags/';
+			if (ref.startsWith(prefix)) {
+				tags.push(ref.slice(prefix.length));
+			}
+		}
+		if (!tags.length) {
+			return undefined;
+		}
+		tags.sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
+		return tags[0];
+	}
+
 	private canPushBranchWithTags(repo: Repository): boolean {
 		const head = repo.state.HEAD;
 		return !!(head?.upstream && head.name);
 	}
 
+	private resolveDefaultRemote(repo: Repository): string | undefined {
+		const remotes = repo.state.remotes.map((r) => r.name);
+		const upstreamRemote = repo.state.HEAD?.upstream?.remote;
+		return (
+			upstreamRemote ||
+			(remotes.includes('origin') ? 'origin' : remotes[0])
+		);
+	}
+
 	/** Push all local tags to the default / upstream remote. */
 	private async pushAllTags(repoRoot: string): Promise<void> {
 		const repo = this.requireRepoByRoot(repoRoot);
-		const remotes = repo.state.remotes.map((r) => r.name);
-		const upstreamRemote = repo.state.HEAD?.upstream?.remote;
-		const remote =
-			upstreamRemote ||
-			(remotes.includes('origin') ? 'origin' : remotes[0]);
+		const remote = this.resolveDefaultRemote(repo);
 		const args = remote ? ['push', remote, '--tags'] : ['push', '--tags'];
 		await this.execGit(repoRoot, args);
 	}
