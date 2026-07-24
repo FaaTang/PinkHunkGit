@@ -1155,12 +1155,13 @@ export class GitService implements vscode.Disposable {
 		const upstream = snap.upstream;
 		const { remote, upstreamBranch } = parseUpstream(upstream, head?.upstream);
 
+		const branchWithRepo = branch ? `${branch} (${snap.name})` : undefined;
 		const label =
-			branch && remote && upstreamBranch
-				? `${branch} \u2192 ${remote} : ${upstreamBranch}`
-				: branch && upstream
-					? `${branch} \u2192 ${upstream}`
-					: branch ?? snap.name;
+			branchWithRepo && remote && upstreamBranch
+				? `${branchWithRepo} \u2192 ${remote} : ${upstreamBranch}`
+				: branchWithRepo && upstream
+					? `${branchWithRepo} \u2192 ${upstream}`
+					: branchWithRepo ?? snap.name;
 
 		let commits: PushCommitItem[] = [];
 		if (head?.upstream) {

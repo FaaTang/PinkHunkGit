@@ -44,13 +44,10 @@ export class PushDialogProvider implements vscode.Disposable {
 			return;
 		}
 
-		const active = this.git.getWorkspaceSnapshot().active;
-		const title = active.name ? `Push Commits to ${active.name}` : 'Push';
-
 		this.webviewReady = false;
 		this.panel = vscode.window.createWebviewPanel(
 			'copyIdeaGitUi.pushDialog',
-			title,
+			'Push Commits',
 			{ viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
 			{
 				enableScripts: true,
@@ -244,8 +241,8 @@ export class PushDialogProvider implements vscode.Disposable {
 			busy: this.busy,
 		};
 		this.post({ type: 'state', payload });
-		if (this.panel && targets[0]?.repoName) {
-			this.panel.title = `Push Commits to ${targets[0].repoName}`;
+		if (this.panel) {
+			this.panel.title = 'Push Commits';
 		}
 	}
 

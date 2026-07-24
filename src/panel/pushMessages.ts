@@ -17,7 +17,7 @@ export type PushTarget = {
 	upstreamBranch?: string;
 	ahead?: number;
 	behind?: number;
-	/** IDEA-style label, e.g. `main → origin : main` */
+	/** IDEA-style label with repo name, e.g. `main (PinkHunkDB) → origin : main` */
 	label: string;
 	commits: PushCommitItem[];
 };

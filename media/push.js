@@ -459,10 +459,8 @@
   }
 
   function updateTitle() {
-    const target = findTargetByKey(selectedTargetRoot) || payload.targets[0];
-    const name = target?.repoName || 'repository';
     if (modalState === 'confirm') {
-      dialogTitle.textContent = `Push Commits to ${name}`;
+      dialogTitle.textContent = 'Push Commits';
     } else if (modalState === 'rejected') {
       dialogTitle.textContent = 'Push Rejected';
     } else if (modalState === 'syncPreview') {
