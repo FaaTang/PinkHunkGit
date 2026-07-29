@@ -52,7 +52,12 @@ export class CommitMessagePrefixSettingsStore {
 	}
 
 	getEffective(): CommitMessagePrefixFlags {
-		return this.getWorkspace() ?? this.getGlobal();
+		const ws = this.getWorkspace();
+		// Workspace 优先级：只有当 Workspace 已启用时才生效；未勾选时回退 Global。
+		if (ws && ws.enabled) {
+			return ws;
+		}
+		return this.getGlobal();
 	}
 
 	getPayload(): CommitMessagePrefixSettingsPayload {
@@ -74,6 +79,11 @@ export class CommitMessagePrefixSettingsStore {
 		const nextGlobal = normalizeFlags(global, GLOBAL_DEFAULTS);
 		await this.context.globalState.update(GLOBAL_KEY, nextGlobal);
 		await this.context.workspaceState.update(WORKSPACE_KEY, nextWorkspace);
+		return this.getPayload();
+	}
+
+	async clearGlobal(): Promise<CommitMessagePrefixSettingsPayload> {
+		await this.context.globalState.update(GLOBAL_KEY, { ...GLOBAL_DEFAULTS });
 		return this.getPayload();
 	}
 }

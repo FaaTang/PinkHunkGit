@@ -600,18 +600,28 @@ export class GitService implements vscode.Disposable {
 					.filter((entry) => pathsEqual(entry.repoRoot, snap.rootPath))
 					.map((entry) => entry.path.toLowerCase())
 			);
-			const changes = this.getTrackedChangeItems(snap);
 			const repo = this.requireRepoByRoot(snap.rootPath);
 			const toStage: string[] = [];
 			const toUnstage: string[] = [];
+			const trackedUnstaged = snap.unstaged.filter((item) => item.status !== '?');
+			const seenStage = new Set<string>();
+			const seenUnstage = new Set<string>();
 
-			for (const item of changes) {
-				const include = checkedSet.has(item.path.toLowerCase());
-				if (include && !item.staged) {
-					toStage.push(item.fsPath);
-				} else if (!include && item.staged) {
-					toUnstage.push(item.fsPath);
+			for (const item of trackedUnstaged) {
+				const key = item.path.toLowerCase();
+				if (!checkedSet.has(key) || seenStage.has(key)) {
+					continue;
 				}
+				seenStage.add(key);
+				toStage.push(item.fsPath);
+			}
+			for (const item of snap.staged) {
+				const key = item.path.toLowerCase();
+				if (checkedSet.has(key) || seenUnstage.has(key)) {
+					continue;
+				}
+				seenUnstage.add(key);
+				toUnstage.push(item.fsPath);
 			}
 
 			if (toStage.length) {

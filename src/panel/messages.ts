@@ -221,6 +221,7 @@ export type WebviewToHost =
 			workspace: import('../commitMessage/prefixSettings').CommitMessagePrefixFlags;
 			global: import('../commitMessage/prefixSettings').CommitMessagePrefixFlags;
 	  }
+	| { type: 'clearCommitMessagePrefixGlobal' }
 	| { type: 'push'; repoRoot?: string; pushTags?: boolean }
 	| { type: 'pushSync'; mode: SyncMode; repoRoot?: string }
 	| { type: 'syncAbort'; repoRoot?: string }
