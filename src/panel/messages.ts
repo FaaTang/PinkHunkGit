@@ -8,6 +8,10 @@ export type ChangeItem = {
 };
 
 export type { FastPushFlags, FastPushSettingsPayload } from '../fastPush/settings';
+export type {
+	CommitMessagePrefixFlags,
+	CommitMessagePrefixSettingsPayload,
+} from '../commitMessage/prefixSettings';
 
 export type RepoSnapshot = {
 	ok: boolean;
@@ -157,12 +161,17 @@ export type HostToWebview =
 			label: string;
 	  }
 	| { type: 'fastPushSettings'; payload: import('../fastPush/settings').FastPushSettingsPayload }
+	| {
+			type: 'commitMessagePrefixSettings';
+			payload: import('../commitMessage/prefixSettings').CommitMessagePrefixSettingsPayload;
+	  }
 	| { type: 'commitLog'; payload: CommitLogPayload }
 	| { type: 'expandChanges' }
 	| { type: 'triggerAddToGit' }
 	| { type: 'triggerCommit' }
 	| { type: 'triggerCommitAndPush' }
-	| { type: 'triggerFastPush' };
+	| { type: 'triggerFastPush' }
+	| { type: 'selectFile'; repoRoot: string; path: string; staged: boolean };
 
 export type WebviewToHost =
 	| { type: 'ready' }
@@ -201,10 +210,16 @@ export type WebviewToHost =
 	| { type: 'fastPushConfirmAck' }
 	| { type: 'fastPushConfirmCancel' }
 	| { type: 'getFastPushSettings' }
+	| { type: 'getCommitMessagePrefixSettings' }
 	| {
 			type: 'saveFastPushSettings';
 			workspace: import('../fastPush/settings').FastPushFlags;
 			global: import('../fastPush/settings').FastPushFlags;
+	  }
+	| {
+			type: 'saveCommitMessagePrefixSettings';
+			workspace: import('../commitMessage/prefixSettings').CommitMessagePrefixFlags;
+			global: import('../commitMessage/prefixSettings').CommitMessagePrefixFlags;
 	  }
 	| { type: 'push'; repoRoot?: string; pushTags?: boolean }
 	| { type: 'pushSync'; mode: SyncMode; repoRoot?: string }

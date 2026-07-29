@@ -141,6 +141,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				}
 				await commitViewProvider.showDiffForSelection();
 			}),
+			vscode.commands.registerCommand('copyIdeaGitUi.diffNextChangeOrFile', async () => {
+				if (!gitService) {
+					return;
+				}
+				const result = await gitService.navigateDiffNextChangeOrFile();
+				if (
+					result.openedNextFile &&
+					commitViewProvider
+				) {
+					await commitViewProvider.selectFileInPanel(
+						result.next.repoRoot,
+						result.next.path,
+						result.next.staged
+					);
+				}
+			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.openFile', async () => {
 				if (!commitViewProvider) {
 					return;
@@ -198,7 +214,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.installKeybindings', async () => {
 				const choice = await vscode.window.showWarningMessage(
-					'Installing extension keybindings will write to your user keybindings.json and may override existing bindings (Ctrl+K, Ctrl+Shift+K, Ctrl+T, Ctrl+D, F4, Ctrl+Alt+Z, Ctrl+Alt+K). Continue?',
+					'Installing extension keybindings will write to your user keybindings.json and may override existing bindings (Ctrl+K, Ctrl+Shift+K, Ctrl+T, Ctrl+D, F4, F7, Ctrl+Alt+Z, Ctrl+Alt+K). Continue?',
 					{ modal: true },
 					'Install'
 				);
@@ -209,6 +225,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				if (!result.ok) {
 					vscode.window.showErrorMessage(result.error);
 				}
+			})
+		);
+
+		const syncPanelSelectionFromActiveDiff = async (): Promise<void> => {
+			if (!gitService || !commitViewProvider) {
+				return;
+			}
+			if (!commitViewProvider.isVisible()) {
+				return;
+			}
+			const target = gitService.getActiveDiffTargetForPanelSync();
+			if (!target) {
+				return;
+			}
+			const entry = gitService.getDiffEntryForPanelSync(target.repoRoot, target.path);
+			if (!entry) {
+				return;
+			}
+			await commitViewProvider.selectFileInPanel(target.repoRoot, entry.path, entry.staged);
+		};
+		context.subscriptions.push(
+			vscode.window.onDidChangeActiveTextEditor(() => {
+				void syncPanelSelectionFromActiveDiff();
+			}),
+			vscode.window.tabGroups.onDidChangeTabs(() => {
+				void syncPanelSelectionFromActiveDiff();
 			})
 		);
 

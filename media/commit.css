@@ -696,15 +696,13 @@ textarea {
   background: var(--input-bg);
   color: var(--input-fg);
   border: 1px solid var(--input-border);
-  padding: 8px 36px 10px 8px;
+  padding: 8px 62px 10px 8px;
   font-family: inherit;
   font-size: 13px;
 }
 
 .generate-msg-btn {
-  position: absolute;
-  right: 6px;
-  bottom: 6px;
+  position: static;
   width: 26px;
   height: 26px;
   min-width: 26px;
@@ -718,6 +716,45 @@ textarea {
   opacity: 0.7;
   border: none;
   z-index: 1;
+}
+
+.generate-msg-actions {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.generate-msg-settings-btn {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.generate-msg-actions:hover .generate-msg-settings-btn,
+.generate-msg-settings-btn:focus-visible {
+  opacity: 0.85;
+  pointer-events: auto;
+}
+
+.generate-msg-settings-btn:hover:not(:disabled) {
+  opacity: 1;
+  background: var(--list-hover);
+  filter: none;
+}
+
+.generate-msg-settings-btn:disabled {
+  opacity: 0.4;
 }
 
 .generate-msg-btn:hover:not(:disabled) {
@@ -967,6 +1004,29 @@ textarea {
 .fast-push-settings-scope input {
   margin: 0;
 }
+
+.commit-prefix-single-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 10px;
+  padding: 7px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--input-fg);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 3px;
+}
+
+.commit-prefix-row {
+  grid-template-columns: minmax(0, 1fr) 76px 64px;
+}
+
+.commit-prefix-single-input:focus {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
 
 .fast-push-settings-row.is-disabled {
   opacity: 0.55;

@@ -70,6 +70,7 @@ export class GitService implements vscode.Disposable {
 	private pendingFolderWatch = false;
 	private initState: 'pending' | 'ready' | 'failed' = 'pending';
 	private initError = '';
+	private pendingDiffAdvance: { repoRoot: string; path: string } | undefined;
 
 	async init(): Promise<{ ok: true } | { ok: false; error: string }> {
 		const extension = vscode.extensions.getExtension<GitExtension>('vscode.git');
@@ -1506,6 +1507,159 @@ export class GitService implements vscode.Disposable {
 		};
 
 		await this.openHeadWorkingDiff(repo, relativePath, fsPath, title, diffOptions);
+	}
+
+	async navigateDiffNextChangeOrFile(): Promise<
+		| {
+				openedNextFile: false;
+		  }
+		| {
+				openedNextFile: true;
+				next: { repoRoot: string; path: string; staged: boolean };
+		  }
+	> {
+		const current = this.resolveActiveDiffTarget();
+		if (!current) {
+			await vscode.commands.executeCommand('workbench.action.editor.nextChange');
+			this.pendingDiffAdvance = undefined;
+			return { openedNextFile: false };
+		}
+
+		const before = this.captureEditorCursorState();
+		await vscode.commands.executeCommand('workbench.action.compareEditor.nextChange');
+		const moved = this.didEditorCursorMove(before);
+		if (moved) {
+			this.pendingDiffAdvance = undefined;
+			return { openedNextFile: false };
+		}
+
+		const shouldOpenNextFile =
+			!!this.pendingDiffAdvance &&
+			pathsEqual(this.pendingDiffAdvance.repoRoot, current.repoRoot) &&
+			pathsEqual(this.pendingDiffAdvance.path, current.path);
+		if (!shouldOpenNextFile) {
+			this.pendingDiffAdvance = current;
+			vscode.window.showInformationMessage(
+				'已到当前文件最后一个修改点，再按一次 F7 跳到下一个文件的第一个修改点。'
+			);
+			return { openedNextFile: false };
+		}
+
+		this.pendingDiffAdvance = undefined;
+		const files = this.getDiffNavigationFiles(current.repoRoot);
+		const index = files.findIndex((item) => pathsEqual(item.path, current.path));
+		if (index < 0 || index >= files.length - 1) {
+			vscode.window.showInformationMessage('已经是最后一个修改文件。');
+			return { openedNextFile: false };
+		}
+
+		const next = files[index + 1];
+		await this.openDiffInEditor(next.path, next.staged, current.repoRoot);
+		await vscode.commands.executeCommand('workbench.action.compareEditor.nextChange');
+		return {
+			openedNextFile: true,
+			next: { repoRoot: current.repoRoot, path: next.path, staged: next.staged },
+		};
+	}
+
+	private resolveActiveDiffTarget(): { repoRoot: string; path: string } | undefined {
+		const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+		let uri: vscode.Uri | undefined;
+		if (activeTab?.input instanceof vscode.TabInputTextDiff) {
+			uri = activeTab.input.modified;
+		}
+		if (!uri && vscode.window.activeTextEditor?.document.uri.scheme === 'file') {
+			uri = vscode.window.activeTextEditor.document.uri;
+		}
+		if (!uri || uri.scheme !== 'file') {
+			return undefined;
+		}
+
+		const repo = this.repoForUri(uri);
+		if (!repo) {
+			return undefined;
+		}
+		const repoRoot = repo.rootUri.fsPath;
+		const relativePath = path.relative(repoRoot, uri.fsPath).replace(/\\/g, '/');
+		if (!relativePath || relativePath.startsWith('..')) {
+			return undefined;
+		}
+		return { repoRoot, path: relativePath };
+	}
+
+	getActiveDiffTargetForPanelSync(): { repoRoot: string; path: string } | undefined {
+		const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+		if (!(activeTab?.input instanceof vscode.TabInputTextDiff)) {
+			return undefined;
+		}
+		const uri = activeTab.input.modified;
+		if (uri.scheme !== 'file') {
+			return undefined;
+		}
+		const repo = this.repoForUri(uri);
+		if (!repo) {
+			return undefined;
+		}
+		const repoRoot = repo.rootUri.fsPath;
+		const relativePath = path.relative(repoRoot, uri.fsPath).replace(/\\/g, '/');
+		if (!relativePath || relativePath.startsWith('..')) {
+			return undefined;
+		}
+		return { repoRoot, path: relativePath };
+	}
+
+	getDiffEntryForPanelSync(
+		repoRoot: string,
+		relativePath: string
+	): { path: string; staged: boolean } | undefined {
+		const files = this.getDiffNavigationFiles(repoRoot);
+		return files.find((item) => pathsEqual(item.path, relativePath));
+	}
+
+	private getDiffNavigationFiles(repoRoot: string): Array<{ path: string; staged: boolean }> {
+		const repo = this.requireRepoByRoot(repoRoot);
+		const snap = this.buildSnapshotForRepo(repo);
+		const tracked = this.getTrackedChangeItems(snap).map((item) => ({
+			path: item.path,
+			staged: item.staged,
+		}));
+		const unversioned = snap.unversioned.map((item) => ({
+			path: item.path,
+			staged: false,
+		}));
+		const ordered = [...tracked, ...unversioned];
+		const seen = new Set<string>();
+		const files: Array<{ path: string; staged: boolean }> = [];
+		for (const item of ordered) {
+			const key = item.path.toLowerCase();
+			if (seen.has(key)) {
+				continue;
+			}
+			seen.add(key);
+			files.push(item);
+		}
+		return files;
+	}
+
+	private captureEditorCursorState(): string {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			return '';
+		}
+		const selection = editor.selection.active;
+		return [
+			editor.document.uri.toString(),
+			selection.line,
+			selection.character,
+			editor.visibleRanges.map((r) => `${r.start.line}:${r.end.line}`).join(','),
+		].join('|');
+	}
+
+	private didEditorCursorMove(before: string): boolean {
+		if (!before) {
+			return false;
+		}
+		return before !== this.captureEditorCursorState();
 	}
 
 	/**

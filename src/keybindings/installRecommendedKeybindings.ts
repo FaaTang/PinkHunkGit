@@ -14,6 +14,7 @@ const RECOMMENDED_BINDINGS: KeybindingEntry[] = [
 	{ key: 'ctrl+t', command: 'copyIdeaGitUi.updateAllRepositories', mac: 'cmd+t' },
 	{ key: 'ctrl+d', command: 'copyIdeaGitUi.showDiff', mac: 'cmd+d', when: SHOW_DIFF_WHEN },
 	{ key: 'f4', command: 'copyIdeaGitUi.openFile', when: 'copyIdeaGitUi.hasSelection' },
+	{ key: 'f7', command: 'copyIdeaGitUi.diffNextChangeOrFile', when: 'isInDiffEditor' },
 	{ key: 'ctrl+alt+z', command: 'copyIdeaGitUi.rollback', mac: 'cmd+alt+z', when: SHOW_DIFF_WHEN },
 	{ key: 'ctrl+alt+a', command: 'copyIdeaGitUi.addToGit', mac: 'cmd+alt+a', when: 'view == copyIdeaGitUi.commitView' },
 	{ key: 'ctrl+enter', command: 'copyIdeaGitUi.commit', mac: 'cmd+enter', when: 'view == copyIdeaGitUi.commitView' },
