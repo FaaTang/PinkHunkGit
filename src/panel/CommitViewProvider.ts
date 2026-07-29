@@ -569,6 +569,12 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		return `${prefix} ${text}`;
 	}
 
+	private async clearGlobalCommitMessagePrefixSettings(): Promise<void> {
+		const payload = await this.commitPrefixSettings.clearGlobal();
+		this.post({ type: 'commitMessagePrefixSettings', payload });
+		showTimedInfoMessage('Global commit message prefix cleared.');
+	}
+
 	private async saveFastPushSettings(workspace: FastPushFlags, global: FastPushFlags): Promise<void> {
 		const capability = await this.git.getCommitMessageGeneratorAvailability();
 		const payload = await this.fastPushSettings.save(workspace, global, capability);
@@ -799,6 +805,9 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'saveCommitMessagePrefixSettings':
 					await this.saveCommitMessagePrefixSettings(msg.workspace, msg.global);
+					break;
+				case 'clearCommitMessagePrefixGlobal':
+					await this.clearGlobalCommitMessagePrefixSettings();
 					break;
 				case 'generateCommitMessage':
 					await this.generateCommitMessage(msg.checkedChanges ?? [], msg.unversionedPaths);
@@ -1100,6 +1109,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
         </div>
       </div>
       <div class="modal-actions">
+        <button id="commitMsgPrefixClearGlobal" type="button" title="Clear the Global prefix and disable it">Clear Global</button>
         <button id="commitMsgPrefixCancel" type="button">Cancel</button>
         <button id="commitMsgPrefixSave" class="primary" type="button">Save</button>
       </div>
