@@ -2,6 +2,10 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { bumpTrailingVTag, GitService } from '../git/GitService';
 import { FastPushFlags, FastPushSettingsStore } from '../fastPush/settings';
+import {
+	CommitMessagePrefixFlags,
+	CommitMessagePrefixSettingsStore,
+} from '../commitMessage/prefixSettings';
 import { UpdateAllSelectionStore } from '../updateAll/selectionStore';
 import { showTimedInfoMessage } from '../ui/notify';
 import { CommitRepoResult, HostToWebview, WebviewToHost } from './messages';
@@ -26,6 +30,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	/** In-flight commit-log fetch keyed by normalized repo root (dedupe concurrent loads). */
 	private commitLogInFlight?: { key: string; promise: Promise<void> };
 	private readonly fastPushSettings: FastPushSettingsStore;
+	private readonly commitPrefixSettings: CommitMessagePrefixSettingsStore;
 	private readonly updateAllSelection: UpdateAllSelectionStore;
 
 	constructor(
@@ -37,6 +42,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		context: vscode.ExtensionContext
 	) {
 		this.fastPushSettings = new FastPushSettingsStore(context);
+		this.commitPrefixSettings = new CommitMessagePrefixSettingsStore(context);
 		this.updateAllSelection = new UpdateAllSelectionStore(context);
 		this.disposables.push(this.git.onDidChange(() => void this.pushSnapshot()));
 	}
@@ -54,6 +60,10 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 
 	isFastPushConfirmOpen(): boolean {
 		return this.fastPushConfirmOpen;
+	}
+
+	isVisible(): boolean {
+		return !!this.view?.visible;
 	}
 
 	/** Ask the open Fast Push confirm dialog to proceed (second Ctrl+Alt+K). */
@@ -207,6 +217,13 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		await this.revealInExplorer(this.selected.repoRoot, this.selected.path);
 	}
 
+	async selectFileInPanel(repoRoot: string, filePath: string, staged: boolean): Promise<void> {
+		this.git.setActiveRepository(repoRoot);
+		this.setSelection(repoRoot, filePath, staged);
+		await this.pushSnapshot();
+		this.post({ type: 'selectFile', repoRoot, path: filePath, staged });
+	}
+
 	private async openFile(repoRoot: string, relativePath: string): Promise<void> {
 		const fsPath = this.toFsPath(repoRoot, relativePath);
 		try {
@@ -311,7 +328,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			await this.git.applyCommitSelection(checkedChanges);
 			await this.stageUnversionedPaths(unversionedPaths);
 			await this.git.refresh();
-			const message = await this.git.generateCommitMessageWithAi(checkedChanges, unversionedPaths);
+			const generated = await this.git.generateCommitMessageWithAi(checkedChanges, unversionedPaths);
+			const message = this.applyConfiguredCommitPrefix(generated);
 			this.post({ type: 'setMessage', message });
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
@@ -386,7 +404,9 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			} else {
 				this.post({ type: 'generateCommitMessageState', busy: true });
 				try {
-					message = (await this.git.generateCommitMessageWithAi(checkedChanges, unversionedPaths)).trim();
+					message = this.applyConfiguredCommitPrefix(
+						(await this.git.generateCommitMessageWithAi(checkedChanges, unversionedPaths)).trim()
+					);
 					if (message) {
 						this.post({ type: 'setMessage', message });
 					} else {
@@ -515,6 +535,40 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'fastPushSettings', payload: this.fastPushSettings.getPayload(capability) });
 	}
 
+	private async postCommitMessagePrefixSettings(): Promise<void> {
+		this.post({ type: 'commitMessagePrefixSettings', payload: this.commitPrefixSettings.getPayload() });
+	}
+
+	private async saveCommitMessagePrefixSettings(
+		workspace: CommitMessagePrefixFlags,
+		global: CommitMessagePrefixFlags
+	): Promise<void> {
+		const payload = await this.commitPrefixSettings.save(workspace, global);
+		this.post({ type: 'commitMessagePrefixSettings', payload });
+		showTimedInfoMessage(
+			'Commit message prefix settings saved. Workspace overrides Global in this folder.'
+		);
+	}
+
+	private applyConfiguredCommitPrefix(message: string): string {
+		const text = (message || '').trim();
+		if (!text) {
+			return text;
+		}
+		const effective = this.commitPrefixSettings.getEffective();
+		if (!effective.enabled) {
+			return text;
+		}
+		const prefix = (effective.prefix || '').trim();
+		if (!prefix) {
+			return text;
+		}
+		if (text.startsWith(`${prefix} `) || text === prefix) {
+			return text;
+		}
+		return `${prefix} ${text}`;
+	}
+
 	private async saveFastPushSettings(workspace: FastPushFlags, global: FastPushFlags): Promise<void> {
 		const capability = await this.git.getCommitMessageGeneratorAvailability();
 		const payload = await this.fastPushSettings.save(workspace, global, capability);
@@ -640,6 +694,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				case 'ready':
 					await this.refreshAndPush();
 					await this.postFastPushSettings();
+					await this.postCommitMessagePrefixSettings();
 					if (this.pendingExpandChanges) {
 						this.pendingExpandChanges = false;
 						this.expandChangesGroups();
@@ -738,6 +793,12 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'saveFastPushSettings':
 					await this.saveFastPushSettings(msg.workspace, msg.global);
+					break;
+				case 'getCommitMessagePrefixSettings':
+					await this.postCommitMessagePrefixSettings();
+					break;
+				case 'saveCommitMessagePrefixSettings':
+					await this.saveCommitMessagePrefixSettings(msg.workspace, msg.global);
 					break;
 				case 'generateCommitMessage':
 					await this.generateCommitMessage(msg.checkedChanges ?? [], msg.unversionedPaths);
@@ -885,12 +946,15 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
         <div class="message-field">
           <div id="messageResize" class="message-resize" title="Drag to resize" role="separator" aria-orientation="horizontal" tabindex="0"></div>
           <textarea id="message" placeholder="Commit Message" rows="4"></textarea>
-          <button id="generateMsgBtn" class="generate-msg-btn" type="button" title="Generate Commit Message" aria-label="Generate Commit Message">
-            <svg class="generate-msg-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
-              <path fill="currentColor" d="M7.5 1.5 8.4 4.2 11 5.1 8.4 6 7.5 8.7 6.6 6 4 5.1 6.6 4.2 7.5 1.5Zm4.3 5.2.6 1.7 1.7.6-1.7.6-.6 1.7-.6-1.7-1.7-.6 1.7-.6.6-1.7Zm-7.6 2.4.9 2.5 2.5.9-2.5.9-.9 2.5-.9-2.5-2.5-.9 2.5-.9.9-2.5Z"/>
-            </svg>
-            <span class="generate-msg-spinner" aria-hidden="true"></span>
-          </button>
+          <div class="generate-msg-actions">
+            <button id="generateMsgBtn" class="generate-msg-btn" type="button" title="Generate Commit Message" aria-label="Generate Commit Message">
+              <svg class="generate-msg-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+                <path fill="currentColor" d="M7.5 1.5 8.4 4.2 11 5.1 8.4 6 7.5 8.7 6.6 6 4 5.1 6.6 4.2 7.5 1.5Zm4.3 5.2.6 1.7 1.7.6-1.7.6-.6 1.7-.6-1.7-1.7-.6 1.7-.6.6-1.7Zm-7.6 2.4.9 2.5 2.5.9-2.5.9-.9 2.5-.9-2.5-2.5-.9 2.5-.9.9-2.5Z"/>
+              </svg>
+              <span class="generate-msg-spinner" aria-hidden="true"></span>
+            </button>
+            <button id="generateMsgSettingsBtn" class="generate-msg-settings-btn" type="button" title="Commit message prefix settings" aria-label="Commit message prefix settings">⚙</button>
+          </div>
         </div>
         <div id="formError" class="form-error hidden"></div>
         <div class="commit-actions">
@@ -1013,6 +1077,31 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
       <div class="modal-actions">
         <button id="fastPushSettingsCancel" type="button">Cancel</button>
         <button id="fastPushSettingsSave" class="primary" type="button">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="commitMsgPrefixModal" class="modal hidden">
+    <div class="modal-card modal-card-wide">
+      <h2>Commit Message Prefix Settings</h2>
+      <p class="fast-push-settings-hint">Set one optional prefix for auto-generated commit messages only, then choose where it applies. Workspace overrides Global in this folder. Example: v20260729#000</p>
+      <label class="fast-push-commit-label" for="cmpPrefixInput">Prefix</label>
+      <input id="cmpPrefixInput" class="commit-prefix-single-input" type="text" placeholder="e.g. v20260729#000" />
+      <div class="fast-push-settings-table" role="table" aria-label="Commit message prefix settings">
+        <div class="fast-push-settings-row head" role="row">
+          <span class="fast-push-settings-feature" role="columnheader">Apply Prefix</span>
+          <label class="fast-push-settings-scope" role="columnheader" title="Applies only to this workspace and overrides Global">Workspace</label>
+          <label class="fast-push-settings-scope" role="columnheader" title="Default for all workspaces that have no Workspace override">Global</label>
+        </div>
+        <div class="fast-push-settings-row commit-prefix-row" role="row">
+          <span class="fast-push-settings-feature">Auto-generated commit message</span>
+          <label class="fast-push-settings-scope"><input id="cmpWsEnabled" type="checkbox" /></label>
+          <label class="fast-push-settings-scope"><input id="cmpGlEnabled" type="checkbox" /></label>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="commitMsgPrefixCancel" type="button">Cancel</button>
+        <button id="commitMsgPrefixSave" class="primary" type="button">Save</button>
       </div>
     </div>
   </div>

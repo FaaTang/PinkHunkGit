@@ -14,6 +14,7 @@
   const messageResizeEl = document.getElementById('messageResize');
   const messageFieldEl = messageEl ? messageEl.closest('.message-field') : null;
   const generateMsgBtn = document.getElementById('generateMsgBtn');
+  const generateMsgSettingsBtn = document.getElementById('generateMsgSettingsBtn');
   const formError = document.getElementById('formError');
   const commitBtn = document.getElementById('commitBtn');
   const commitPushBtn = document.getElementById('commitPushBtn');
@@ -45,6 +46,12 @@
   const fpGlPush = document.getElementById('fpGlPush');
   const fpGenerateRow = document.getElementById('fpGenerateRow');
   const fpGenerateUnavailable = document.getElementById('fpGenerateUnavailable');
+  const commitMsgPrefixModal = document.getElementById('commitMsgPrefixModal');
+  const commitMsgPrefixCancel = document.getElementById('commitMsgPrefixCancel');
+  const commitMsgPrefixSave = document.getElementById('commitMsgPrefixSave');
+  const cmpPrefixInput = document.getElementById('cmpPrefixInput');
+  const cmpWsEnabled = document.getElementById('cmpWsEnabled');
+  const cmpGlEnabled = document.getElementById('cmpGlEnabled');
   const stageAllBtn = document.getElementById('stageAll');
   const unstageAllBtn = document.getElementById('unstageAll');
   const refreshBtn = document.getElementById('refreshBtn');
@@ -79,6 +86,12 @@
     workspaceConfigured: false,
     effective: { autoGenerateCommit: true, autoNewTag: false, autoPush: true },
     autoGenerateCommitCapability: { available: true },
+  };
+  let commitMessagePrefixSettings = {
+    workspace: { enabled: false, prefix: '' },
+    global: { enabled: false, prefix: '' },
+    workspaceConfigured: false,
+    effective: { enabled: false, prefix: '' },
   };
   let commitLogExpanded = webviewState.commitLogExpanded === true;
   let commitLogRepoRoot = webviewState.commitLogRepoRoot || '';
@@ -449,6 +462,39 @@
       return;
     }
     post({ type: 'updateSelection', repoRoot: activeRepoRoot(), path: null, staged: false });
+  }
+
+  function focusFileSelectionFromHost(repoRoot, filePath, staged) {
+    if (!repoRoot || !filePath) {
+      return;
+    }
+    const repo = findRepo(repoRoot);
+    if (!repo) {
+      return;
+    }
+
+    const tracked = getMergedChanges(repo);
+    const trackedItem = tracked.find((item) => item.path === filePath);
+    const unversioned = trackedItem ? [] : getUnversioned(repo);
+    const unversionedItem = trackedItem ? null : unversioned.find((item) => item.path === filePath);
+    if (!trackedItem && !unversionedItem) {
+      return;
+    }
+
+    const groupId = trackedItem ? 'changes' : 'unversioned';
+    const resolvedStaged = trackedItem ? !!staged : false;
+    const items = trackedItem ? tracked : unversioned;
+    const index = items.findIndex((item) => item.path === filePath);
+
+    clearGroupSelection();
+    selectedFiles = [{ repoRoot, path: filePath, staged: resolvedStaged }];
+    selectionAnchor = { repoRoot, groupId, index: index >= 0 ? index : 0 };
+    applyFileListSelectionVisuals();
+
+    const target = fileList.querySelector(
+      `.file-row[data-repo-root="${CSS.escape(repoRoot)}"][data-file-path="${CSS.escape(filePath)}"][data-file-staged="${resolvedStaged ? '1' : '0'}"]`
+    );
+    target?.scrollIntoView({ block: 'nearest' });
   }
 
   /** Fingerprint used to detect stale commit-log cache after commit / branch change. */
@@ -1005,6 +1051,9 @@
     if (fastPushSettingsBtn) {
       fastPushSettingsBtn.disabled = panelBusy;
     }
+    if (generateMsgSettingsBtn) {
+      generateMsgSettingsBtn.disabled = panelBusy;
+    }
     if (disabled) {
       closeCommitPushMenu();
     }
@@ -1013,6 +1062,12 @@
     }
     if (fastPushSettingsCancel) {
       fastPushSettingsCancel.disabled = panelBusy;
+    }
+    if (commitMsgPrefixSave) {
+      commitMsgPrefixSave.disabled = panelBusy;
+    }
+    if (commitMsgPrefixCancel) {
+      commitMsgPrefixCancel.disabled = panelBusy;
     }
     if (fastPushCommitCancel) {
       fastPushCommitCancel.disabled = false;
@@ -1943,6 +1998,59 @@
     };
   }
 
+  function fillCommitMessagePrefixSettingsForm(payload) {
+    commitMessagePrefixSettings = payload || commitMessagePrefixSettings;
+    const ws = commitMessagePrefixSettings.workspace || {};
+    const gl = commitMessagePrefixSettings.global || {};
+    const effectivePrefix =
+      typeof (commitMessagePrefixSettings.effective || {}).prefix === 'string'
+        ? commitMessagePrefixSettings.effective.prefix
+        : typeof ws.prefix === 'string'
+          ? ws.prefix
+          : typeof gl.prefix === 'string'
+            ? gl.prefix
+            : '';
+    if (cmpPrefixInput) {
+      cmpPrefixInput.value = effectivePrefix;
+    }
+    if (cmpWsEnabled) {
+      cmpWsEnabled.checked = !!ws.enabled;
+    }
+    if (cmpGlEnabled) {
+      cmpGlEnabled.checked = !!gl.enabled;
+    }
+  }
+
+  function readCommitMessagePrefixSettingsForm() {
+    const prefix = (cmpPrefixInput?.value || '').trim();
+    return {
+      workspace: {
+        enabled: !!(cmpWsEnabled && cmpWsEnabled.checked),
+        prefix,
+      },
+      global: {
+        enabled: !!(cmpGlEnabled && cmpGlEnabled.checked),
+        prefix,
+      },
+    };
+  }
+
+  function openCommitMessagePrefixModal() {
+    if (!commitMsgPrefixModal) {
+      return;
+    }
+    post({ type: 'getCommitMessagePrefixSettings' });
+    commitMsgPrefixModal.classList.remove('hidden');
+    cmpPrefixInput?.focus();
+  }
+
+  function closeCommitMessagePrefixModal() {
+    if (!commitMsgPrefixModal) {
+      return;
+    }
+    commitMsgPrefixModal.classList.add('hidden');
+  }
+
   function openFastPushSettingsModal() {
     if (!fastPushSettingsModal) {
       return;
@@ -2113,6 +2221,33 @@
     fastPushSettingsModal.addEventListener('click', (e) => {
       if (e.target === fastPushSettingsModal) {
         closeFastPushSettingsModal();
+      }
+    });
+  }
+  if (generateMsgSettingsBtn) {
+    generateMsgSettingsBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (workspace.busy || generatingMessage) {
+        return;
+      }
+      openCommitMessagePrefixModal();
+    });
+  }
+  if (commitMsgPrefixCancel) {
+    commitMsgPrefixCancel.addEventListener('click', closeCommitMessagePrefixModal);
+  }
+  if (commitMsgPrefixSave) {
+    commitMsgPrefixSave.addEventListener('click', () => {
+      const { workspace: ws, global: gl } = readCommitMessagePrefixSettingsForm();
+      post({ type: 'saveCommitMessagePrefixSettings', workspace: ws, global: gl });
+      closeCommitMessagePrefixModal();
+    });
+  }
+  if (commitMsgPrefixModal) {
+    commitMsgPrefixModal.addEventListener('click', (e) => {
+      if (e.target === commitMsgPrefixModal) {
+        closeCommitMessagePrefixModal();
       }
     });
   }
@@ -2485,6 +2620,11 @@
       closeFastPushSettingsModal();
       return;
     }
+    if (e.key === 'Escape' && commitMsgPrefixModal && !commitMsgPrefixModal.classList.contains('hidden')) {
+      e.preventDefault();
+      closeCommitMessagePrefixModal();
+      return;
+    }
     if (e.key === 'Escape' && isCommitPushMenuOpen()) {
       e.preventDefault();
       closeCommitPushMenu();
@@ -2595,6 +2735,9 @@
       case 'fastPushSettings':
         fillFastPushSettingsForm(msg.payload);
         break;
+      case 'commitMessagePrefixSettings':
+        fillCommitMessagePrefixSettingsForm(msg.payload);
+        break;
       case 'showFastPushCommitDialog':
         openFastPushCommitModal(msg.payload);
         break;
@@ -2636,6 +2779,9 @@
         break;
       case 'expandChanges':
         expandChangesGroups();
+        break;
+      case 'selectFile':
+        focusFileSelectionFromHost(msg.repoRoot, msg.path, msg.staged);
         break;
       case 'triggerAddToGit':
         performAddToGit();
