@@ -157,6 +157,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					);
 				}
 			}),
+			vscode.commands.registerCommand('copyIdeaGitUi.diffPreviousChangeOrFile', async () => {
+				if (!gitService) {
+					return;
+				}
+				const result = await gitService.navigateDiffPreviousChangeOrFile();
+				if (
+					result.openedPreviousFile &&
+					commitViewProvider
+				) {
+					await commitViewProvider.selectFileInPanel(
+						result.previous.repoRoot,
+						result.previous.path,
+						result.previous.staged
+					);
+				}
+			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.openFile', async () => {
 				if (!commitViewProvider) {
 					return;
@@ -214,7 +230,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.installKeybindings', async () => {
 				const choice = await vscode.window.showWarningMessage(
-					'Installing extension keybindings will write to your user keybindings.json and may override existing bindings (Ctrl+K, Ctrl+Shift+K, Ctrl+T, Ctrl+D, F4, F7, Ctrl+Alt+Z, Ctrl+Alt+K). Continue?',
+					'Installing extension keybindings will write to your user keybindings.json and may override existing bindings (Ctrl+K, Ctrl+Shift+K, Ctrl+T, Ctrl+D, F4, F6, F7, Ctrl+Alt+Z, Ctrl+Alt+K). Continue?',
 					{ modal: true },
 					'Install'
 				);

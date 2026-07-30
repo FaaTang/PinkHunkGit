@@ -85,12 +85,24 @@ npm run package
 | `Ctrl+T` | 拉取并更新工作区内的所有 Git 仓库 |
 | `Ctrl+D` | Show Diff（需选中文件） |
 | `F4` | 打开选中文件 |
+| `F6` | Diff：上一个修改点 / 上一个文件 |
+| `F7` | Diff：下一个修改点 / 下一个文件 |
 | `Ctrl+Alt+Z` | 回滚选中文件 |
 | `Ctrl+Alt+A` | Add to Git（Unversioned 勾选，Commit 面板） |
 
 面板顶部 **⌨** 可一键安装上述快捷键（会提示可能覆盖现有绑定）。
 `Ctrl+T` / `Cmd+T` 与编辑器原有快捷键可能冲突；如需保留原绑定，可在 Keyboard
 Shortcuts 中删除或修改 **Pink Hunk Git: Update All Git Repositories** 的快捷键，手动入口仍可使用。
+
+### Diff 导航（F6 / F7）
+
+当焦点位于 Diff 编辑器时：
+
+- `F6` 跳到当前文件中的上一个修改点
+- 如果当前已经在本文件的第一个修改点，再按一次 `F6` 会跳到上一个文件的最后一个修改点
+- `F7` 跳到当前文件中的下一个修改点
+- 如果当前已经在本文件的最后一个修改点，再按一次 `F7` 会跳到下一个文件的第一个修改点
+- 该导航会把 `changes` 和 `unversioned` 视为一个连续文件列表
 
 ## 要求
 
