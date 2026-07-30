@@ -102,7 +102,10 @@ export type PushWebviewToHost =
 	| { type: 'resolveConflict'; path: string; side: 'yours' | 'theirs'; mode: SyncMode; repoRoot?: string }
 	| { type: 'askPushConfirm'; repoRoot?: string; pushTags?: boolean }
 	| { type: 'askPushCancel' }
-	| { type: 'createTag'; repoRoots: string[]; tagName: string }
+	| {
+			type: 'createTag';
+			tags: Array<{ repoRoot: string; tagName: string }>;
+	  }
 	| { type: 'getPreviousRemoteTags'; repoRoots: string[]; requestId: number }
 	| { type: 'selectTarget'; repoRoot: string }
 	| { type: 'refresh' };

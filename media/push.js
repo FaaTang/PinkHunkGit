@@ -246,6 +246,17 @@
     return '';
   }
 
+  function resolvePerRepoPreviousTagsInput(items) {
+    if (!items?.length) {
+      return '';
+    }
+    const lines = items
+      .filter((item) => !item.error)
+      .map((item) => `${item.repoName || item.repoRoot}: ${(item.tagName || '').trim()}`)
+      .filter((line) => !line.endsWith(': '));
+    return lines.join('\n');
+  }
+
   function applyPreviousRemoteTagToInput() {
     if (!previousTagFillName || !newTagInput) {
       return;
@@ -268,7 +279,7 @@
         const branch = target?.branch || '(detached)';
         newTagSummary.textContent = `Create tag at HEAD on ${target?.repoName || 'repository'} (${branch}).`;
       } else {
-        newTagSummary.textContent = `Create tag on ${roots.length} selected repositories (at each HEAD).`;
+        newTagSummary.textContent = `Create tags on ${roots.length} selected repositories (at each HEAD). Use one line per repo: "repoName: tagName".`;
       }
     }
     setPreviousRemoteTagText('', { loading: true, plural: roots.length > 1 });
@@ -302,12 +313,87 @@
       showNewTagError('Tag name cannot be empty.');
       return;
     }
-    if (!isValidTagName(trimmed)) {
-      showNewTagError('Invalid tag name.');
+    const tags = buildTagAssignments(trimmed, pendingTagRoots);
+    if (!tags.ok) {
+      showNewTagError(tags.error || 'Invalid tag input.');
       return;
     }
     showNewTagError('');
-    post({ type: 'createTag', repoRoots: pendingTagRoots, tagName: trimmed });
+    post({ type: 'createTag', tags: tags.items });
+  }
+
+  function buildTagAssignments(input, roots) {
+    if (!roots.length) {
+      return { ok: false, error: 'Select at least one branch to tag.' };
+    }
+    const single = input.trim();
+    if (roots.length === 1) {
+      if (!isValidTagName(single)) {
+        return { ok: false, error: 'Invalid tag name.' };
+      }
+      return { ok: true, items: [{ repoRoot: roots[0], tagName: single }] };
+    }
+
+    const lines = input
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const hasMapping = lines.some((line) => /[:=]/.test(line));
+    if (!hasMapping) {
+      if (!isValidTagName(single)) {
+        return { ok: false, error: 'Invalid tag name.' };
+      }
+      return { ok: true, items: roots.map((repoRoot) => ({ repoRoot, tagName: single })) };
+    }
+
+    const byRoot = new Map();
+    const rootKeyToRoot = new Map(roots.map((root) => [normalizeRepoRoot(root), root]));
+    const aliasToRootKey = new Map();
+    roots.forEach((root) => {
+      const target = findTarget(root);
+      const key = normalizeRepoRoot(root);
+      aliasToRootKey.set(key, key);
+      aliasToRootKey.set(String(root).toLowerCase(), key);
+      if (target?.repoName) {
+        aliasToRootKey.set(String(target.repoName).trim().toLowerCase(), key);
+      }
+    });
+
+    for (const line of lines) {
+      const idx = Math.max(line.indexOf(':'), line.indexOf('='));
+      if (idx <= 0) {
+        return { ok: false, error: `Invalid line: "${line}". Use "repoName: tagName".` };
+      }
+      const repoAlias = line.slice(0, idx).trim().toLowerCase();
+      const tagName = line.slice(idx + 1).trim();
+      if (!tagName) {
+        return { ok: false, error: `Tag is empty for "${repoAlias}".` };
+      }
+      if (!isValidTagName(tagName)) {
+        return { ok: false, error: `Invalid tag name: ${tagName}` };
+      }
+      const key = aliasToRootKey.get(repoAlias);
+      if (!key || !rootKeyToRoot.has(key)) {
+        return { ok: false, error: `Unknown repository: "${repoAlias}".` };
+      }
+      byRoot.set(key, tagName);
+    }
+
+    const missing = roots.filter((root) => !byRoot.has(normalizeRepoRoot(root)));
+    if (missing.length) {
+      const names = missing
+        .map((root) => findTarget(root)?.repoName || root)
+        .join(', ');
+      return { ok: false, error: `Missing tag for: ${names}` };
+    }
+
+    return {
+      ok: true,
+      items: roots.map((repoRoot) => ({
+        repoRoot,
+        tagName: byRoot.get(normalizeRepoRoot(repoRoot)),
+      })),
+    };
   }
 
   function findTarget(repoRoot) {
@@ -994,7 +1080,7 @@
         } else if (msg.items?.length > 1) {
           setPreviousRemoteTagText(formatPreviousRemoteTags(msg.items), {
             plural: true,
-            fillTagName: resolveFillablePreviousTag(msg.items),
+            fillTagName: resolvePerRepoPreviousTagsInput(msg.items),
           });
         } else {
           setPreviousRemoteTagText('(none)', { plural: false, fillTagName: '' });
