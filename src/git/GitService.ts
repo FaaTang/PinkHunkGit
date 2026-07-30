@@ -71,6 +71,8 @@ export class GitService implements vscode.Disposable {
 	private initState: 'pending' | 'ready' | 'failed' = 'pending';
 	private initError = '';
 	private pendingDiffAdvance: { repoRoot: string; path: string } | undefined;
+	private pendingDiffRetreat: { repoRoot: string; path: string } | undefined;
+	private diffNavDecorationType: vscode.TextEditorDecorationType | undefined;
 
 	async init(): Promise<{ ok: true } | { ok: false; error: string }> {
 		const extension = vscode.extensions.getExtension<GitExtension>('vscode.git');
@@ -1509,7 +1511,7 @@ export class GitService implements vscode.Disposable {
 		await this.ensureSaved(fsPath);
 
 		const fileName = path.basename(relativePath);
-		const title = `Commit: ${fileName}`;
+		const title = `Commit: ${fileName}  [F6 Previous / F7 Next]`;
 		const diffOptions: vscode.TextDocumentShowOptions = {
 			preview: false,
 			preserveFocus: false,
@@ -1517,6 +1519,7 @@ export class GitService implements vscode.Disposable {
 		};
 
 		await this.openHeadWorkingDiff(repo, relativePath, fsPath, title, diffOptions);
+		this.maybeShowDiffNavHint();
 	}
 
 	async navigateDiffNextChangeOrFile(): Promise<
@@ -1534,11 +1537,16 @@ export class GitService implements vscode.Disposable {
 			this.pendingDiffAdvance = undefined;
 			return { openedNextFile: false };
 		}
-
-		const before = this.captureEditorCursorState();
+		const before = this.getActiveSelectionLineCharacter();
 		await vscode.commands.executeCommand('workbench.action.compareEditor.nextChange');
-		const moved = this.didEditorCursorMove(before);
-		if (moved) {
+		const afterLine = this.getActiveSelectionLine();
+
+		// VS Code compare-editor may wrap from the last change back to the first change.
+		const wrappedToTop =
+			before && afterLine != null && afterLine < before.line;
+
+		if (!wrappedToTop) {
+			// Still navigating within current file.
 			this.pendingDiffAdvance = undefined;
 			return { openedNextFile: false };
 		}
@@ -1547,28 +1555,92 @@ export class GitService implements vscode.Disposable {
 			!!this.pendingDiffAdvance &&
 			pathsEqual(this.pendingDiffAdvance.repoRoot, current.repoRoot) &&
 			pathsEqual(this.pendingDiffAdvance.path, current.path);
+
 		if (!shouldOpenNextFile) {
+			// Restore caret back to the last change (we wrapped to the first).
+			this.restoreActiveSelectionTo(before!.line, before!.character);
 			this.pendingDiffAdvance = current;
 			vscode.window.showInformationMessage(
-				'已到当前文件最后一个修改点，再按一次 F7 跳到下一个文件的第一个修改点。'
+				'You are at the last change in the current file. Press F7 again to jump to the first change of the next file.'
 			);
 			return { openedNextFile: false };
 		}
 
+		// Second F7 at boundary: open next file.
 		this.pendingDiffAdvance = undefined;
 		const files = this.getDiffNavigationFiles(current.repoRoot);
 		const index = files.findIndex((item) => pathsEqual(item.path, current.path));
 		if (index < 0 || index >= files.length - 1) {
-			vscode.window.showInformationMessage('已经是最后一个修改文件。');
+			vscode.window.showInformationMessage('This is the last change file.');
 			return { openedNextFile: false };
 		}
 
 		const next = files[index + 1];
 		await this.openDiffInEditor(next.path, next.staged, current.repoRoot);
+		// Ensure we land on the first change in the newly opened diff.
 		await vscode.commands.executeCommand('workbench.action.compareEditor.nextChange');
+		return { openedNextFile: true, next: { repoRoot: current.repoRoot, path: next.path, staged: next.staged } };
+	}
+
+	async navigateDiffPreviousChangeOrFile(): Promise<
+		| {
+				openedPreviousFile: false;
+		  }
+		| {
+				openedPreviousFile: true;
+				previous: { repoRoot: string; path: string; staged: boolean };
+		  }
+	> {
+		const current = this.resolveActiveDiffTarget();
+		if (!current) {
+			await vscode.commands.executeCommand('workbench.action.editor.previousChange');
+			this.pendingDiffRetreat = undefined;
+			return { openedPreviousFile: false };
+		}
+		const before = this.getActiveSelectionLineCharacter();
+		await vscode.commands.executeCommand('workbench.action.compareEditor.previousChange');
+		const afterLine = this.getActiveSelectionLine();
+
+		// VS Code compare-editor may wrap from the first change back to the last change.
+		const wrappedToBottom =
+			before && afterLine != null && afterLine > before.line;
+
+		if (!wrappedToBottom) {
+			this.pendingDiffRetreat = undefined;
+			return { openedPreviousFile: false };
+		}
+
+		const shouldOpenPreviousFile =
+			!!this.pendingDiffRetreat &&
+			pathsEqual(this.pendingDiffRetreat.repoRoot, current.repoRoot) &&
+			pathsEqual(this.pendingDiffRetreat.path, current.path);
+
+		if (!shouldOpenPreviousFile) {
+			// Restore caret back to the first change (we wrapped to the last).
+			this.restoreActiveSelectionTo(before!.line, before!.character);
+			this.pendingDiffRetreat = current;
+			vscode.window.showInformationMessage(
+				'You are at the first change in the current file. Press F6 again to jump to the last change of the previous file.'
+			);
+			return { openedPreviousFile: false };
+		}
+
+		// Second F6 at boundary: open previous file.
+		this.pendingDiffRetreat = undefined;
+		const files = this.getDiffNavigationFiles(current.repoRoot);
+		const index = files.findIndex((item) => pathsEqual(item.path, current.path));
+		if (index <= 0) {
+			vscode.window.showInformationMessage('This is the first change file.');
+			return { openedPreviousFile: false };
+		}
+
+		const previous = files[index - 1];
+		await this.openDiffInEditor(previous.path, previous.staged, current.repoRoot);
+		// Ensure we land on the last change in the newly opened diff.
+		await vscode.commands.executeCommand('workbench.action.compareEditor.previousChange');
 		return {
-			openedNextFile: true,
-			next: { repoRoot: current.repoRoot, path: next.path, staged: next.staged },
+			openedPreviousFile: true,
+			previous: { repoRoot: current.repoRoot, path: previous.path, staged: previous.staged },
 		};
 	}
 
@@ -1665,11 +1737,53 @@ export class GitService implements vscode.Disposable {
 		].join('|');
 	}
 
+	private getActiveSelectionLine(): number | undefined {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			return undefined;
+		}
+		return editor.selection.active.line;
+	}
+
+	private getActiveSelectionLineCharacter(): { line: number; character: number } | undefined {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			return undefined;
+		}
+		return { line: editor.selection.active.line, character: editor.selection.active.character };
+	}
+
+	private restoreActiveSelectionTo(line: number, character: number): void {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			return;
+		}
+		const lineText = editor.document.lineAt(line);
+		const nextChar = Math.max(0, Math.min(character, lineText.range.end.character));
+		const pos = new vscode.Position(line, nextChar);
+		editor.selection = new vscode.Selection(pos, pos);
+		editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.Default);
+	}
+
 	private didEditorCursorMove(before: string): boolean {
 		if (!before) {
 			return false;
 		}
 		return before !== this.captureEditorCursorState();
+	}
+
+	private async jumpToLastChangeInActiveDiff(): Promise<void> {
+		let guard = 0;
+		let before = this.captureEditorCursorState();
+		while (guard < 100) {
+			await vscode.commands.executeCommand('workbench.action.compareEditor.nextChange');
+			const after = this.captureEditorCursorState();
+			if (!after || after === before) {
+				return;
+			}
+			before = after;
+			guard += 1;
+		}
 	}
 
 	/**
@@ -1858,8 +1972,37 @@ export class GitService implements vscode.Disposable {
 		const fsPath = path.join(repo.rootUri.fsPath, relativePath);
 		await this.ensureSaved(fsPath);
 
-		const title = `${relativePath} (Rollback preview)`;
+		const title = `${relativePath} (Rollback preview)  [F6 Previous / F7 Next]`;
 		await this.openHeadWorkingDiff(repo, relativePath, fsPath, title);
+		this.maybeShowDiffNavHint();
+	}
+
+	private maybeShowDiffNavHint(): void {
+		vscode.window.showInformationMessage(
+			'Diff navigation: F6 previous change/file, F7 next change/file. Press F7 (or F6) again at file boundaries.'
+		);
+		this.applyDiffNavTopDecoration();
+	}
+
+	private applyDiffNavTopDecoration(): void {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			return;
+		}
+		if (!this.diffNavDecorationType) {
+			this.diffNavDecorationType = vscode.window.createTextEditorDecorationType({
+				before: {
+					contentText: ' F6/F7: Prev/Next change or file ',
+					color: '#ffffff',
+					backgroundColor: 'rgba(88, 122, 200, 0.35)',
+					fontWeight: '600',
+				},
+			});
+		}
+
+		// Attach the label to the very first character of the document.
+		const pos = new vscode.Position(0, 0);
+		editor.setDecorations(this.diffNavDecorationType, [new vscode.Range(pos, pos)]);
 	}
 
 	/**

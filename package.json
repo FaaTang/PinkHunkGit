@@ -50,6 +50,11 @@
         "category": "Pink Hunk Git"
       },
       {
+        "command": "copyIdeaGitUi.diffPreviousChangeOrFile",
+        "title": "Diff: Previous Change or Previous File",
+        "category": "Pink Hunk Git"
+      },
+      {
         "command": "copyIdeaGitUi.openFile",
         "title": "Open File",
         "category": "Pink Hunk Git"
@@ -159,9 +164,14 @@
         "when": "copyIdeaGitUi.hasSelection"
       },
       {
+        "command": "copyIdeaGitUi.diffPreviousChangeOrFile",
+        "key": "f6",
+        "when": "inDiffEditor"
+      },
+      {
         "command": "copyIdeaGitUi.diffNextChangeOrFile",
         "key": "f7",
-        "when": "isInDiffEditor"
+        "when": "inDiffEditor"
       },
       {
         "command": "copyIdeaGitUi.rollback",

@@ -83,11 +83,22 @@ Progress shows the current repository and overall status. If one repository fail
 | `Ctrl+T` | Pull and update all Git repositories in the workspace |
 | `Ctrl+D` | Show Diff (requires selected file) |
 | `F4` | Open selected file |
+| `F6` | Diff: Previous Change / Previous File |
+| `F7` | Diff: Next Change / Next File |
 | `Ctrl+Alt+Z` | Rollback selected file |
 | `Ctrl+Alt+A` | Add to Git (Unversioned checks, Commit panel) |
 
 Click **⌨** at the top of the panel to install these keybindings (you will be warned about possible conflicts).
 `Ctrl+T` / `Cmd+T` may conflict with built-in editor shortcuts; remove or change **Pink Hunk Git: Update All Git Repositories** in Keyboard Shortcuts if you want to keep the original binding. Manual entry points still work.
+
+### Diff navigation (F6 / F7)
+
+When a diff editor is focused:
+- `F6` jumps to the previous change within the current file.
+- If you are already at the first change in the current file, press `F6` again to jump to the last change of the previous file.
+- `F7` jumps to the next change within the current file.
+- If you are already at the last change in the current file, press `F7` again to jump to the first change of the next file.
+- `changes` and `unversioned` are treated as one continuous file list for this navigation.
 
 ## Requirements
 
