@@ -563,6 +563,51 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		if (!prefix) {
 			return text;
 		}
+
+		const multiRepoHeaderRe = /^###\s+\[[^\]]+]\s+\(.+\)\s*$/m;
+		if (!multiRepoHeaderRe.test(text)) {
+			return this.applyPrefixToSingleMessage(text, prefix);
+		}
+
+		const lines = text.split('\n');
+		const out: string[] = [];
+		let currentHeader: string | undefined;
+		let currentBody: string[] = [];
+		const headerLineRe = /^###\s+\[[^\]]+]\s+\(.+\)\s*$/;
+
+		const flush = () => {
+			if (!currentHeader) {
+				return;
+			}
+			out.push(currentHeader);
+			const bodyText = currentBody.join('\n').trim();
+			if (bodyText) {
+				out.push(this.applyPrefixToSingleMessage(bodyText, prefix));
+			}
+			currentHeader = undefined;
+			currentBody = [];
+		};
+
+		for (const line of lines) {
+			if (headerLineRe.test(line.trim())) {
+				flush();
+				currentHeader = line.trim();
+				currentBody = [];
+				continue;
+			}
+			if (currentHeader) {
+				currentBody.push(line);
+			}
+		}
+		flush();
+		return out.length ? out.join('\n\n').trim() : this.applyPrefixToSingleMessage(text, prefix);
+	}
+
+	private applyPrefixToSingleMessage(message: string, prefix: string): string {
+		const text = message.trim();
+		if (!text) {
+			return text;
+		}
 		if (text.startsWith(`${prefix} `) || text === prefix) {
 			return text;
 		}
