@@ -818,6 +818,9 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 						});
 					});
 					break;
+				case 'openPushDialog':
+					await this.pushDialog.show();
+					break;
 				case 'fastPush':
 					await this.withBusy(async () => {
 						await this.handleFastPush(

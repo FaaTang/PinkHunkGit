@@ -1805,6 +1805,10 @@
     return message;
   }
 
+  function hasCommitCandidates() {
+    return totalIncludableCount() > 0;
+  }
+
   function closeRollbackModal() {
     rollbackModal.classList.add('hidden');
     pendingRollback = null;
@@ -1859,6 +1863,11 @@
 
   function runCommitAndPush() {
     closeCommitPushMenu();
+    if (!hasCommitCandidates()) {
+      showFormError('');
+      post({ type: 'openPushDialog' });
+      return;
+    }
     const message = validateBeforeCommit();
     if (!message) {
       return;
@@ -2081,8 +2090,9 @@
     if (generatingMessage || workspace.busy) {
       return;
     }
-    if (!totalIncludableCount()) {
-      showFormError('Select files to include before Fast Push.');
+    if (!hasCommitCandidates()) {
+      showFormError('');
+      post({ type: 'openPushDialog' });
       return;
     }
     showFormError('');
