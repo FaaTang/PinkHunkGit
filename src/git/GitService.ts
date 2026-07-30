@@ -720,26 +720,59 @@ export class GitService implements vscode.Disposable {
 		checkedChanges: Array<{ repoRoot: string; path: string }>,
 		unversionedPaths?: Array<{ repoRoot: string; path: string }>
 	): Promise<string> {
-		const repo = this.resolveRepoForGenerate(checkedChanges, unversionedPaths);
-		if (!repo) {
+		const grouped = this.groupSelectedPathsByRepo(checkedChanges, unversionedPaths);
+		if (!grouped.length) {
 			throw new Error('No repository found.');
 		}
 
-		const relativePaths = [
-			...checkedChanges
-				.filter((entry) => pathsEqual(entry.repoRoot, repo.rootUri.fsPath))
-				.map((entry) => entry.path),
-			...(unversionedPaths ?? [])
-				.filter((entry) => pathsEqual(entry.repoRoot, repo.rootUri.fsPath))
-				.map((entry) => entry.path),
-		];
+		const generatedByRepo: Array<{ repo: Repository; message: string }> = [];
+		for (const item of grouped) {
+			const message = await this.generateCommitMessageForRepo(item.repo, item.relativePaths);
+			generatedByRepo.push({ repo: item.repo, message });
+		}
 
+		if (generatedByRepo.length === 1) {
+			const single = generatedByRepo[0];
+			single.repo.inputBox.value = single.message;
+			return single.message;
+		}
+
+		const merged = this.formatMultiRepoCommitMessage(generatedByRepo);
+		for (const item of generatedByRepo) {
+			item.repo.inputBox.value = item.message;
+		}
+		return merged;
+	}
+
+	private groupSelectedPathsByRepo(
+		checkedChanges: Array<{ repoRoot: string; path: string }>,
+		unversionedPaths?: Array<{ repoRoot: string; path: string }>
+	): Array<{ repo: Repository; relativePaths: string[] }> {
+		const grouped = new Map<string, { repo: Repository; relativePaths: string[] }>();
+		const all = [...checkedChanges, ...(unversionedPaths ?? [])];
+		for (const entry of all) {
+			const repo = this.requireRepoByRoot(entry.repoRoot);
+			const key = normalizePathKey(repo.rootUri.fsPath);
+			const existing = grouped.get(key);
+			if (existing) {
+				if (!existing.relativePaths.some((p) => pathsEqual(p, entry.path))) {
+					existing.relativePaths.push(entry.path);
+				}
+				continue;
+			}
+			grouped.set(key, { repo, relativePaths: [entry.path] });
+		}
+		return [...grouped.values()];
+	}
+
+	private async generateCommitMessageForRepo(
+		repo: Repository,
+		relativePaths: string[]
+	): Promise<string> {
 		try {
 			const viaLm = await generateCommitMessageWithLanguageModel(repo, relativePaths);
 			if (viaLm?.trim()) {
-				const normalized = this.ensureLocaleCommitMessage(viaLm.trim(), relativePaths);
-				repo.inputBox.value = normalized;
-				return normalized;
+				return this.ensureLocaleCommitMessage(viaLm.trim(), relativePaths);
 			}
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
@@ -754,9 +787,20 @@ export class GitService implements vscode.Disposable {
 		const viaScm = await withTemporaryCommitLanguageRule(repo.rootUri.fsPath, () =>
 			this.generateCommitMessageViaScmCommand(repo)
 		);
-		const normalized = this.ensureLocaleCommitMessage(viaScm.trim(), relativePaths);
-		repo.inputBox.value = normalized;
-		return normalized;
+		return this.ensureLocaleCommitMessage(viaScm.trim(), relativePaths);
+	}
+
+	private formatMultiRepoCommitMessage(items: Array<{ repo: Repository; message: string }>): string {
+		return items
+			.map((item) => {
+				const name = this.repoDisplayName(item.repo.rootUri.fsPath);
+				const root = item.repo.rootUri.fsPath;
+				return [
+					`### [${name}] (${root})`,
+					item.message.trim(),
+				].join('\n');
+			})
+			.join('\n\n');
 	}
 
 	private ensureLocaleCommitMessage(message: string, relativePaths: string[]): string {
@@ -799,28 +843,6 @@ export class GitService implements vscode.Disposable {
 			return rewritten.trim();
 		}
 		return generated;
-	}
-
-	private resolveRepoForGenerate(
-		checkedChanges: Array<{ repoRoot: string; path: string }>,
-		unversionedPaths?: Array<{ repoRoot: string; path: string }>
-	): Repository | undefined {
-		const roots = [
-			...checkedChanges.map((entry) => entry.repoRoot),
-			...(unversionedPaths ?? []).map((entry) => entry.repoRoot),
-		];
-		const active = this.getActiveRepository();
-		if (active && roots.some((root) => pathsEqual(root, active.rootUri.fsPath))) {
-			return active;
-		}
-		const preferred = roots[0];
-		if (preferred) {
-			const match = this.api?.repositories.find((r) => pathsEqual(r.rootUri.fsPath, preferred));
-			if (match) {
-				return match;
-			}
-		}
-		return active ?? this.api?.repositories[0];
 	}
 
 	private async resolveGenerateCommitMessageCommand(): Promise<string | undefined> {
@@ -984,11 +1006,13 @@ export class GitService implements vscode.Disposable {
 		}
 
 		const committed: CommitRepoResult[] = [];
+		const perRepoMessage = parseMultiRepoCommitMessage(trimmed);
 		for (const snap of targets) {
 			const repo = this.requireRepoByRoot(snap.rootPath);
-			const detail = `message="${this.summarizeCommitMessage(trimmed)}"`;
+			const repoMessage = (perRepoMessage.get(normalizePathKey(snap.rootPath)) || trimmed).trim();
+			const detail = `message="${this.summarizeCommitMessage(repoMessage)}"`;
 			await this.runGitApi(repo, 'commit', detail, () =>
-				repo.commit(trimmed, { postCommitCommand: null })
+				repo.commit(repoMessage, { postCommitCommand: null })
 			);
 			committed.push({ name: snap.name, rootPath: snap.rootPath, branch: snap.branch });
 		}
@@ -2386,6 +2410,38 @@ function parsePushCommits(raw: string): PushCommitItem[] {
 		const [hash = '', shortHash = '', subject = '', author = '', date = ''] = line.split('|');
 		return { hash, shortHash, subject, author, date };
 	});
+}
+
+function parseMultiRepoCommitMessage(message: string): Map<string, string> {
+	const map = new Map<string, string>();
+	const lines = message.replace(/\r\n/g, '\n').split('\n');
+	let currentRootKey = '';
+	let currentBody: string[] = [];
+
+	const flush = () => {
+		if (!currentRootKey) {
+			return;
+		}
+		const text = currentBody.join('\n').trim();
+		if (text) {
+			map.set(currentRootKey, text);
+		}
+	};
+
+	for (const line of lines) {
+		const header = line.match(/^###\s+\[[^\]]+]\s+\((.+)\)\s*$/);
+		if (header) {
+			flush();
+			currentRootKey = normalizePathKey(header[1].trim());
+			currentBody = [];
+			continue;
+		}
+		if (currentRootKey) {
+			currentBody.push(line);
+		}
+	}
+	flush();
+	return map;
 }
 
 function parseCommitLog(raw: string): CommitLogItem[] {
