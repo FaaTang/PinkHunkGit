@@ -326,7 +326,7 @@ export class PushDialogProvider implements vscode.Disposable {
 					});
 					break;
 				case 'createTag':
-					await this.handleCreateTags(msg.repoRoots, msg.tagName);
+					await this.handleCreateTags(msg.tags);
 					break;
 				case 'getPreviousRemoteTags':
 					await this.handleGetPreviousRemoteTags(msg.repoRoots, msg.requestId);
@@ -397,32 +397,34 @@ export class PushDialogProvider implements vscode.Disposable {
 		}
 	}
 
-	private async handleCreateTags(repoRoots: string[], tagName: string): Promise<void> {
-		if (!repoRoots.length) {
+	private async handleCreateTags(tags: Array<{ repoRoot: string; tagName: string }>): Promise<void> {
+		if (!tags.length) {
 			this.post({ type: 'tagResult', success: false, message: 'Select at least one branch to tag.' });
 			return;
 		}
-
-		const trimmed = tagName.trim();
-		if (!trimmed) {
+		const normalized = tags
+			.map((item) => ({ repoRoot: item.repoRoot, tagName: item.tagName.trim() }))
+			.filter((item) => item.repoRoot && item.tagName);
+		if (!normalized.length) {
 			this.post({ type: 'tagResult', success: false, message: 'Tag name cannot be empty.' });
 			return;
 		}
-		if (!isValidTagName(trimmed)) {
-			this.post({ type: 'tagResult', success: false, message: 'Invalid tag name.' });
+		const invalid = normalized.find((item) => !isValidTagName(item.tagName));
+		if (invalid) {
+			this.post({ type: 'tagResult', success: false, message: `Invalid tag name: ${invalid.tagName}` });
 			return;
 		}
 		const succeeded: string[] = [];
 		const failed: Array<{ name: string; error: string }> = [];
 
 		await this.withBusy(async () => {
-			for (const root of repoRoots) {
+			for (const { repoRoot: root, tagName } of normalized) {
 				const snap = this.git.getWorkspaceSnapshot().repositories.find((r) =>
 					r.rootPath.replace(/\\/g, '/').toLowerCase() === root.replace(/\\/g, '/').toLowerCase()
 				);
 				const name = snap?.name ?? root;
 				try {
-					await this.git.createTagAtHead(root, trimmed);
+					await this.git.createTagAtHead(root, tagName);
 					succeeded.push(name);
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
@@ -436,18 +438,18 @@ export class PushDialogProvider implements vscode.Disposable {
 		if (succeeded.length && !failed.length) {
 			const message =
 				succeeded.length === 1
-					? `Created tag ${trimmed} on ${succeeded[0]}.`
-					: `Created tag ${trimmed} on ${succeeded.length} repositories.`;
+					? `Created tag on ${succeeded[0]}.`
+					: `Created tags on ${succeeded.length} repositories.`;
 			this.post({ type: 'tagResult', success: true, message });
 			showTimedInfoMessage(message);
 		} else if (succeeded.length && failed.length) {
 			const details = failed.map((f) => `${f.name}: ${f.error}`).join('\n');
-			const message = `Tag ${trimmed} created on ${succeeded.length} repo(s); ${failed.length} failed.`;
+			const message = `Created tags on ${succeeded.length} repo(s); ${failed.length} failed.`;
 			this.post({ type: 'tagResult', success: false, message: `${message}\n${details}` });
 			vscode.window.showWarningMessage(message, { modal: true, detail: details });
 		} else if (failed.length) {
 			const details = failed.map((f) => `${f.name}: ${f.error}`).join('\n');
-			const message = `Failed to create tag ${trimmed}.`;
+			const message = 'Failed to create tags.';
 			this.post({ type: 'tagResult', success: false, message: `${message}\n${details}` });
 			vscode.window.showErrorMessage(message, { modal: true, detail: details });
 		}
