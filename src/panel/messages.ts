@@ -223,6 +223,7 @@ export type WebviewToHost =
 	  }
 	| { type: 'clearCommitMessagePrefixGlobal' }
 	| { type: 'push'; repoRoot?: string; pushTags?: boolean }
+	| { type: 'openPushDialog' }
 	| { type: 'pushSync'; mode: SyncMode; repoRoot?: string }
 	| { type: 'syncAbort'; repoRoot?: string }
 	| { type: 'syncContinue'; repoRoot?: string }
