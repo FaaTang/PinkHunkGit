@@ -26,10 +26,7 @@
   const closeBtn = document.getElementById('closeBtn');
   const newTagModal = document.getElementById('newTagModal');
   const newTagSummary = document.getElementById('newTagSummary');
-  const newTagPrevious = document.getElementById('newTagPrevious');
-  const newTagPreviousValue = document.getElementById('newTagPreviousValue');
-  const newTagOverwriteBtn = document.getElementById('newTagOverwriteBtn');
-  const newTagInput = document.getElementById('newTagInput');
+  const newTagRepoList = document.getElementById('newTagRepoList');
   const newTagError = document.getElementById('newTagError');
   const newTagCancelBtn = document.getElementById('newTagCancelBtn');
   const newTagConfirmBtn = document.getElementById('newTagConfirmBtn');
@@ -41,7 +38,8 @@
   let newTagOpen = false;
   let pendingTagRoots = [];
   let previousTagRequestId = 0;
-  let previousTagFillName = '';
+  /** @type {Map<string, { previousTag?: string; error?: string; loading: boolean }>} */
+  let tagRowState = new Map();
   let selectedTargetRoot = null;
   let selectedCommitHash = null;
   let checkedRoots = new Set();
@@ -59,13 +57,18 @@
 
   function setBusy(busy, message) {
     document.body.classList.toggle('busy', !!busy);
-    [cancelBtn, pushBtn, mergeBtn, rebaseBtn, abortBtn, continueBtn, laterBtn, newTagBtn, newTagCancelBtn, newTagConfirmBtn, newTagOverwriteBtn, closeBtn].forEach((btn) => {
+    [cancelBtn, pushBtn, mergeBtn, rebaseBtn, abortBtn, continueBtn, laterBtn, newTagBtn, newTagCancelBtn, newTagConfirmBtn, closeBtn].forEach((btn) => {
       if (btn) {
         btn.disabled = !!busy;
       }
     });
-    if (newTagInput) {
-      newTagInput.disabled = !!busy;
+    if (newTagRepoList) {
+      for (const input of newTagRepoList.querySelectorAll('input[type="text"]')) {
+        input.disabled = !!busy;
+      }
+      for (const btn of newTagRepoList.querySelectorAll('button')) {
+        btn.disabled = !!busy;
+      }
     }
     if (pushTagsCheckbox) {
       pushTagsCheckbox.disabled = !!busy;
@@ -168,103 +171,177 @@
     }
   }
 
-  function setPreviousRemoteTagOverwrite(tagName) {
-    previousTagFillName = tagName || '';
-    if (!newTagOverwriteBtn) {
-      return;
+  /** If tag ends with digits, bump the trailing number by 1; otherwise return as-is. */
+  function bumpTrailingNumber(tagName) {
+    const name = (tagName || '').trim();
+    if (!name) {
+      return '';
     }
-    newTagOverwriteBtn.classList.toggle('hidden', !previousTagFillName);
+    const match = /^(.*)(\d+)$/.exec(name);
+    if (!match) {
+      return name;
+    }
+    return `${match[1]}${Number(match[2]) + 1}`;
   }
 
-  function setPreviousRemoteTagLoading(loading, plural) {
-    if (!newTagPrevious) {
-      return;
+  function getTagRowInput(repoRoot) {
+    if (!newTagRepoList) {
+      return null;
     }
-    newTagPrevious.classList.toggle('is-loading', !!loading);
-    newTagPrevious.classList.toggle('is-plural', !!plural);
-    const label = newTagPrevious.querySelector('.new-tag-previous-label');
-    if (label) {
-      label.textContent = plural ? 'Previous remote tags:' : 'Previous remote tag:';
-    }
-    if (loading) {
-      setPreviousRemoteTagOverwrite('');
-    }
+    const key = normalizeRepoRoot(repoRoot);
+    return newTagRepoList.querySelector(`input.new-tag-input[data-repo-root-key="${CSS.escape(key)}"]`);
   }
 
-  function setPreviousRemoteTagText(text, options) {
-    if (!newTagPrevious) {
+  function renderNewTagRows(roots) {
+    if (!newTagRepoList) {
       return;
     }
-    const plural = !!options?.plural;
-    const loading = !!options?.loading;
-    setPreviousRemoteTagLoading(loading, plural);
-    if (!newTagPreviousValue) {
-      return;
-    }
-    newTagPreviousValue.textContent = loading ? '' : text || '(none)';
-    newTagPreviousValue.classList.toggle('hidden', !!loading);
-    if (!loading) {
-      setPreviousRemoteTagOverwrite(options?.fillTagName || '');
-    }
-  }
+    newTagRepoList.innerHTML = '';
+    tagRowState = new Map();
 
-  function formatPreviousRemoteTags(items) {
-    if (!items?.length) {
-      return '(none)';
-    }
-    if (items.length === 1) {
-      const item = items[0];
-      if (item.error) {
-        return '(unavailable)';
-      }
-      return item.tagName || '(none)';
-    }
-    return items
-      .map((item) => {
-        const name = item.repoName || 'repository';
-        if (item.error) {
-          return `${name}: (unavailable)`;
+    for (const root of roots) {
+      const key = normalizeRepoRoot(root);
+      const target = findTarget(root);
+      const repoName = target?.repoName || root;
+      const branch = target?.branch || '(detached)';
+      tagRowState.set(key, { loading: true });
+
+      const row = document.createElement('div');
+      row.className = 'new-tag-repo-row';
+      row.dataset.repoRoot = root;
+      row.dataset.repoRootKey = key;
+
+      const head = document.createElement('div');
+      head.className = 'new-tag-repo-head';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'new-tag-repo-name';
+      nameEl.textContent = repoName;
+      const branchEl = document.createElement('span');
+      branchEl.className = 'new-tag-repo-branch';
+      branchEl.textContent = branch;
+      head.appendChild(nameEl);
+      head.appendChild(branchEl);
+
+      const previous = document.createElement('div');
+      previous.className = 'new-tag-previous is-loading';
+      previous.dataset.role = 'previous';
+
+      const prevLabel = document.createElement('span');
+      prevLabel.className = 'new-tag-previous-label';
+      prevLabel.textContent = 'Previous remote tag:';
+
+      const spinner = document.createElement('span');
+      spinner.className = 'new-tag-previous-spinner';
+      spinner.setAttribute('aria-hidden', 'true');
+
+      const prevValue = document.createElement('span');
+      prevValue.className = 'new-tag-previous-value hidden';
+      prevValue.dataset.role = 'previous-value';
+
+      const overwriteBtn = document.createElement('button');
+      overwriteBtn.type = 'button';
+      overwriteBtn.className = 'new-tag-overwrite hidden';
+      overwriteBtn.dataset.role = 'overwrite';
+      overwriteBtn.textContent = 'Overwrite';
+      overwriteBtn.title = 'Fill input with previous remote tag (bump trailing number by +1 when present)';
+      overwriteBtn.addEventListener('click', () => {
+        const state = tagRowState.get(key);
+        const previousTag = (state?.previousTag || '').trim();
+        if (!previousTag) {
+          return;
         }
-        return `${name}: ${item.tagName || '(none)'}`;
-      })
-      .join('\n');
+        const input = getTagRowInput(root);
+        if (!input) {
+          return;
+        }
+        input.value = bumpTrailingNumber(previousTag);
+        input.focus();
+        input.select();
+        showNewTagError('');
+      });
+
+      previous.appendChild(prevLabel);
+      previous.appendChild(spinner);
+      previous.appendChild(prevValue);
+      previous.appendChild(overwriteBtn);
+
+      const label = document.createElement('label');
+      label.className = 'field-label';
+      label.textContent = 'Tag name';
+      const inputId = `newTagInput_${key.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+      label.setAttribute('for', inputId);
+
+      const input = document.createElement('input');
+      input.id = inputId;
+      input.className = 'field-input new-tag-input';
+      input.type = 'text';
+      input.placeholder = 'v1.0.3';
+      input.autocomplete = 'off';
+      input.spellcheck = false;
+      input.dataset.repoRoot = root;
+      input.dataset.repoRootKey = key;
+      input.addEventListener('input', () => showNewTagError(''));
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          submitNewTag();
+        }
+      });
+
+      row.appendChild(head);
+      row.appendChild(previous);
+      row.appendChild(label);
+      row.appendChild(input);
+      newTagRepoList.appendChild(row);
+    }
   }
 
-  function resolveFillablePreviousTag(items) {
-    if (!items?.length) {
-      return '';
-    }
-    const names = items
-      .map((item) => (item.error ? '' : (item.tagName || '').trim()))
-      .filter(Boolean);
-    if (!names.length) {
-      return '';
-    }
-    if (names.every((name) => name === names[0])) {
-      return names[0];
-    }
-    return '';
-  }
-
-  function resolvePerRepoPreviousTagsInput(items) {
-    if (!items?.length) {
-      return '';
-    }
-    const lines = items
-      .filter((item) => !item.error)
-      .map((item) => `${item.repoName || item.repoRoot}: ${(item.tagName || '').trim()}`)
-      .filter((line) => !line.endsWith(': '));
-    return lines.join('\n');
-  }
-
-  function applyPreviousRemoteTagToInput() {
-    if (!previousTagFillName || !newTagInput) {
+  function applyPreviousRemoteTagsToRows(items) {
+    if (!newTagRepoList) {
       return;
     }
-    newTagInput.value = previousTagFillName;
-    newTagInput.focus();
-    newTagInput.select();
-    showNewTagError('');
+    const byKey = new Map();
+    for (const item of items || []) {
+      byKey.set(normalizeRepoRoot(item.repoRoot), item);
+    }
+
+    for (const root of pendingTagRoots) {
+      const key = normalizeRepoRoot(root);
+      const row = newTagRepoList.querySelector(`.new-tag-repo-row[data-repo-root-key="${CSS.escape(key)}"]`);
+      if (!row) {
+        continue;
+      }
+      const previous = row.querySelector('[data-role="previous"]');
+      const prevValue = row.querySelector('[data-role="previous-value"]');
+      const overwriteBtn = row.querySelector('[data-role="overwrite"]');
+      const item = byKey.get(key);
+      let previousTag = '';
+      let error = '';
+      let display = '(none)';
+
+      if (!item) {
+        display = '(none)';
+      } else if (item.error) {
+        error = item.error;
+        display = '(unavailable)';
+      } else if (item.tagName) {
+        previousTag = String(item.tagName).trim();
+        display = previousTag || '(none)';
+      }
+
+      tagRowState.set(key, { previousTag, error, loading: false });
+      if (previous) {
+        previous.classList.remove('is-loading');
+      }
+      if (prevValue) {
+        prevValue.textContent = display;
+        prevValue.classList.remove('hidden');
+        prevValue.title = error || display;
+      }
+      if (overwriteBtn) {
+        overwriteBtn.classList.toggle('hidden', !previousTag);
+      }
+    }
   }
 
   function openNewTagModal(roots) {
@@ -279,15 +356,13 @@
         const branch = target?.branch || '(detached)';
         newTagSummary.textContent = `Create tag at HEAD on ${target?.repoName || 'repository'} (${branch}).`;
       } else {
-        newTagSummary.textContent = `Create tags on ${roots.length} selected repositories (at each HEAD). Use one line per repo: "repoName: tagName".`;
+        newTagSummary.textContent = `Create a tag for each selected repository (at that repo HEAD). Each row has its own previous remote tag and Overwrite (+1).`;
       }
     }
-    setPreviousRemoteTagText('', { loading: true, plural: roots.length > 1 });
-    if (newTagInput) {
-      newTagInput.value = '';
-      newTagInput.focus();
-    }
+    renderNewTagRows(roots);
     showNewTagError('');
+    const firstInput = newTagRepoList?.querySelector('input.new-tag-input');
+    firstInput?.focus();
     const requestId = ++previousTagRequestId;
     post({ type: 'getPreviousRemoteTags', repoRoots: roots, requestId });
   }
@@ -296,104 +371,45 @@
     newTagOpen = false;
     pendingTagRoots = [];
     previousTagRequestId += 1;
-    previousTagFillName = '';
+    tagRowState = new Map();
     if (newTagModal) {
       newTagModal.classList.add('hidden');
     }
     showNewTagError('');
-    setPreviousRemoteTagText('', { loading: true, plural: false });
-    if (newTagInput) {
-      newTagInput.value = '';
+    if (newTagRepoList) {
+      newTagRepoList.innerHTML = '';
     }
   }
 
-  function submitNewTag() {
-    const trimmed = (newTagInput?.value || '').trim();
-    if (!trimmed) {
-      showNewTagError('Tag name cannot be empty.');
-      return;
+  function collectTagAssignmentsFromRows() {
+    if (!pendingTagRoots.length) {
+      return { ok: false, error: 'Select at least one branch to tag.' };
     }
-    const tags = buildTagAssignments(trimmed, pendingTagRoots);
+    const items = [];
+    for (const root of pendingTagRoots) {
+      const input = getTagRowInput(root);
+      const tagName = (input?.value || '').trim();
+      const target = findTarget(root);
+      const label = target?.repoName || root;
+      if (!tagName) {
+        return { ok: false, error: `Tag name cannot be empty for ${label}.` };
+      }
+      if (!isValidTagName(tagName)) {
+        return { ok: false, error: `Invalid tag name for ${label}: ${tagName}` };
+      }
+      items.push({ repoRoot: root, tagName });
+    }
+    return { ok: true, items };
+  }
+
+  function submitNewTag() {
+    const tags = collectTagAssignmentsFromRows();
     if (!tags.ok) {
       showNewTagError(tags.error || 'Invalid tag input.');
       return;
     }
     showNewTagError('');
     post({ type: 'createTag', tags: tags.items });
-  }
-
-  function buildTagAssignments(input, roots) {
-    if (!roots.length) {
-      return { ok: false, error: 'Select at least one branch to tag.' };
-    }
-    const single = input.trim();
-    if (roots.length === 1) {
-      if (!isValidTagName(single)) {
-        return { ok: false, error: 'Invalid tag name.' };
-      }
-      return { ok: true, items: [{ repoRoot: roots[0], tagName: single }] };
-    }
-
-    const lines = input
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    const hasMapping = lines.some((line) => /[:=]/.test(line));
-    if (!hasMapping) {
-      if (!isValidTagName(single)) {
-        return { ok: false, error: 'Invalid tag name.' };
-      }
-      return { ok: true, items: roots.map((repoRoot) => ({ repoRoot, tagName: single })) };
-    }
-
-    const byRoot = new Map();
-    const rootKeyToRoot = new Map(roots.map((root) => [normalizeRepoRoot(root), root]));
-    const aliasToRootKey = new Map();
-    roots.forEach((root) => {
-      const target = findTarget(root);
-      const key = normalizeRepoRoot(root);
-      aliasToRootKey.set(key, key);
-      aliasToRootKey.set(String(root).toLowerCase(), key);
-      if (target?.repoName) {
-        aliasToRootKey.set(String(target.repoName).trim().toLowerCase(), key);
-      }
-    });
-
-    for (const line of lines) {
-      const idx = Math.max(line.indexOf(':'), line.indexOf('='));
-      if (idx <= 0) {
-        return { ok: false, error: `Invalid line: "${line}". Use "repoName: tagName".` };
-      }
-      const repoAlias = line.slice(0, idx).trim().toLowerCase();
-      const tagName = line.slice(idx + 1).trim();
-      if (!tagName) {
-        return { ok: false, error: `Tag is empty for "${repoAlias}".` };
-      }
-      if (!isValidTagName(tagName)) {
-        return { ok: false, error: `Invalid tag name: ${tagName}` };
-      }
-      const key = aliasToRootKey.get(repoAlias);
-      if (!key || !rootKeyToRoot.has(key)) {
-        return { ok: false, error: `Unknown repository: "${repoAlias}".` };
-      }
-      byRoot.set(key, tagName);
-    }
-
-    const missing = roots.filter((root) => !byRoot.has(normalizeRepoRoot(root)));
-    if (missing.length) {
-      const names = missing
-        .map((root) => findTarget(root)?.repoName || root)
-        .join(', ');
-      return { ok: false, error: `Missing tag for: ${names}` };
-    }
-
-    return {
-      ok: true,
-      items: roots.map((repoRoot) => ({
-        repoRoot,
-        tagName: byRoot.get(normalizeRepoRoot(repoRoot)),
-      })),
-    };
   }
 
   function findTarget(repoRoot) {
@@ -956,18 +972,6 @@
   if (newTagConfirmBtn) {
     newTagConfirmBtn.addEventListener('click', submitNewTag);
   }
-  if (newTagOverwriteBtn) {
-    newTagOverwriteBtn.addEventListener('click', applyPreviousRemoteTagToInput);
-  }
-  if (newTagInput) {
-    newTagInput.addEventListener('input', () => showNewTagError(''));
-    newTagInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        submitNewTag();
-      }
-    });
-  }
   if (newTagModal) {
     newTagModal.addEventListener('click', (e) => {
       if (document.body.classList.contains('busy')) {
@@ -1072,19 +1076,7 @@
         if (!newTagOpen || msg.requestId !== previousTagRequestId) {
           break;
         }
-        if (msg.items?.length === 1) {
-          setPreviousRemoteTagText(formatPreviousRemoteTags(msg.items), {
-            plural: false,
-            fillTagName: resolveFillablePreviousTag(msg.items),
-          });
-        } else if (msg.items?.length > 1) {
-          setPreviousRemoteTagText(formatPreviousRemoteTags(msg.items), {
-            plural: true,
-            fillTagName: resolvePerRepoPreviousTagsInput(msg.items),
-          });
-        } else {
-          setPreviousRemoteTagText('(none)', { plural: false, fillTagName: '' });
-        }
+        applyPreviousRemoteTagsToRows(msg.items || []);
         break;
       case 'showRejected': {
         const p = msg.payload;

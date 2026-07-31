@@ -518,6 +518,10 @@ body.busy .dialog-body {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
+.modal-card.modal-card-wide {
+  width: min(560px, calc(100% - 32px));
+}
+
 .modal-card h2 {
   margin: 0 0 8px;
   font-size: 16px;
@@ -531,8 +535,43 @@ body.busy .dialog-body {
   font-size: 13px;
 }
 
-.modal-card .new-tag-previous {
-  margin: -4px 0 12px;
+.new-tag-repo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(52vh, 420px);
+  overflow: auto;
+  margin: 0 0 8px;
+  padding-right: 2px;
+}
+
+.new-tag-repo-row {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--bg) 92%, var(--fg));
+}
+
+.new-tag-repo-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 0 0 8px;
+}
+
+.new-tag-repo-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.new-tag-repo-branch {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.new-tag-previous {
+  margin: 0 0 8px;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -564,7 +603,6 @@ body.busy .dialog-body {
 
 .new-tag-previous-value {
   min-width: 0;
-  white-space: pre-wrap;
 }
 
 .new-tag-overwrite {
@@ -575,14 +613,8 @@ body.busy .dialog-body {
   line-height: 1.4;
 }
 
-.new-tag-previous.is-plural:not(.is-loading) {
-  align-items: flex-start;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.new-tag-previous.is-plural:not(.is-loading) .new-tag-overwrite {
-  align-self: flex-start;
+.new-tag-repo-row .field-label {
+  margin-bottom: 4px;
 }
 
 .field-label {

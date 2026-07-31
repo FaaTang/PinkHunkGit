@@ -713,17 +713,10 @@ export class PushDialogProvider implements vscode.Disposable {
     </div>
   </div>
   <div id="newTagModal" class="modal hidden">
-    <div class="modal-card">
+    <div class="modal-card modal-card-wide">
       <h2>New Tag</h2>
       <p id="newTagSummary">Create tag at the current branch HEAD.</p>
-      <p id="newTagPrevious" class="new-tag-previous is-loading" aria-live="polite">
-        <span class="new-tag-previous-label">Previous remote tag:</span>
-        <span class="new-tag-previous-spinner" aria-hidden="true"></span>
-        <span id="newTagPreviousValue" class="new-tag-previous-value hidden"></span>
-        <button id="newTagOverwriteBtn" class="new-tag-overwrite hidden" type="button" title="Overwrite tag name input">Overwrite</button>
-      </p>
-      <label class="field-label" for="newTagInput">Tag name</label>
-      <input id="newTagInput" class="field-input" type="text" placeholder="v1.0.3" autocomplete="off" spellcheck="false" />
+      <div id="newTagRepoList" class="new-tag-repo-list" role="group" aria-label="Repositories to tag"></div>
       <div id="newTagError" class="field-error hidden"></div>
       <div class="modal-actions">
         <button id="newTagCancelBtn" type="button">Cancel</button>
