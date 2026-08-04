@@ -11,6 +11,9 @@ export class PushDialogProvider implements vscode.Disposable {
 	private panel?: vscode.WebviewPanel;
 	private busy = false;
 	private pendingPushRoots?: string[];
+	private pendingPushTags = false;
+	/** When true, remaining roots after conflict resolution resume via pushWithAutoMerge. */
+	private resumeAutoMerge = false;
 	private pendingOpenNewTag = false;
 	private webviewReady = false;
 	private readyWaiters: Array<() => void> = [];
@@ -34,6 +37,7 @@ export class PushDialogProvider implements vscode.Disposable {
 	async show(options?: { pendingPushRoots?: string[]; openNewTag?: boolean }): Promise<void> {
 		this.pendingPushRoots = options?.pendingPushRoots;
 		this.pendingOpenNewTag = !!options?.openNewTag;
+		this.resumeAutoMerge = false;
 		this.dialogPhase = 'confirm';
 		this.conflictContext = undefined;
 		await this.git.refresh();
@@ -65,6 +69,8 @@ export class PushDialogProvider implements vscode.Disposable {
 			this.panel.onDidDispose(() => {
 				this.panel = undefined;
 				this.pendingPushRoots = undefined;
+				this.pendingPushTags = false;
+				this.resumeAutoMerge = false;
 				this.pendingOpenNewTag = false;
 				this.webviewReady = false;
 				this.conflictContext = undefined;
@@ -82,16 +88,18 @@ export class PushDialogProvider implements vscode.Disposable {
 	 */
 	async pushWithAutoMerge(repoRoots: string[], options?: { pushTags?: boolean }): Promise<void> {
 		const pushTags = options?.pushTags !== false;
+		this.pendingPushTags = pushTags;
+		this.resumeAutoMerge = true;
 		const roots = repoRoots.length ? repoRoots : [undefined];
 
-		for (const root of roots) {
+		for (let i = 0; i < roots.length; i++) {
+			const root = roots[i];
+			const remaining = this.remainingRoots(roots, i + 1);
+			this.pendingPushRoots = remaining.length ? remaining : undefined;
+
 			const workspace = this.git.getWorkspaceSnapshot();
 			const snap = root
-				? workspace.repositories.find(
-						(r) =>
-							r.rootPath.replace(/\\/g, '/').toLowerCase() ===
-							root.replace(/\\/g, '/').toLowerCase()
-					)
+				? workspace.repositories.find((r) => this.sameRoot(r.rootPath, root))
 				: workspace.active;
 			const label = snap?.name ?? 'repository';
 			const upstream = snap?.upstream;
@@ -109,7 +117,8 @@ export class PushDialogProvider implements vscode.Disposable {
 					throw err;
 				}
 
-				await this.ensureOpen({ pendingPushRoots: resolvedRoot ? [resolvedRoot] : repoRoots });
+				// Keep sibling roots in pendingPushRoots so conflict Continue → Ask Push can resume them.
+				await this.ensureOpen();
 				this.post({ type: 'busy', busy: true, message: 'Push rejected. Auto-merging…' });
 				let syncResult: Awaited<ReturnType<GitService['syncWithUpstream']>>;
 				try {
@@ -129,7 +138,6 @@ export class PushDialogProvider implements vscode.Disposable {
 
 				try {
 					await this.git.push(resolvedRoot, { pushTags });
-					this.close();
 					showTimedInfoMessage(
 						`Merged and pushed ${label}${upstream ? ` → ${upstream}` : ''}${
 							pushTags ? ' (with tags)' : ''
@@ -144,19 +152,31 @@ export class PushDialogProvider implements vscode.Disposable {
 				}
 			}
 		}
+
+		this.resumeAutoMerge = false;
+		this.pendingPushRoots = undefined;
+		if (this.panel) {
+			this.close();
+		}
 	}
 
 	private async ensureOpen(options?: { pendingPushRoots?: string[] }): Promise<void> {
+		if (options?.pendingPushRoots?.length) {
+			this.pendingPushRoots = options.pendingPushRoots;
+		}
 		if (this.panel) {
-			if (options?.pendingPushRoots?.length) {
-				this.pendingPushRoots = options.pendingPushRoots;
-			}
 			this.panel.reveal(vscode.ViewColumn.Active, false);
 			await this.sendState();
 			await this.waitUntilReady();
 			return;
 		}
-		await this.show({ pendingPushRoots: options?.pendingPushRoots });
+		// Preserve resume flags; show() resets resumeAutoMerge for fresh confirm dialogs.
+		const resumeAutoMerge = this.resumeAutoMerge;
+		const pendingPushTags = this.pendingPushTags;
+		const pending = this.pendingPushRoots;
+		await this.show({ pendingPushRoots: options?.pendingPushRoots ?? pending });
+		this.resumeAutoMerge = resumeAutoMerge;
+		this.pendingPushTags = pendingPushTags;
 		await this.waitUntilReady();
 	}
 
@@ -199,6 +219,8 @@ export class PushDialogProvider implements vscode.Disposable {
 		this.panel?.dispose();
 		this.panel = undefined;
 		this.pendingPushRoots = undefined;
+		this.pendingPushTags = false;
+		this.resumeAutoMerge = false;
 		this.pendingOpenNewTag = false;
 		this.webviewReady = false;
 	}
@@ -257,10 +279,21 @@ export class PushDialogProvider implements vscode.Disposable {
 					this.flushReadyWaiters();
 					break;
 				case 'cancel':
-				case 'askPushCancel':
-					this.pendingPushRoots = undefined;
 					this.close();
 					break;
+				case 'askPushCancel': {
+					// "Later" for the conflicted repo — still offer Push for remaining siblings.
+					const remaining = this.pendingPushRoots?.length
+						? [...this.pendingPushRoots]
+						: undefined;
+					this.resumeAutoMerge = false;
+					if (remaining?.length) {
+						await this.show({ pendingPushRoots: remaining });
+					} else {
+						this.close();
+					}
+					break;
+				}
 				case 'selectTarget':
 					try {
 						this.git.setActiveRepository(msg.repoRoot);
@@ -275,8 +308,7 @@ export class PushDialogProvider implements vscode.Disposable {
 					break;
 				case 'askPushConfirm':
 					await this.withBusy(async () => {
-						const roots = msg.repoRoot ? [msg.repoRoot] : this.pendingPushRoots ?? [];
-						await this.runPushMany(roots.length ? roots : undefined, !!msg.pushTags);
+						await this.resumeAfterAskPush(msg.repoRoot, !!msg.pushTags);
 					}, 'Pushing…');
 					break;
 				case 'pushSyncPreview':
@@ -293,7 +325,15 @@ export class PushDialogProvider implements vscode.Disposable {
 						await this.git.abortSync(msg.repoRoot);
 						this.conflictContext = undefined;
 						showTimedInfoMessage('Merge / Rebase aborted.');
-						this.close();
+						const remaining = this.pendingPushRoots?.length
+							? [...this.pendingPushRoots]
+							: undefined;
+						this.resumeAutoMerge = false;
+						if (remaining?.length) {
+							await this.show({ pendingPushRoots: remaining });
+						} else {
+							this.close();
+						}
 					});
 					break;
 				case 'syncContinue':
@@ -350,35 +390,75 @@ export class PushDialogProvider implements vscode.Disposable {
 	}
 
 	private async runPushMany(repoRoots?: string[], pushTags = false): Promise<void> {
-		const roots =
+		const roots: Array<string | undefined> =
 			repoRoots?.length
 				? repoRoots
 				: this.pendingPushRoots?.length
 					? [...this.pendingPushRoots]
 					: [undefined];
-		this.pendingPushRoots = undefined;
+		this.pendingPushTags = pushTags;
+		this.resumeAutoMerge = false;
 
-		for (const root of roots) {
-			const pushed = await this.runPush(root, pushTags);
+		for (let i = 0; i < roots.length; i++) {
+			const remaining = this.remainingRoots(roots, i + 1);
+			// Preserve siblings so reject → merge/conflict → Ask Push can resume them.
+			this.pendingPushRoots = remaining.length ? remaining : undefined;
+
+			const pushed = await this.runPush(roots[i], pushTags);
 			if (!pushed) {
 				return;
 			}
 		}
+
+		this.pendingPushRoots = undefined;
+		this.close();
+	}
+
+	/**
+	 * After conflict Continue succeeds, Ask Push only names the conflicted repo.
+	 * Push it first, then resume any remaining sibling roots from the original batch.
+	 */
+	private async resumeAfterAskPush(repoRoot: string | undefined, pushTags: boolean): Promise<void> {
+		const tags = pushTags || this.pendingPushTags;
+		const remaining = this.pendingPushRoots?.length ? [...this.pendingPushRoots] : [];
+		const auto = this.resumeAutoMerge;
+
+		if (repoRoot) {
+			const pushed = await this.runPush(repoRoot, tags);
+			if (!pushed) {
+				// Keep remaining siblings for a later resume after this repo is fixed again.
+				this.pendingPushRoots = remaining.length ? remaining : undefined;
+				this.resumeAutoMerge = auto;
+				this.pendingPushTags = tags;
+				return;
+			}
+		}
+
+		if (!remaining.length) {
+			this.resumeAutoMerge = false;
+			this.pendingPushRoots = undefined;
+			this.close();
+			return;
+		}
+
+		if (auto) {
+			await this.pushWithAutoMerge(remaining, { pushTags: tags });
+			return;
+		}
+
+		await this.runPushMany(remaining, tags);
 	}
 
 	private async runPush(repoRoot?: string, pushTags = false): Promise<boolean> {
 		const workspace = this.git.getWorkspaceSnapshot();
 		const snap = repoRoot
-			? workspace.repositories.find((r) =>
-					r.rootPath.replace(/\\/g, '/').toLowerCase() === repoRoot.replace(/\\/g, '/').toLowerCase()
-				)
+			? workspace.repositories.find((r) => this.sameRoot(r.rootPath, repoRoot))
 			: workspace.active;
 		const label = snap?.name ?? 'repository';
 		const upstream = snap?.upstream;
 		const ahead = snap?.ahead ?? 0;
 		try {
 			await this.git.push(repoRoot, { pushTags });
-			this.close();
 			if (ahead === 0 && pushTags) {
 				showTimedInfoMessage(`Pushed tags for ${label}.`);
 			} else {
@@ -395,6 +475,19 @@ export class PushDialogProvider implements vscode.Disposable {
 			}
 			throw err;
 		}
+	}
+
+	private sameRoot(a?: string, b?: string): boolean {
+		if (!a || !b) {
+			return a === b;
+		}
+		return a.replace(/\\/g, '/').toLowerCase() === b.replace(/\\/g, '/').toLowerCase();
+	}
+
+	private remainingRoots(roots: Array<string | undefined>, fromIndex: number): string[] {
+		return roots
+			.slice(fromIndex)
+			.filter((root): root is string => typeof root === 'string' && root.length > 0);
 	}
 
 	private async handleCreateTags(tags: Array<{ repoRoot: string; tagName: string }>): Promise<void> {

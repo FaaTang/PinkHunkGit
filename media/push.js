@@ -585,14 +585,14 @@
     const prevSelected = selectedTargetRoot;
     payload = data;
     const targetKeys = new Set(data.targets.map((target) => normalizeRepoRoot(target.repoRoot)));
-    if (!targetSelectionInitialized) {
+    if (!targetSelectionInitialized || data.pendingRepoRoots?.length) {
       checkedRoots = defaultCheckedRoots();
       targetSelectionInitialized = true;
     } else {
       checkedRoots = new Set([...checkedRoots].filter((key) => targetKeys.has(key)));
     }
     const activeKey = normalizeRepoRoot(data.activeRepoRoot || data.targets[0]?.repoRoot || '');
-    if (prevSelected && targetKeys.has(prevSelected)) {
+    if (prevSelected && targetKeys.has(prevSelected) && checkedRoots.has(prevSelected)) {
       selectedTargetRoot = prevSelected;
     } else {
       selectedTargetRoot = checkedRoots.has(activeKey)
@@ -983,6 +983,10 @@
     });
   }
   pushBtn.addEventListener('click', () => {
+    if (modalState === 'askPush') {
+      post({ type: 'askPushConfirm', repoRoot: pushRepoRoot || undefined, pushTags: isPushTagsChecked() });
+      return;
+    }
     const roots = getCheckedRepoRoots();
     if (!roots.length) {
       showFooterError('Select at least one branch to push.');
@@ -1010,7 +1014,6 @@
   continueBtn.addEventListener('click', () => post({ type: 'syncContinue', repoRoot: pushRepoRoot || undefined }));
   laterBtn.addEventListener('click', () => {
     post({ type: 'askPushCancel' });
-    post({ type: 'cancel' });
   });
 
   document.addEventListener('keydown', (e) => {
@@ -1153,8 +1156,6 @@
           true,
           false
         );
-        pushBtn.onclick = () =>
-          post({ type: 'askPushConfirm', repoRoot: pushRepoRoot || undefined, pushTags: isPushTagsChecked() });
         break;
       }
       default:
