@@ -1,5 +1,5 @@
 # Pink Hunk Git
-
+ 
 [中文](README.zh-CN.md)
 
 An IntelliJ IDEA–style **Commit** panel for VS Code / Cursor: stage files from a checklist, diff, commit / push, rollback, and more.
