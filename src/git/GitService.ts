@@ -73,6 +73,9 @@ export class GitService implements vscode.Disposable {
 	private pendingDiffAdvance: { repoRoot: string; path: string } | undefined;
 	private pendingDiffRetreat: { repoRoot: string; path: string } | undefined;
 	private diffNavDecorationType: vscode.TextEditorDecorationType | undefined;
+	/** Cached ignored paths per repo root (from `git status --ignored`). */
+	private ignoredByRoot = new Map<string, ChangeItem[]>();
+	private ignoredRefreshInFlight: Promise<void> | undefined;
 
 	async init(): Promise<{ ok: true } | { ok: false; error: string }> {
 		const extension = vscode.extensions.getExtension<GitExtension>('vscode.git');
@@ -342,6 +345,7 @@ export class GitService implements vscode.Disposable {
 			staged: [],
 			unstaged: [],
 			unversioned: [],
+			ignored: [],
 		};
 
 		if (!this.api) {
@@ -522,9 +526,94 @@ export class GitService implements vscode.Disposable {
 			staged,
 			unstaged: allUnstaged,
 			unversioned,
+			ignored: this.ignoredByRoot.get(root) ?? [],
 			conflictFiles,
 			syncMode,
 		};
+	}
+
+	/** Refresh ignored-file cache for all repositories (traditional mode: dirs as single entries). */
+	async refreshIgnoredFiles(): Promise<void> {
+		if (this.ignoredRefreshInFlight) {
+			await this.ignoredRefreshInFlight;
+			return;
+		}
+		if (!this.api?.repositories.length) {
+			this.ignoredByRoot.clear();
+			return;
+		}
+		const repos = [...this.api.repositories];
+		const task = (async () => {
+			await Promise.all(
+				repos.map(async (repo) => {
+					const root = repo.rootUri.fsPath;
+					try {
+						const items = await this.listIgnoredFiles(root);
+						this.ignoredByRoot.set(root, items);
+					} catch {
+						if (!this.ignoredByRoot.has(root)) {
+							this.ignoredByRoot.set(root, []);
+						}
+					}
+				})
+			);
+			const liveRoots = repos.map((r) => r.rootUri.fsPath);
+			for (const key of [...this.ignoredByRoot.keys()]) {
+				if (!liveRoots.some((root) => pathsEqual(root, key))) {
+					this.ignoredByRoot.delete(key);
+				}
+			}
+		})();
+		this.ignoredRefreshInFlight = task;
+		try {
+			await task;
+		} finally {
+			if (this.ignoredRefreshInFlight === task) {
+				this.ignoredRefreshInFlight = undefined;
+			}
+		}
+	}
+
+	private async listIgnoredFiles(root: string): Promise<ChangeItem[]> {
+		// Do NOT pass -uno: Git treats it as hiding ignored entries too.
+		// traditional mode lists ignored dirs as a single `!! path/` line.
+		const raw = await this.queryGit(root, [
+			'status',
+			'--porcelain=v1',
+			'--ignored=traditional',
+		]);
+		if (!raw) {
+			return [];
+		}
+		const items: ChangeItem[] = [];
+		const seen = new Set<string>();
+		for (const line of raw.split(/\r?\n/)) {
+			if (!line.startsWith('!! ')) {
+				continue;
+			}
+			let rel = unescapeGitPath(line.slice(3));
+			rel = rel.replace(/\\/g, '/');
+			const directory = rel.endsWith('/');
+			if (directory) {
+				rel = rel.replace(/\/+$/, '');
+			}
+			if (!rel) {
+				continue;
+			}
+			const key = rel.toLowerCase();
+			if (seen.has(key)) {
+				continue;
+			}
+			seen.add(key);
+			items.push({
+				path: rel,
+				fsPath: path.join(root, ...rel.split('/')),
+				status: 'I',
+				staged: false,
+				directory,
+			});
+		}
+		return items.sort((a, b) => a.path.localeCompare(b.path));
 	}
 
 	private repoDisplayName(root: string): string {
@@ -549,6 +638,7 @@ export class GitService implements vscode.Disposable {
 	async refresh(): Promise<void> {
 		if (!this.api?.repositories.length) {
 			this.bindRepositoryEvents();
+			this.ignoredByRoot.clear();
 			this._onDidChange.fire();
 			return;
 		}
@@ -556,6 +646,7 @@ export class GitService implements vscode.Disposable {
 		// Note: do NOT call the built-in 'git.refresh' command here. Without a repository
 		// argument it opens a "Choose a repository" quick pick in multi-repo workspaces.
 		await Promise.all(this.api.repositories.map((repo) => repo.status().catch(() => undefined)));
+		await this.refreshIgnoredFiles();
 
 		this.bindRepositoryEvents();
 		this._onDidChange.fire();
@@ -570,9 +661,15 @@ export class GitService implements vscode.Disposable {
 		}, 250);
 	}
 
-	async stage(fsPath: string): Promise<void> {
+	async stage(fsPath: string, options?: { force?: boolean }): Promise<void> {
 		await this.ensureSaved(fsPath);
 		const repo = this.requireRepoForFsPath(fsPath);
+		if (options?.force) {
+			const relative = path.relative(repo.rootUri.fsPath, fsPath).replace(/\\/g, '/');
+			await this.execGit(repo.rootUri.fsPath, ['add', '-f', '--', relative]);
+			await this.runGitApi(repo, 'status', '', () => repo.status().catch(() => undefined));
+			return;
+		}
 		await this.runGitApi(repo, 'add', this.formatPaths([fsPath]), () => repo.add([fsPath]));
 	}
 
@@ -1543,7 +1640,6 @@ export class GitService implements vscode.Disposable {
 		};
 
 		await this.openHeadWorkingDiff(repo, relativePath, fsPath, title, diffOptions);
-		this.maybeShowDiffNavHint();
 	}
 
 	async navigateDiffNextChangeOrFile(): Promise<
@@ -1877,21 +1973,26 @@ export class GitService implements vscode.Disposable {
 			...repo.state.mergeChanges,
 		];
 		const matched = allChanges.filter(matchesPath);
-		if (matched.length) {
-			// Untracked files often appear in workingTreeChanges with Status.UNTRACKED;
-			// they must NOT use toGitUri(..., 'HEAD') or the editor reports "file not found".
-			if (matched.some((c) => c.status === Status.UNTRACKED)) {
-				return true;
-			}
-			const addedOnly = new Set<Status>([Status.INDEX_ADDED, Status.INTENT_TO_ADD]);
-			return matched.every((c) => addedOnly.has(c.status));
+		const absentStatuses = new Set<Status>([
+			Status.UNTRACKED,
+			Status.INDEX_ADDED,
+			Status.INTENT_TO_ADD,
+			Status.BOTH_ADDED,
+			Status.ADDED_BY_US,
+			Status.ADDED_BY_THEM,
+		]);
+		// Any "added-like" status means HEAD has no blob (even if also MODIFIED after add).
+		if (matched.some((c) => absentStatuses.has(c.status))) {
+			return true;
 		}
 
+		// Authoritative check — do not trust status alone for tracked-looking paths.
 		const headPath = relativePath.replace(/\\/g, '/');
 		try {
 			await execFile('git', ['cat-file', '-e', `HEAD:${headPath}`], {
 				cwd: root,
 				maxBuffer: 1024 * 1024,
+				env: process.env,
 			});
 			return false;
 		} catch {
@@ -1998,7 +2099,6 @@ export class GitService implements vscode.Disposable {
 
 		const title = `${relativePath} (Rollback preview)  [F6 Previous / F7 Next]`;
 		await this.openHeadWorkingDiff(repo, relativePath, fsPath, title);
-		this.maybeShowDiffNavHint();
 	}
 
 	private maybeShowDiffNavHint(): void {
@@ -2031,8 +2131,9 @@ export class GitService implements vscode.Disposable {
 
 	/**
 	 * Open left/right diff for HEAD vs working tree.
-	 * New/untracked files use an empty left document (HEAD blob does not exist).
-	 * Deleted files use an empty right document (working tree file missing).
+	 * When HEAD has no blob (new/untracked), open the working-tree file directly.
+	 * Deleted tracked files use HEAD vs empty right document.
+	 * @returns true when a compare editor was opened (F6/F7 apply).
 	 */
 	private async openHeadWorkingDiff(
 		repo: Repository,
@@ -2040,7 +2141,7 @@ export class GitService implements vscode.Disposable {
 		fsPath: string,
 		title: string,
 		diffOptions?: vscode.TextDocumentShowOptions
-	): Promise<void> {
+	): Promise<boolean> {
 		if (!this.api) {
 			throw new Error('VS Code Git extension is not available.');
 		}
@@ -2051,30 +2152,33 @@ export class GitService implements vscode.Disposable {
 		const absentFromHead =
 			this.isUntracked(relativePath, root) || (await this.isNewToHead(repo, relativePath));
 
-		let left: vscode.Uri;
+		const showOpts: vscode.TextDocumentShowOptions = {
+			preview: false,
+			preserveFocus: false,
+			viewColumn: vscode.ViewColumn.Active,
+			...(diffOptions ?? {}),
+		};
+
+		// No version in HEAD → show file content (do not use toGitUri HEAD / empty-left diff).
 		if (absentFromHead) {
-			left = (await vscode.workspace.openTextDocument({ content: '' })).uri;
-		} else {
-			left = this.api.toGitUri(fileUri, 'HEAD');
+			if (workingExists) {
+				const doc = await vscode.workspace.openTextDocument(fileUri);
+				await vscode.window.showTextDocument(doc, showOpts);
+				return false;
+			}
+			const empty = await vscode.workspace.openTextDocument({ content: '' });
+			await vscode.window.showTextDocument(empty, showOpts);
+			return false;
 		}
 
-		let right: vscode.Uri;
-		if (workingExists) {
-			right = fileUri;
-		} else {
-			right = (await vscode.workspace.openTextDocument({ content: '' })).uri;
-		}
-
-		if (absentFromHead && !workingExists) {
-			await vscode.window.showTextDocument(right, {
-				preview: false,
-				preserveFocus: false,
-				...(diffOptions ?? {}),
-			});
-			return;
-		}
+		const left = this.api.toGitUri(fileUri, 'HEAD');
+		const right = workingExists
+			? fileUri
+			: (await vscode.workspace.openTextDocument({ content: '' })).uri;
 
 		await vscode.commands.executeCommand('vscode.diff', left, right, title, diffOptions);
+		this.maybeShowDiffNavHint();
+		return true;
 	}
 
 	async getDiff(relativePath: string, staged: boolean, repoRoot?: string): Promise<DiffResult> {
@@ -2260,6 +2364,58 @@ export class GitService implements vscode.Disposable {
 			staged,
 		};
 	}
+}
+
+/** Decode porcelain path (possibly C-quoted). */
+function unescapeGitPath(raw: string): string {
+	const trimmed = raw.trim();
+	if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+		return trimmed;
+	}
+	const inner = trimmed.slice(1, -1);
+	let out = '';
+	for (let i = 0; i < inner.length; i += 1) {
+		const ch = inner[i];
+		if (ch !== '\\') {
+			out += ch;
+			continue;
+		}
+		const next = inner[i + 1];
+		if (next === undefined) {
+			out += '\\';
+			break;
+		}
+		if (next === 'n') {
+			out += '\n';
+			i += 1;
+		} else if (next === 't') {
+			out += '\t';
+			i += 1;
+		} else if (next === 'r') {
+			out += '\r';
+			i += 1;
+		} else if (next === '"' || next === '\\') {
+			out += next;
+			i += 1;
+		} else if (next >= '0' && next <= '7') {
+			let oct = next;
+			let consumed = 1;
+			for (let j = 2; j <= 3 && i + j < inner.length; j += 1) {
+				const d = inner[i + j];
+				if (d < '0' || d > '7') {
+					break;
+				}
+				oct += d;
+				consumed += 1;
+			}
+			out += String.fromCharCode(parseInt(oct, 8));
+			i += consumed;
+		} else {
+			out += next;
+			i += 1;
+		}
+	}
+	return out;
 }
 
 function statusLetter(status: Status): string {
