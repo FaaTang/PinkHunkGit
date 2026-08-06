@@ -818,18 +818,19 @@ export class GitService implements vscode.Disposable {
 		const metaRaw = await this.queryGit(root, [
 			'log',
 			'-1',
-			'--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%ad%x1f%s%x1f%B',
+			'--pretty=format:%H%n%h%n%an%n%ae%n%ad%n%s',
 			'--date=format:%Y/%m/%d at %H:%M',
 			commit,
 		]);
-		const parts = metaRaw.split('\x1f');
-		const fullHash = (parts[0] || commit).trim();
-		const shortHash = (parts[1] || fullHash.slice(0, 8)).trim();
-		const author = (parts[2] || '').trim();
-		const email = (parts[3] || '').trim();
-		const date = (parts[4] || '').trim();
-		const subject = (parts[5] || '').trim();
-		const message = (parts.slice(6).join('\x1f') || subject).replace(/\s+$/u, '');
+		const lines = metaRaw.split(/\r?\n/);
+		const fullHash = (lines[0] || commit).trim();
+		const shortHash = (lines[1] || fullHash.slice(0, 8)).trim();
+		const author = (lines[2] || '').trim();
+		const email = (lines[3] || '').trim();
+		const date = (lines[4] || '').trim();
+		const subject = (lines[5] || '').trim();
+		const messageRaw = await this.queryGit(root, ['log', '-1', '--pretty=format:%B', commit]);
+		const message = (messageRaw || subject).replace(/\s+$/u, '');
 
 		const filesRaw = await this.queryGit(root, [
 			'show',
