@@ -232,10 +232,13 @@ export class PushDialogProvider implements vscode.Disposable {
 		if (this.refreshTimer) {
 			clearTimeout(this.refreshTimer);
 		}
+		// Debounce longer while confirming — frequent git events were re-posting state
+		// and caused the details pane to flicker while commit details loaded.
+		const delay = this.dialogPhase === 'confirm' ? 800 : 300;
 		this.refreshTimer = setTimeout(() => {
 			this.refreshTimer = undefined;
 			void this.refreshIfOpen();
-		}, 300);
+		}, delay);
 	}
 
 	private async refreshIfOpen(): Promise<void> {

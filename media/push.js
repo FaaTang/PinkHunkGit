@@ -51,6 +51,7 @@
   let selectedCommitHash = null;
   let selectedFilePath = null;
   let commitDetails = null;
+  let pendingDetailsKey = null;
   let collapsedFileDirs = new Set();
   let checkedRoots = new Set();
   let targetSelectionInitialized = false;
@@ -450,6 +451,7 @@
       selectedCommitHash = null;
       selectedFilePath = null;
       commitDetails = null;
+      pendingDetailsKey = null;
       collapsedFileDirs = new Set();
     }
     pushRepoRoot = findTargetByKey(key)?.repoRoot || pushRepoRoot;
@@ -602,8 +604,9 @@
       clearCommitDetails();
       return;
     }
-    if (selectedCommitHash && commits.some((c) => c.hash === selectedCommitHash)) {
-      requestCommitDetails(selectedCommitHash);
+    if (selectedCommitHash && commits.some((c) => sameCommitHash(c.hash, selectedCommitHash))) {
+      // Keep existing details on state refresh; only fetch when missing/stale.
+      requestCommitDetails(selectedCommitHash, { quiet: true });
       return;
     }
     selectCommit(commits[0].hash);
@@ -616,31 +619,69 @@
     requestCommitDetails(hash);
   }
 
-  function requestCommitDetails(hash) {
+  function sameCommitHash(a, b) {
+    if (!a || !b) {
+      return false;
+    }
+    const x = String(a).toLowerCase();
+    const y = String(b).toLowerCase();
+    return x === y || x.startsWith(y) || y.startsWith(x);
+  }
+
+  function detailsKey(repoRoot, hash) {
+    return `${normalizeRepoRoot(repoRoot)}::${String(hash).toLowerCase()}`;
+  }
+
+  function requestCommitDetails(hash, options = {}) {
+    const quiet = !!options.quiet;
     const target = findTargetByKey(selectedTargetRoot) || payload.targets[0];
     if (!target || !hash) {
       clearCommitDetails();
       return;
     }
-    commitDetails = null;
-    if (fileTree) {
-      fileTree.innerHTML = '';
+    const key = detailsKey(target.repoRoot, hash);
+
+    // Already showing this commit — avoid clearing the right pane (prevents flicker on state refresh).
+    if (
+      commitDetails &&
+      sameCommitHash(commitDetails.hash, hash) &&
+      normalizeRepoRoot(commitDetails.repoRoot) === normalizeRepoRoot(target.repoRoot)
+    ) {
+      pendingDetailsKey = null;
+      renderCommitDetails();
+      return;
     }
-    if (noFileSelected) {
-      noFileSelected.textContent = 'Loading…';
-      noFileSelected.classList.remove('hidden');
+
+    // Same request already in flight.
+    if (pendingDetailsKey === key) {
+      return;
     }
-    if (commitDetailMessage) {
-      commitDetailMessage.textContent = '';
-    }
-    if (commitDetailMeta) {
-      commitDetailMeta.textContent = '';
+
+    pendingDetailsKey = key;
+    const keepUi = quiet && commitDetails;
+    if (!keepUi) {
+      commitDetails = null;
+      if (fileTree) {
+        fileTree.innerHTML = '';
+      }
+      if (noFileSelected) {
+        noFileSelected.textContent = 'Loading…';
+        noFileSelected.classList.remove('hidden');
+      }
+      if (commitDetailMessage) {
+        commitDetailMessage.innerHTML = '';
+        commitDetailMessage.dataset.loading = '1';
+      }
+      if (commitDetailMeta) {
+        commitDetailMeta.textContent = '';
+      }
     }
     post({ type: 'getCommitDetails', repoRoot: target.repoRoot, hash });
   }
 
   function clearCommitDetails() {
     commitDetails = null;
+    pendingDetailsKey = null;
     selectedFilePath = null;
     if (fileTree) {
       fileTree.innerHTML = '';
@@ -650,7 +691,8 @@
       noFileSelected.classList.remove('hidden');
     }
     if (commitDetailMessage) {
-      commitDetailMessage.textContent = '';
+      commitDetailMessage.innerHTML = '';
+      delete commitDetailMessage.dataset.loading;
     }
     if (commitDetailMeta) {
       commitDetailMeta.textContent = '';
@@ -658,6 +700,10 @@
   }
 
   function applyCommitDetails(details) {
+    pendingDetailsKey = null;
+    if (commitDetailMessage) {
+      delete commitDetailMessage.dataset.loading;
+    }
     commitDetails = details;
     collapsedFileDirs = new Set();
     renderCommitDetails();
@@ -1009,6 +1055,7 @@
     if (prevSelected !== selectedTargetRoot) {
       selectedCommitHash = null;
       commitDetails = null;
+      pendingDetailsKey = null;
     } else {
       selectedCommitHash = prevCommit;
     }
@@ -1581,10 +1628,7 @@
         if (!details?.hash || !selectedCommitHash) {
           break;
         }
-        const selected = String(selectedCommitHash).toLowerCase();
-        const full = String(details.hash).toLowerCase();
-        const short = String(details.shortHash || '').toLowerCase();
-        if (full !== selected && short !== selected && !full.startsWith(selected) && !selected.startsWith(short)) {
+        if (!sameCommitHash(details.hash, selectedCommitHash) && !sameCommitHash(details.shortHash, selectedCommitHash)) {
           break;
         }
         applyCommitDetails(details);

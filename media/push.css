@@ -431,7 +431,7 @@ body {
   opacity: 0.92;
 }
 
-.commit-detail-message:empty::before {
+.commit-detail-message:empty:not([data-loading])::before {
   content: 'Select a commit to view details';
   opacity: 0.5;
 }
