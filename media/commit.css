@@ -21,6 +21,7 @@
   /* IDEA Commit panel (Darcula): lighter blue / coral, medium-blue selection */
   --changes-file-name: #6dabf5;
   --unversioned-file-name: #da8870;
+  --ignored-file-name: #8c8c8c;
   --file-row-selected-bg: #3f6794;
   --file-row-hover-bg: color-mix(in srgb, var(--fg) 6%, transparent);
   --diff-add-bg: color-mix(in srgb, var(--added) 18%, transparent);
@@ -79,6 +80,65 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.toolbar-actions button svg {
+  display: block;
+}
+
+.toolbar-view-options {
+  position: relative;
+  display: inline-flex;
+}
+
+.view-options-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 168px;
+  padding: 6px 0;
+  background: var(--vscode-menu-background, var(--bg));
+  color: var(--vscode-menu-foreground, var(--fg));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.view-options-label {
+  padding: 4px 12px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.65;
+}
+
+.view-options-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.view-options-item:hover {
+  background: var(--list-hover);
+}
+
+.view-options-item input {
+  margin: 0;
 }
 
 .banner {
@@ -153,6 +213,18 @@ body.sidebar-mode .commit-form {
   flex: 0 0 auto;
   max-height: min(38vh, 280px);
   overflow: auto;
+  border-top: 1px solid var(--border);
+  padding: 0;
+  gap: 0;
+}
+
+body.sidebar-mode .commit-form.collapsed {
+  max-height: none;
+  overflow: hidden;
+}
+
+body.sidebar-mode .commit-form.collapsed .commit-form-body {
+  display: none;
 }
 
 body.sidebar-mode .commit-log-pane {
@@ -502,17 +574,106 @@ body.sidebar-mode .file-list {
   padding-bottom: 2px;
 }
 
+.file-tree {
+  padding-bottom: 2px;
+}
+
 .file-rows {
   padding-bottom: 2px;
+}
+
+.dir-group {
+  margin-bottom: 0;
+}
+
+.dir-group.collapsed {
+  padding-bottom: 0;
+}
+
+.dir-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 1px 8px;
+  padding: 3px 8px;
+  padding-left: calc(8px + (var(--tree-depth, 0) * 14px));
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.92;
+  cursor: pointer;
+  user-select: none;
+}
+
+.file-tree.nested .dir-group-title {
+  padding-left: calc(28px + (var(--tree-depth, 0) * 14px));
+}
+
+.dir-group-title:hover {
+  background: var(--list-hover);
+}
+
+.dir-group-title .group-select-all {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.dir-group-chevron {
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+  opacity: 0.8;
+  font-size: 10px;
+}
+
+.dir-group-icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #e2b340;
+  opacity: 0.95;
+}
+
+.dir-group-icon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.dir-group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-group-count {
+  flex-shrink: 0;
+  font-weight: 500;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
 }
 
 .file-rows.nested .file-row {
   margin-left: 28px;
 }
 
+.file-tree .file-row {
+  padding-left: calc(8px + (var(--tree-depth, 0) * 14px));
+}
+
+.file-tree.nested .file-row {
+  margin-left: 28px;
+  padding-left: calc(8px + (var(--tree-depth, 0) * 14px));
+}
+
 .file-row {
   display: grid;
-  grid-template-columns: 18px 16px 1fr;
+  grid-template-columns: 18px 20px 1fr;
   gap: 6px;
   align-items: center;
   margin: 1px 8px;
@@ -544,6 +705,40 @@ body.sidebar-mode .file-list {
   height: 14px;
 }
 
+.file-type-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 16px;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.file-type-icon.mid {
+  font-size: 9px;
+}
+
+.file-type-icon.wide {
+  font-size: 7px;
+  letter-spacing: -0.04em;
+}
+
+.file-type-icon.folder {
+  color: #e2b340;
+}
+
+.file-type-icon.folder svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
 .status {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 11px;
@@ -554,6 +749,7 @@ body.sidebar-mode .file-list {
 .status.M { color: var(--modified); }
 .status.A { color: var(--added); }
 .status.D { color: var(--deleted); }
+.status.I { color: var(--vscode-gitDecoration-ignoredResourceForeground, #8c8c8c); }
 .status.R,
 .status.C { color: var(--untracked); }
 
@@ -580,6 +776,11 @@ body.sidebar-mode .file-list {
 
 .file-row.group-unversioned .file-name {
   color: var(--unversioned-file-name);
+}
+
+.file-row.group-ignored .file-name {
+  color: var(--ignored-file-name);
+  opacity: 0.9;
 }
 
 .file-row.selected .file-dir {
@@ -649,6 +850,54 @@ body.sidebar-mode .file-list {
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px 12px;
+}
+
+.commit-form-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  flex-shrink: 0;
+}
+
+.commit-form-toggle {
+  min-width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  opacity: 0.75;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.commit-form-toggle:hover {
+  opacity: 1;
+  filter: none;
+  background: var(--list-hover);
+}
+
+.commit-form-title {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+  user-select: none;
+}
+
+.commit-form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.commit-form.collapsed .commit-form-body {
+  display: none;
 }
 
 .message-field {

@@ -5,6 +5,8 @@ export type ChangeItem = {
 	staged: boolean;
 	unsaved?: boolean;
 	conflict?: boolean;
+	/** Ignored directory entry from `git status --ignored` (path has no trailing slash). */
+	directory?: boolean;
 };
 
 export type { FastPushFlags, FastPushSettingsPayload } from '../fastPush/settings';
@@ -27,6 +29,8 @@ export type RepoSnapshot = {
 	staged: ChangeItem[];
 	unstaged: ChangeItem[];
 	unversioned: ChangeItem[];
+	/** Git-ignored paths (files + directories) from `git status --ignored`. */
+	ignored?: ChangeItem[];
 	conflictFiles?: ChangeItem[];
 	syncMode?: SyncMode;
 };

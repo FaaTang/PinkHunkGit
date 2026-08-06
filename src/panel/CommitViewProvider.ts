@@ -759,7 +759,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				case 'addToGit':
 					await this.withBusy(async () => {
 						for (const { repoRoot, path } of msg.paths) {
-							await this.git.stage(this.toFsPath(repoRoot, path));
+							// -f so ignored paths can be force-added (IDEA-style).
+							await this.git.stage(this.toFsPath(repoRoot, path), { force: true });
 						}
 					});
 					break;
@@ -946,6 +947,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async pushSnapshot(): Promise<void> {
+		await this.git.refreshIgnoredFiles();
 		const snapshot = this.git.getWorkspaceSnapshot();
 		this.post({ type: 'snapshot', payload: { ...snapshot, busy: this.busy } });
 	}
@@ -982,6 +984,40 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
         <button id="installKeysBtn" type="button" title="Install extension keybindings">⌨</button>
         <button id="locateBtn" type="button" title="Reveal selected file in Explorer">⌖</button>
         <button id="refreshBtn" type="button" title="Refresh Git status">↻</button>
+        <span class="toolbar-sep" aria-hidden="true"></span>
+        <div class="toolbar-view-options">
+          <button id="viewOptionsBtn" type="button" title="View Options" aria-label="View Options" aria-haspopup="menu" aria-expanded="false">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M8 3C4.5 3 1.7 5.1 1 8c.7 2.9 3.5 5 7 5s6.3-2.1 7-5c-.7-2.9-3.5-5-7-5Zm0 8.2A3.2 3.2 0 1 1 8 4.8a3.2 3.2 0 0 1 0 6.4Zm0-1.7A1.5 1.5 0 1 0 8 6.5a1.5 1.5 0 0 0 0 3Z"/>
+            </svg>
+          </button>
+          <div id="viewOptionsMenu" class="view-options-menu hidden" role="menu">
+            <div class="view-options-label">Group By</div>
+            <label class="view-options-item" role="menuitemcheckbox">
+              <input id="groupByDirectoryChk" type="checkbox" />
+              <span>Directory</span>
+            </label>
+            <label class="view-options-item" role="menuitemcheckbox">
+              <input id="groupByModuleChk" type="checkbox" />
+              <span>Module</span>
+            </label>
+            <div class="view-options-label">Show</div>
+            <label class="view-options-item" role="menuitemcheckbox">
+              <input id="showIgnoredFilesChk" type="checkbox" />
+              <span>Ignored Files</span>
+            </label>
+          </div>
+        </div>
+        <button id="expandAllBtn" type="button" title="Expand All" aria-label="Expand All">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M2 2.5h12v1H2v-1zm0 10h12v1H2v-1zM8 4l3.25 3.25H9.1V10H6.9V7.25H4.75L8 4zm0 8 3.25-3.25H9.1V8.5H6.9v.25H4.75L8 12z"/>
+          </svg>
+        </button>
+        <button id="collapseAllBtn" type="button" title="Collapse All" aria-label="Collapse All">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M2 2.5h12v1H2v-1zm0 10h12v1H2v-1zM8 7.25 4.75 4h2.15v2.75h2.2V4h2.15L8 7.25zm0 1.5 3.25 3.25H9.1V9.25H6.9v2.75H4.75L8 8.75z"/>
+          </svg>
+        </button>
       </div>
     </div>
     <div id="banner" class="banner hidden"></div>
@@ -999,30 +1035,36 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
         </div>
         <div id="fileList" class="file-list"></div>
       </aside>
-      <div class="commit-form">
-        <div class="message-field">
-          <div id="messageResize" class="message-resize" title="Drag to resize" role="separator" aria-orientation="horizontal" tabindex="0"></div>
-          <textarea id="message" placeholder="Commit Message" rows="4"></textarea>
-          <div class="generate-msg-actions">
-            <button id="generateMsgBtn" class="generate-msg-btn" type="button" title="Generate Commit Message" aria-label="Generate Commit Message">
-              <svg class="generate-msg-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
-                <path fill="currentColor" d="M7.5 1.5 8.4 4.2 11 5.1 8.4 6 7.5 8.7 6.6 6 4 5.1 6.6 4.2 7.5 1.5Zm4.3 5.2.6 1.7 1.7.6-1.7.6-.6 1.7-.6-1.7-1.7-.6 1.7-.6.6-1.7Zm-7.6 2.4.9 2.5 2.5.9-2.5.9-.9 2.5-.9-2.5-2.5-.9 2.5-.9.9-2.5Z"/>
-              </svg>
-              <span class="generate-msg-spinner" aria-hidden="true"></span>
-            </button>
-            <button id="generateMsgSettingsBtn" class="generate-msg-settings-btn" type="button" title="Commit message prefix settings" aria-label="Commit message prefix settings">⚙</button>
-          </div>
+      <div id="commitForm" class="commit-form">
+        <div class="commit-form-header">
+          <button id="commitFormToggle" class="commit-form-toggle" type="button" title="Expand or collapse commit message" aria-expanded="true">▾</button>
+          <span class="commit-form-title">Commit Message</span>
         </div>
-        <div id="formError" class="form-error hidden"></div>
-        <div class="commit-actions">
-          <button id="commitBtn" class="primary" type="button" title="Commit (Ctrl+Enter)">Commit</button>
-          <div id="commitPushSplit" class="commit-push-split">
-            <button id="commitPushBtn" type="button" title="Commit and Push (Ctrl+Shift+Enter)">Commit and Push</button>
-            <button id="commitPushMenuBtn" class="commit-push-caret" type="button" title="More push options" aria-label="More push options" aria-haspopup="menu" aria-expanded="false">▾</button>
-            <div id="commitPushMenu" class="commit-push-menu hidden" role="menu">
-              <div class="commit-push-menu-row">
-                <button id="fastPushBtn" class="commit-push-menu-item" type="button" role="menuitem" title="Fast Push (Ctrl+Alt+K)">Fast Push</button>
-                <button id="fastPushSettingsBtn" class="commit-push-menu-gear" type="button" title="Fast Push settings" aria-label="Fast Push settings">⚙</button>
+        <div class="commit-form-body">
+          <div class="message-field">
+            <div id="messageResize" class="message-resize" title="Drag to resize" role="separator" aria-orientation="horizontal" tabindex="0"></div>
+            <textarea id="message" placeholder="Commit Message" rows="4"></textarea>
+            <div class="generate-msg-actions">
+              <button id="generateMsgBtn" class="generate-msg-btn" type="button" title="Generate Commit Message" aria-label="Generate Commit Message">
+                <svg class="generate-msg-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+                  <path fill="currentColor" d="M7.5 1.5 8.4 4.2 11 5.1 8.4 6 7.5 8.7 6.6 6 4 5.1 6.6 4.2 7.5 1.5Zm4.3 5.2.6 1.7 1.7.6-1.7.6-.6 1.7-.6-1.7-1.7-.6 1.7-.6.6-1.7Zm-7.6 2.4.9 2.5 2.5.9-2.5.9-.9 2.5-.9-2.5-2.5-.9 2.5-.9.9-2.5Z"/>
+                </svg>
+                <span class="generate-msg-spinner" aria-hidden="true"></span>
+              </button>
+              <button id="generateMsgSettingsBtn" class="generate-msg-settings-btn" type="button" title="Commit message prefix settings" aria-label="Commit message prefix settings">⚙</button>
+            </div>
+          </div>
+          <div id="formError" class="form-error hidden"></div>
+          <div class="commit-actions">
+            <button id="commitBtn" class="primary" type="button" title="Commit (Ctrl+Enter)">Commit</button>
+            <div id="commitPushSplit" class="commit-push-split">
+              <button id="commitPushBtn" type="button" title="Commit and Push (Ctrl+Shift+Enter)">Commit and Push</button>
+              <button id="commitPushMenuBtn" class="commit-push-caret" type="button" title="More push options" aria-label="More push options" aria-haspopup="menu" aria-expanded="false">▾</button>
+              <div id="commitPushMenu" class="commit-push-menu hidden" role="menu">
+                <div class="commit-push-menu-row">
+                  <button id="fastPushBtn" class="commit-push-menu-item" type="button" role="menuitem" title="Fast Push (Ctrl+Alt+K)">Fast Push</button>
+                  <button id="fastPushSettingsBtn" class="commit-push-menu-gear" type="button" title="Fast Push settings" aria-label="Fast Push settings">⚙</button>
+                </div>
               </div>
             </div>
           </div>

@@ -58,6 +58,15 @@
   const refreshBtn = document.getElementById('refreshBtn');
   const locateBtn = document.getElementById('locateBtn');
   const installKeysBtn = document.getElementById('installKeysBtn');
+  const expandAllBtn = document.getElementById('expandAllBtn');
+  const collapseAllBtn = document.getElementById('collapseAllBtn');
+  const viewOptionsBtn = document.getElementById('viewOptionsBtn');
+  const viewOptionsMenu = document.getElementById('viewOptionsMenu');
+  const groupByDirectoryChk = document.getElementById('groupByDirectoryChk');
+  const groupByModuleChk = document.getElementById('groupByModuleChk');
+  const showIgnoredFilesChk = document.getElementById('showIgnoredFilesChk');
+  const commitForm = document.getElementById('commitForm');
+  const commitFormToggle = document.getElementById('commitFormToggle');
   const rollbackModal = document.getElementById('rollbackModal');
   const rollbackTitle = document.getElementById('rollbackTitle');
   const rollbackSummary = document.getElementById('rollbackSummary');
@@ -99,6 +108,10 @@
   let commitLogLoading = false;
   /** Repo root currently being fetched for commit log (dedupe in-flight requests). */
   let commitLogPendingRoot = '';
+  let commitFormExpanded = webviewState.commitFormExpanded !== false;
+  let groupByDirectory = webviewState.groupByDirectory === true;
+  let groupByModule = webviewState.groupByModule === true;
+  let showIgnoredFiles = webviewState.showIgnoredFiles !== false;
   let workspace = {
     ok: true,
     repositories: [],
@@ -283,6 +296,10 @@
     return 'repo:' + groupId + ':' + repoKey(root);
   }
 
+  function dirCollapseKey(groupId, root, dirPath) {
+    return 'dir:' + groupId + ':' + repoKey(root) + ':' + dirPath;
+  }
+
   function toggleCategoryCollapsed(groupId) {
     const key = categoryCollapseKey(groupId);
     if (collapsedGroups.has(key)) {
@@ -296,6 +313,17 @@
 
   function toggleRepoInCategoryCollapsed(groupId, root) {
     const key = repoCollapseKey(groupId, root);
+    if (collapsedGroups.has(key)) {
+      collapsedGroups.delete(key);
+    } else {
+      collapsedGroups.add(key);
+    }
+    saveCollapsedGroups();
+    renderFiles();
+  }
+
+  function toggleDirCollapsed(groupId, root, dirPath) {
+    const key = dirCollapseKey(groupId, root, dirPath);
     if (collapsedGroups.has(key)) {
       collapsedGroups.delete(key);
     } else {
@@ -565,6 +593,158 @@
           requestCommitLog(root);
         }
       }
+    }
+  }
+
+  function setCommitFormExpanded(expanded) {
+    if (!commitForm || !commitFormToggle) {
+      return;
+    }
+    commitFormExpanded = !!expanded;
+    commitForm.classList.toggle('collapsed', !commitFormExpanded);
+    commitFormToggle.textContent = commitFormExpanded ? '▾' : '▸';
+    commitFormToggle.setAttribute('aria-expanded', commitFormExpanded ? 'true' : 'false');
+    saveWebviewState({ commitFormExpanded });
+  }
+
+  function setGroupByDirectory(enabled) {
+    groupByDirectory = !!enabled;
+    if (groupByDirectoryChk) {
+      groupByDirectoryChk.checked = groupByDirectory;
+    }
+    saveWebviewState({ groupByDirectory });
+    renderFiles();
+  }
+
+  function setGroupByModule(enabled) {
+    groupByModule = !!enabled;
+    if (groupByModuleChk) {
+      groupByModuleChk.checked = groupByModule;
+    }
+    saveWebviewState({ groupByModule });
+    renderFiles();
+  }
+
+  function setShowIgnoredFiles(enabled) {
+    showIgnoredFiles = !!enabled;
+    if (showIgnoredFilesChk) {
+      showIgnoredFilesChk.checked = showIgnoredFiles;
+    }
+    saveWebviewState({ showIgnoredFiles });
+    renderFiles();
+  }
+
+  function closeViewOptionsMenu() {
+    if (!viewOptionsMenu || !viewOptionsBtn) {
+      return;
+    }
+    viewOptionsMenu.classList.add('hidden');
+    viewOptionsBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  function toggleViewOptionsMenu() {
+    if (!viewOptionsMenu || !viewOptionsBtn) {
+      return;
+    }
+    const open = viewOptionsMenu.classList.contains('hidden');
+    if (open) {
+      viewOptionsMenu.classList.remove('hidden');
+      viewOptionsBtn.setAttribute('aria-expanded', 'true');
+      if (groupByDirectoryChk) {
+        groupByDirectoryChk.checked = groupByDirectory;
+      }
+      if (groupByModuleChk) {
+        groupByModuleChk.checked = groupByModule;
+      }
+      if (showIgnoredFilesChk) {
+        showIgnoredFilesChk.checked = showIgnoredFiles;
+      }
+    } else {
+      closeViewOptionsMenu();
+    }
+  }
+
+  function walkDirPaths(node, out = []) {
+    for (const child of node.dirs.values()) {
+      if (child.path) {
+        out.push(child.path);
+      }
+      walkDirPaths(child, out);
+    }
+    return out;
+  }
+
+  function collectExpandableCollapseKeys() {
+    const keys = [];
+    const groupIds = showIgnoredFiles
+      ? ['changes', 'unversioned', 'ignored']
+      : ['changes', 'unversioned'];
+    for (const groupId of groupIds) {
+      keys.push(categoryCollapseKey(groupId));
+      for (const repo of allRepos()) {
+        if (groupByModule) {
+          keys.push(repoCollapseKey(groupId, repo.rootPath));
+        }
+        if (!groupByDirectory) {
+          continue;
+        }
+        const items =
+          groupId === 'unversioned'
+            ? getUnversioned(repo)
+            : groupId === 'ignored'
+              ? getIgnored(repo)
+              : getMergedChanges(repo);
+        if (!items.length) {
+          continue;
+        }
+        const tree = buildDirTree(items);
+        compactDirTree(tree);
+        for (const dirPath of walkDirPaths(tree)) {
+          keys.push(dirCollapseKey(groupId, repo.rootPath, dirPath));
+        }
+      }
+    }
+    return keys;
+  }
+
+  function expandAllGroups() {
+    let changed = false;
+    for (const key of [...collapsedGroups]) {
+      if (key.startsWith('dir:') || key.startsWith('repo:') || key.startsWith('category:')) {
+        collapsedGroups.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveCollapsedGroups();
+      renderFiles();
+    }
+  }
+
+  function collapseAllGroups() {
+    let changed = false;
+    // Keep top-level category headers expanded so tree roots stay visible (IDEA-like).
+    const groupIds = showIgnoredFiles
+      ? ['changes', 'unversioned', 'ignored']
+      : ['changes', 'unversioned'];
+    for (const groupId of groupIds) {
+      if (collapsedGroups.has(categoryCollapseKey(groupId))) {
+        collapsedGroups.delete(categoryCollapseKey(groupId));
+        changed = true;
+      }
+    }
+    for (const key of collectExpandableCollapseKeys()) {
+      if (key.startsWith('category:')) {
+        continue;
+      }
+      if (!collapsedGroups.has(key)) {
+        collapsedGroups.add(key);
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveCollapsedGroups();
+      renderFiles();
     }
   }
 
@@ -907,7 +1087,8 @@
     return {
       repoRoot: null,
       groupId,
-      unversionedGroup: groupId === 'unversioned',
+      unversionedGroup: groupId === 'unversioned' || groupId === 'ignored',
+      ignoredGroup: groupId === 'ignored',
       category: true,
     };
   }
@@ -921,7 +1102,8 @@
     return {
       repoRoot: wrap.dataset.repoRoot,
       groupId,
-      unversionedGroup: groupId === 'unversioned',
+      unversionedGroup: groupId === 'unversioned' || groupId === 'ignored',
+      ignoredGroup: groupId === 'ignored',
       category: false,
     };
   }
@@ -930,7 +1112,7 @@
     return resolveRepoSubgroupFromTarget(target) || resolveCategoryGroupFromTarget(target);
   }
 
-  /** Expand Changes category and all repo subgroups (used on Ctrl+K auto-check). */
+  /** Expand Changes category and all repo/dir subgroups (used on Ctrl+K auto-check). */
   function expandChangesGroups() {
     let changed = false;
     if (collapsedGroups.has(categoryCollapseKey('changes'))) {
@@ -942,6 +1124,20 @@
       if (collapsedGroups.has(key)) {
         collapsedGroups.delete(key);
         changed = true;
+      }
+      if (groupByDirectory) {
+        const items = getMergedChanges(repo);
+        if (items.length) {
+          const tree = buildDirTree(items);
+          compactDirTree(tree);
+          for (const dirPath of walkDirPaths(tree)) {
+            const dirKey = dirCollapseKey('changes', repo.rootPath, dirPath);
+            if (collapsedGroups.has(dirKey)) {
+              collapsedGroups.delete(dirKey);
+              changed = true;
+            }
+          }
+        }
       }
     }
     if (changed) {
@@ -1152,6 +1348,46 @@
     return [...map.values()].sort((a, b) => a.path.localeCompare(b.path));
   }
 
+  function getIgnored(active) {
+    return [...(active.ignored ?? [])].sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  function formatDirsAndFiles(dirs, files) {
+    const parts = [];
+    if (dirs > 0) {
+      parts.push(`${dirs} ${dirs === 1 ? 'directory' : 'directories'}`);
+    }
+    if (files > 0) {
+      parts.push(`${files} ${files === 1 ? 'file' : 'files'}`);
+    }
+    return parts.join(' and ') || '0 files';
+  }
+
+  function summarizeIgnoredItems(items) {
+    let dirs = 0;
+    let files = 0;
+    for (const item of items) {
+      if (item.directory) {
+        dirs += 1;
+      } else {
+        files += 1;
+      }
+    }
+    return formatDirsAndFiles(dirs, files);
+  }
+
+  function countTreeSummary(node) {
+    let dirs = 0;
+    let files = node.files.length;
+    for (const child of node.dirs.values()) {
+      dirs += 1;
+      const sub = countTreeSummary(child);
+      dirs += sub.dirs;
+      files += sub.files;
+    }
+    return { dirs, files };
+  }
+
   function splitPath(fullPath) {
     const normalized = (fullPath || '').replace(/\\/g, '/');
     const idx = normalized.lastIndexOf('/');
@@ -1162,6 +1398,240 @@
       name: normalized.slice(idx + 1),
       dir: normalized.slice(0, idx),
     };
+  }
+
+  /** VS Code Seti-style file type badges (letter icons by extension / filename). */
+  const FILE_ICON_BY_NAME = {
+    dockerfile: { label: 'D', color: '#2496ed' },
+    'docker-compose.yml': { label: 'D', color: '#2496ed' },
+    'docker-compose.yaml': { label: 'D', color: '#2496ed' },
+    makefile: { label: 'M', color: '#427819' },
+    gemfile: { label: 'G', color: '#701516' },
+    rakefile: { label: 'R', color: '#701516' },
+    'package.json': { label: 'npm', color: '#cb3837' },
+    'package-lock.json': { label: 'npm', color: '#cb3837' },
+    'tsconfig.json': { label: 'TS', color: '#3178c6' },
+    'jsconfig.json': { label: 'JS', color: '#f1e05a' },
+    '.gitignore': { label: 'GI', color: '#f54d27' },
+    '.gitattributes': { label: 'GI', color: '#f54d27' },
+    '.env': { label: 'ENV', color: '#ecd53f' },
+    'readme.md': { label: 'MD', color: '#083fa1' },
+    'readme': { label: 'MD', color: '#083fa1' },
+  };
+
+  const FILE_ICON_BY_EXT = {
+    java: { label: 'J', color: '#b07219' },
+    class: { label: 'J', color: '#b07219' },
+    jar: { label: 'J', color: '#b07219' },
+    kt: { label: 'K', color: '#A97BFF' },
+    kts: { label: 'K', color: '#A97BFF' },
+    ts: { label: 'TS', color: '#3178c6' },
+    tsx: { label: 'TSX', color: '#3178c6' },
+    mts: { label: 'TS', color: '#3178c6' },
+    cts: { label: 'TS', color: '#3178c6' },
+    js: { label: 'JS', color: '#f1e05a' },
+    jsx: { label: 'JSX', color: '#f1e05a' },
+    mjs: { label: 'JS', color: '#f1e05a' },
+    cjs: { label: 'JS', color: '#f1e05a' },
+    vue: { label: 'V', color: '#41b883' },
+    css: { label: 'CSS', color: '#563d7c' },
+    scss: { label: 'SCSS', color: '#c6538c' },
+    sass: { label: 'SASS', color: '#c6538c' },
+    less: { label: 'LESS', color: '#1d365d' },
+    html: { label: 'HTML', color: '#e34c26' },
+    htm: { label: 'HTML', color: '#e34c26' },
+    xml: { label: 'XML', color: '#e37933' },
+    xhtml: { label: 'XML', color: '#e37933' },
+    json: { label: '{}', color: '#cbcb41' },
+    jsonc: { label: '{}', color: '#cbcb41' },
+    json5: { label: '{}', color: '#cbcb41' },
+    yaml: { label: 'YML', color: '#cb171e' },
+    yml: { label: 'YML', color: '#cb171e' },
+    md: { label: 'MD', color: '#083fa1' },
+    markdown: { label: 'MD', color: '#083fa1' },
+    py: { label: 'PY', color: '#3572A5' },
+    pyw: { label: 'PY', color: '#3572A5' },
+    go: { label: 'GO', color: '#00ADD8' },
+    rs: { label: 'RS', color: '#dea584' },
+    c: { label: 'C', color: '#555555' },
+    h: { label: 'H', color: '#555555' },
+    cpp: { label: 'C++', color: '#f34b7d' },
+    cxx: { label: 'C++', color: '#f34b7d' },
+    cc: { label: 'C++', color: '#f34b7d' },
+    hpp: { label: 'H', color: '#f34b7d' },
+    cs: { label: 'C#', color: '#178600' },
+    php: { label: 'PHP', color: '#4F5D95' },
+    rb: { label: 'RB', color: '#701516' },
+    swift: { label: 'SW', color: '#F05138' },
+    sql: { label: 'SQL', color: '#e38c10' },
+    sh: { label: 'SH', color: '#89e051' },
+    bash: { label: 'SH', color: '#89e051' },
+    zsh: { label: 'SH', color: '#89e051' },
+    ps1: { label: 'PS', color: '#012456' },
+    bat: { label: 'BAT', color: '#C1F12E' },
+    cmd: { label: 'CMD', color: '#C1F12E' },
+    svelte: { label: 'S', color: '#ff3e00' },
+    svg: { label: 'SVG', color: '#ff9900' },
+    png: { label: 'IMG', color: '#a074c4' },
+    jpg: { label: 'IMG', color: '#a074c4' },
+    jpeg: { label: 'IMG', color: '#a074c4' },
+    gif: { label: 'IMG', color: '#a074c4' },
+    webp: { label: 'IMG', color: '#a074c4' },
+    ico: { label: 'IMG', color: '#a074c4' },
+    txt: { label: 'TXT', color: '#8a8a8a' },
+    log: { label: 'LOG', color: '#8a8a8a' },
+    properties: { label: 'P', color: '#8a8a8a' },
+    conf: { label: 'CFG', color: '#8a8a8a' },
+    cfg: { label: 'CFG', color: '#8a8a8a' },
+    ini: { label: 'INI', color: '#8a8a8a' },
+    toml: { label: 'TOML', color: '#9c4221' },
+    gradle: { label: 'G', color: '#02303a' },
+    groovy: { label: 'G', color: '#4298b8' },
+    proto: { label: 'P', color: '#3b82f6' },
+    graphql: { label: 'GQL', color: '#e10098' },
+    gql: { label: 'GQL', color: '#e10098' },
+    dart: { label: 'D', color: '#00B4AB' },
+    lua: { label: 'LUA', color: '#000080' },
+    r: { label: 'R', color: '#198CE7' },
+    scala: { label: 'SC', color: '#c22d40' },
+    clj: { label: 'CLJ', color: '#db5855' },
+    ex: { label: 'EX', color: '#6e4a7e' },
+    exs: { label: 'EX', color: '#6e4a7e' },
+    elm: { label: 'ELM', color: '#60B5CC' },
+    hs: { label: 'HS', color: '#5e5086' },
+    erl: { label: 'ERL', color: '#B83998' },
+  };
+
+  function resolveFileIconSpec(filePath) {
+    const { name } = splitPath(filePath || '');
+    const lower = name.toLowerCase();
+    if (FILE_ICON_BY_NAME[lower]) {
+      return FILE_ICON_BY_NAME[lower];
+    }
+    const dot = lower.lastIndexOf('.');
+    if (dot >= 0) {
+      const ext = lower.slice(dot + 1);
+      if (FILE_ICON_BY_EXT[ext]) {
+        return FILE_ICON_BY_EXT[ext];
+      }
+      // compound like .d.ts
+      if (lower.endsWith('.d.ts')) {
+        return FILE_ICON_BY_EXT.ts;
+      }
+    }
+    return { label: 'F', color: '#8a8a8a' };
+  }
+
+  function createFolderTypeIcon() {
+    const folderIcon = document.createElement('span');
+    folderIcon.className = 'file-type-icon folder';
+    folderIcon.setAttribute('aria-hidden', 'true');
+    const folderSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    folderSvg.setAttribute('viewBox', '0 0 16 16');
+    folderSvg.setAttribute('width', '14');
+    folderSvg.setAttribute('height', '14');
+    folderSvg.setAttribute('focusable', 'false');
+    const folderPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    folderPath.setAttribute('fill', 'currentColor');
+    folderPath.setAttribute(
+      'd',
+      'M1.5 3.5A1.5 1.5 0 0 1 3 2h3.2c.3 0 .6.1.8.3L8.2 3.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3.5Z'
+    );
+    folderSvg.appendChild(folderPath);
+    folderIcon.appendChild(folderSvg);
+    return folderIcon;
+  }
+
+  function createFileTypeIcon(filePath, isDirectory) {
+    if (isDirectory) {
+      return createFolderTypeIcon();
+    }
+    const spec = resolveFileIconSpec(filePath);
+    const el = document.createElement('span');
+    const wide = (spec.label || '').length > 2;
+    el.className = 'file-type-icon' + (wide ? ' wide' : spec.label.length > 1 ? ' mid' : '');
+    el.style.color = spec.color;
+    el.textContent = spec.label;
+    el.setAttribute('aria-hidden', 'true');
+    return el;
+  }
+
+  function statusLetterLabel(status) {
+    if (status === '?') {
+      return 'A';
+    }
+    return status || '';
+  }
+
+  /** Build a directory tree from change items (paths use `/`). */
+  function buildDirTree(items) {
+    const root = { name: '', path: '', dirs: new Map(), files: [] };
+    for (const item of items) {
+      const normalized = (item.path || '').replace(/\\/g, '/').replace(/\/+$/, '');
+      const parts = normalized.split('/').filter(Boolean);
+      if (!parts.length) {
+        continue;
+      }
+      if (item.directory) {
+        let node = root;
+        for (let i = 0; i < parts.length; i += 1) {
+          const part = parts[i];
+          if (!node.dirs.has(part)) {
+            const childPath = node.path ? `${node.path}/${part}` : part;
+            node.dirs.set(part, { name: part, path: childPath, dirs: new Map(), files: [] });
+          }
+          node = node.dirs.get(part);
+        }
+        continue;
+      }
+      let node = root;
+      for (let i = 0; i < parts.length - 1; i += 1) {
+        const part = parts[i];
+        if (!node.dirs.has(part)) {
+          const childPath = node.path ? `${node.path}/${part}` : part;
+          node.dirs.set(part, { name: part, path: childPath, dirs: new Map(), files: [] });
+        }
+        node = node.dirs.get(part);
+      }
+      node.files.push(item);
+    }
+    return root;
+  }
+
+  /** Compact chains of single-child dirs (IDEA-style `src/views`). Does not compact the root. */
+  function compactDirTree(node) {
+    const children = [...node.dirs.values()];
+    node.dirs.clear();
+    for (const child of children) {
+      compactDirTree(child);
+      while (child.dirs.size === 1 && child.files.length === 0) {
+        const only = child.dirs.values().next().value;
+        child.name = `${child.name}/${only.name}`;
+        child.path = only.path;
+        child.dirs = only.dirs;
+        child.files = only.files;
+      }
+      node.dirs.set(child.name, child);
+    }
+  }
+
+  function collectTreeLeaves(node, out = []) {
+    const dirNames = [...node.dirs.keys()].sort((a, b) => a.localeCompare(b));
+    for (const name of dirNames) {
+      collectTreeLeaves(node.dirs.get(name), out);
+    }
+    const files = [...node.files].sort((a, b) => a.path.localeCompare(b.path));
+    out.push(...files);
+    return out;
+  }
+
+  function collectTreeFiles(node, out = []) {
+    const dirNames = [...node.dirs.keys()].sort((a, b) => a.localeCompare(b));
+    for (const name of dirNames) {
+      collectTreeFiles(node.dirs.get(name), out);
+    }
+    out.push(...node.files);
+    return out;
   }
 
   function isSelectedItem(_active, repoRoot, item, staged) {
@@ -1175,7 +1645,9 @@
           const items =
             selectedGroup.groupId === 'unversioned'
               ? getUnversioned(repo)
-              : getMergedChanges(repo);
+              : selectedGroup.groupId === 'ignored'
+                ? getIgnored(repo)
+                : getMergedChanges(repo);
           if (items.length > 0) {
             return true;
           }
@@ -1189,7 +1661,9 @@
       const items =
         selectedGroup.groupId === 'unversioned'
           ? getUnversioned(repo)
-          : getMergedChanges(repo);
+          : selectedGroup.groupId === 'ignored'
+            ? getIgnored(repo)
+            : getMergedChanges(repo);
       return items.length > 0;
     }
     if (!selectedFiles.length) {
@@ -1202,14 +1676,18 @@
       }
       const tracked = getMergedChanges(repo);
       const unversioned = getUnversioned(repo);
+      const ignored = getIgnored(repo);
       if (tracked.some((i) => i.path === entry.path)) {
         return true;
       }
-      return unversioned.some((i) => i.path === entry.path);
+      if (unversioned.some((i) => i.path === entry.path)) {
+        return true;
+      }
+      return ignored.some((i) => i.path === entry.path);
     });
   }
 
-  function showContextMenuAt(x, y, targets, unversionedGroup = false) {
+  function showContextMenuAt(x, y, targets, unversionedGroup = false, ignoredGroup = false) {
     if (!targets.length) {
       return;
     }
@@ -1220,7 +1698,9 @@
     if (unversionedGroup) {
       const addToGit = document.createElement('button');
       addToGit.type = 'button';
-      addToGit.textContent = `Add to Git (Ctrl+Alt+A)${countLabel}`;
+      addToGit.textContent = ignoredGroup
+        ? `Force Add to Git${countLabel}`
+        : `Add to Git (Ctrl+Alt+A)${countLabel}`;
       addToGit.addEventListener('click', () => {
         hideContextMenu();
         post({
@@ -1242,21 +1722,23 @@
     });
     contextMenu.appendChild(openFile);
 
-    const openDiff = document.createElement('button');
-    openDiff.type = 'button';
-    openDiff.textContent = `Show Diff (Ctrl+D)${countLabel}`;
-    openDiff.addEventListener('click', () => {
-      hideContextMenu();
-      for (const target of targets) {
-        post({
-          type: 'openDiff',
-          repoRoot: target.repoRoot,
-          path: target.path,
-          staged: target.staged,
-        });
-      }
-    });
-    contextMenu.appendChild(openDiff);
+    if (!ignoredGroup) {
+      const openDiff = document.createElement('button');
+      openDiff.type = 'button';
+      openDiff.textContent = `Show Diff (Ctrl+D)${countLabel}`;
+      openDiff.addEventListener('click', () => {
+        hideContextMenu();
+        for (const target of targets) {
+          post({
+            type: 'openDiff',
+            repoRoot: target.repoRoot,
+            path: target.path,
+            staged: target.staged,
+          });
+        }
+      });
+      contextMenu.appendChild(openDiff);
+    }
 
     const reveal = document.createElement('button');
     reveal.type = 'button';
@@ -1269,28 +1751,30 @@
     });
     contextMenu.appendChild(reveal);
 
-    const rollback = document.createElement('button');
-    rollback.type = 'button';
-    rollback.textContent = `Rollback (Ctrl+Alt+Z)${countLabel}`;
-    rollback.addEventListener('click', () => {
-      hideContextMenu();
-      if (targets.length === 1) {
-        const target = targets[0];
+    if (!ignoredGroup) {
+      const rollback = document.createElement('button');
+      rollback.type = 'button';
+      rollback.textContent = `Rollback (Ctrl+Alt+Z)${countLabel}`;
+      rollback.addEventListener('click', () => {
+        hideContextMenu();
+        if (targets.length === 1) {
+          const target = targets[0];
+          post({
+            type: 'rollback',
+            repoRoot: target.repoRoot,
+            path: target.path,
+            staged: target.staged,
+          });
+          return;
+        }
         post({
-          type: 'rollback',
-          repoRoot: target.repoRoot,
-          path: target.path,
-          staged: target.staged,
+          type: 'rollbackBatch',
+          paths: targets.map(({ repoRoot, path, staged }) => ({ repoRoot, path, staged })),
+          unversionedGroup,
         });
-        return;
-      }
-      post({
-        type: 'rollbackBatch',
-        paths: targets.map(({ repoRoot, path, staged }) => ({ repoRoot, path, staged })),
-        unversionedGroup,
       });
-    });
-    contextMenu.appendChild(rollback);
+      contextMenu.appendChild(rollback);
+    }
 
     contextMenu.classList.remove('hidden');
     const rect = contextMenu.getBoundingClientRect();
@@ -1340,11 +1824,20 @@
     const unversionedEntries = repos.map((repo) => ({ repo, items: getUnversioned(repo) }));
 
     fileList.appendChild(
-      renderCategoryGroup('Changes', 'changes', changesEntries, false, focused)
+      renderCategoryGroup('Changes', 'changes', changesEntries, false, focused, false)
     );
     fileList.appendChild(
-      renderCategoryGroup('Unversioned Files', 'unversioned', unversionedEntries, true, focused)
+      renderCategoryGroup('Unversioned Files', 'unversioned', unversionedEntries, true, focused, false)
     );
+    if (showIgnoredFiles) {
+      const ignoredEntries = repos.map((repo) => ({ repo, items: getIgnored(repo) }));
+      const hasIgnored = ignoredEntries.some(({ items }) => items.length > 0);
+      if (hasIgnored) {
+        fileList.appendChild(
+          renderCategoryGroup('Ignored Files', 'ignored', ignoredEntries, true, focused, true)
+        );
+      }
+    }
   }
 
   function countSelectedInEntries(entries, unversionedGroup) {
@@ -1374,13 +1867,13 @@
   }
 
   function attachGroupHeaderInteractions(head, groupContext, items, onToggleCollapse) {
-    const { repoRoot, groupId, unversionedGroup, category } = groupContext;
+    const { repoRoot, groupId, unversionedGroup, category, ignoredGroup } = groupContext;
 
     head.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || e.target.closest('input')) {
         return;
       }
-      if (e.target.closest('.group-title-chevron') || e.target.closest('.repo-subgroup-chevron')) {
+      if (e.target.closest('.group-title-chevron') || e.target.closest('.repo-subgroup-chevron') || e.target.closest('.dir-group-chevron')) {
         return;
       }
       const clickKey = category
@@ -1400,7 +1893,9 @@
         return;
       }
       const onChevron =
-        e.target.closest('.group-title-chevron') || e.target.closest('.repo-subgroup-chevron');
+        e.target.closest('.group-title-chevron') ||
+        e.target.closest('.repo-subgroup-chevron') ||
+        e.target.closest('.dir-group-chevron');
       if (onChevron) {
         onToggleCollapse();
         return;
@@ -1421,7 +1916,7 @@
       if (e.target.closest('input')) {
         return;
       }
-      if (e.target.closest('.group-title-chevron') || e.target.closest('.repo-subgroup-chevron')) {
+      if (e.target.closest('.group-title-chevron') || e.target.closest('.repo-subgroup-chevron') || e.target.closest('.dir-group-chevron')) {
         return;
       }
       e.preventDefault();
@@ -1443,7 +1938,7 @@
       const targets = category
         ? entriesToTargets(groupContext.entries, unversionedGroup)
         : targetsFromGroup(repoRoot, groupId, items, unversionedGroup);
-      showContextMenuAt(e.clientX, e.clientY, targets, unversionedGroup);
+      showContextMenuAt(e.clientX, e.clientY, targets, unversionedGroup, !!ignoredGroup);
     });
   }
 
@@ -1455,18 +1950,12 @@
     return targets;
   }
 
-  function renderCategoryGroup(title, groupId, entries, unversionedGroup, focusedRoot) {
+  function renderCategoryGroup(title, groupId, entries, unversionedGroup, focusedRoot, ignoredGroup = false) {
     const wrap = document.createElement('div');
-    wrap.className = 'category-group';
+    wrap.className = 'category-group' + (ignoredGroup ? ' category-ignored' : '');
     wrap.dataset.groupId = groupId;
 
     const { selected, total } = countSelectedInEntries(entries, unversionedGroup);
-    const categoryCollapsed = collapsedGroups.has(categoryCollapseKey(groupId));
-    // Avoid a "blank panel" look: if Changes was left collapsed with files inside, expand it.
-    if (categoryCollapsed && groupId === 'changes' && total > 0) {
-      collapsedGroups.delete(categoryCollapseKey(groupId));
-      saveWebviewState({ collapsedGroups: Array.from(collapsedGroups) });
-    }
     const isCollapsed = collapsedGroups.has(categoryCollapseKey(groupId));
 
     const head = document.createElement('div');
@@ -1478,7 +1967,11 @@
     const selectAll = document.createElement('input');
     selectAll.type = 'checkbox';
     selectAll.className = 'group-select-all';
-    selectAll.title = unversionedGroup ? 'Select all' : 'Include all in commit';
+    selectAll.title = ignoredGroup
+      ? 'Select all ignored paths'
+      : unversionedGroup
+        ? 'Select all'
+        : 'Include all in commit';
     selectAll.disabled = total === 0;
     selectAll.checked = total > 0 && selected === total;
     selectAll.indeterminate = selected > 0 && selected < total;
@@ -1501,7 +1994,12 @@
 
     const count = document.createElement('span');
     count.className = 'group-title-count';
-    count.textContent = unversionedGroup ? `${total} files` : formatGroupCount(selected, total);
+    if (ignoredGroup) {
+      const allItems = entries.flatMap(({ items }) => items);
+      count.textContent = summarizeIgnoredItems(allItems);
+    } else {
+      count.textContent = unversionedGroup ? `${total} files` : formatGroupCount(selected, total);
+    }
 
     head.appendChild(selectAll);
     head.appendChild(chevron);
@@ -1517,6 +2015,7 @@
       items: entries.flatMap(({ items }) => items),
       entries,
       unversionedGroup,
+      ignoredGroup,
       category: true,
     };
     attachGroupHeaderInteractions(head, groupContext, groupContext.items, () =>
@@ -1532,30 +2031,39 @@
       return wrap;
     }
 
-    const multi = entries.length > 1;
-    if (!multi) {
-      const { repo, items } = entries[0];
-      if (!items.length) {
-        return wrap;
+    // Module = repository grouping (IDEA modules ≈ workspace Git repos).
+    const nonEmpty = entries.filter(({ items }) => items.length > 0);
+    if (!nonEmpty.length) {
+      return wrap;
+    }
+
+    if (groupByModule) {
+      for (const { repo, items } of entries) {
+        wrap.appendChild(
+          renderRepoSubgroup(repo, items, groupId, unversionedGroup, focusedRoot, ignoredGroup)
+        );
       }
+      return wrap;
+    }
+
+    // Directory-only (or flat): no module headers — folders/files hang under the category.
+    for (const { repo, items } of nonEmpty) {
       const repoGroupContext = {
         repoRoot: repo.rootPath,
         groupId,
         items,
         unversionedGroup,
+        ignoredGroup,
         category: false,
       };
-      wrap.appendChild(renderFileRows(items, repo.rootPath, unversionedGroup, groupId, repoGroupContext, false));
-      return wrap;
-    }
-
-    for (const { repo, items } of entries) {
-      wrap.appendChild(renderRepoSubgroup(repo, items, groupId, unversionedGroup, focusedRoot));
+      wrap.appendChild(
+        renderFileList(items, repo.rootPath, unversionedGroup, groupId, repoGroupContext, false)
+      );
     }
     return wrap;
   }
 
-  function renderRepoSubgroup(repo, items, groupId, unversionedGroup, focusedRoot) {
+  function renderRepoSubgroup(repo, items, groupId, unversionedGroup, focusedRoot, ignoredGroup = false) {
     const wrap = document.createElement('div');
     wrap.className = 'repo-subgroup';
     wrap.dataset.repoRoot = repo.rootPath;
@@ -1616,9 +2124,13 @@
 
     const count = document.createElement('span');
     count.className = 'repo-subgroup-count';
-    count.textContent = unversionedGroup
-      ? `${items.length} files`
-      : formatGroupCount(selectedCount, items.length);
+    if (ignoredGroup) {
+      count.textContent = summarizeIgnoredItems(items);
+    } else {
+      count.textContent = unversionedGroup
+        ? `${items.length} files`
+        : formatGroupCount(selectedCount, items.length);
+    }
 
     head.appendChild(selectAll);
     head.appendChild(chevron);
@@ -1639,6 +2151,7 @@
       groupId,
       items,
       unversionedGroup,
+      ignoredGroup,
       category: false,
     };
     attachGroupHeaderInteractions(head, groupContext, items, () =>
@@ -1655,146 +2168,421 @@
       return wrap;
     }
 
-    wrap.appendChild(renderFileRows(items, repo.rootPath, unversionedGroup, groupId, groupContext, true));
+    wrap.appendChild(renderFileList(items, repo.rootPath, unversionedGroup, groupId, groupContext, true));
     return wrap;
   }
 
-  function renderFileRows(items, repoRoot, unversionedGroup, groupId, groupContext, nested) {
+  function renderFileList(items, repoRoot, unversionedGroup, groupId, groupContext, nested) {
+    if (groupByDirectory) {
+      return renderFileTree(items, repoRoot, unversionedGroup, groupId, groupContext, nested);
+    }
+    return renderFlatFileRows(items, repoRoot, unversionedGroup, groupId, groupContext, nested);
+  }
+
+  function renderFlatFileRows(items, repoRoot, unversionedGroup, groupId, groupContext, nested) {
     const list = document.createElement('div');
     list.className = nested ? 'file-rows nested' : 'file-rows';
+    const sorted = [...items].sort((a, b) => a.path.localeCompare(b.path));
+    groupContext.items = sorted;
+    for (let indexInGroup = 0; indexInGroup < sorted.length; indexInGroup += 1) {
+      list.appendChild(
+        createFileRow(
+          sorted[indexInGroup],
+          repoRoot,
+          unversionedGroup,
+          groupId,
+          groupContext,
+          indexInGroup,
+          0,
+          true
+        )
+      );
+    }
+    return list;
+  }
 
-    for (let indexInGroup = 0; indexInGroup < items.length; indexInGroup += 1) {
-      const item = items[indexInGroup];
-      const gitStaged = item.staged;
-      const included = unversionedGroup ? false : isChangeChecked(repoRoot, item.path);
-      const row = document.createElement('div');
-      row.className = 'file-row ' + (unversionedGroup ? 'group-unversioned' : 'group-changes');
-      row.dataset.repoRoot = repoRoot;
-      row.dataset.filePath = item.path;
-      row.dataset.fileStaged = gitStaged ? '1' : '0';
-      if (isSelectedItem(null, repoRoot, item, gitStaged)) {
-        row.classList.add('selected');
+  function renderFileTree(items, repoRoot, unversionedGroup, groupId, groupContext, nested) {
+    const list = document.createElement('div');
+    list.className = nested ? 'file-tree nested' : 'file-tree';
+
+    const tree = buildDirTree(items);
+    compactDirTree(tree);
+    const leafOrder = collectTreeLeaves(tree);
+    groupContext.items = leafOrder;
+    const indexByPath = new Map(leafOrder.map((item, i) => [item.path, i]));
+
+    function appendNode(parentEl, node, depth) {
+      const dirNames = [...node.dirs.keys()].sort((a, b) => a.localeCompare(b));
+      for (const dirName of dirNames) {
+        parentEl.appendChild(renderDirGroup(node.dirs.get(dirName), depth));
       }
+      const files = [...node.files].sort((a, b) => a.path.localeCompare(b.path));
+      for (const item of files) {
+        parentEl.appendChild(
+          createFileRow(item, repoRoot, unversionedGroup, groupId, groupContext, indexByPath.get(item.path) ?? 0, depth, false)
+        );
+      }
+    }
 
-      const entry = { repoRoot, path: item.path, staged: gitStaged };
+    function renderDirGroup(dirNode, depth) {
+      const wrap = document.createElement('div');
+      wrap.className = 'dir-group';
+      wrap.dataset.dirPath = dirNode.path;
 
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      if (unversionedGroup) {
-        const checked = isUnversionedChecked(repoRoot, item.path);
-        checkbox.checked = checked;
-        checkbox.title = checked ? 'Selected to add to Git' : 'Not selected';
-        checkbox.addEventListener('click', (e) => {
-          e.stopPropagation();
-          toggleUnversionedChecked(repoRoot, item.path, checkbox.checked);
-          renderFiles();
-        });
+      const descendantFiles = collectTreeFiles(dirNode);
+      const selfDirItem =
+        groupContext.ignoredGroup
+          ? items.find((i) => i.directory && i.path === dirNode.path)
+          : undefined;
+      const actionableItems =
+        descendantFiles.length > 0
+          ? descendantFiles
+          : selfDirItem
+            ? [selfDirItem]
+            : [];
+      const fileCount = actionableItems.length;
+      const selectedCount = unversionedGroup
+        ? actionableItems.filter((i) => isUnversionedChecked(repoRoot, i.path)).length
+        : actionableItems.filter((i) => isChangeChecked(repoRoot, i.path)).length;
+      const isCollapsed = collapsedGroups.has(dirCollapseKey(groupId, repoRoot, dirNode.path));
+
+      const head = document.createElement('div');
+      head.className = 'dir-group-title collapsible';
+      head.style.setProperty('--tree-depth', String(depth));
+      head.title = dirNode.path;
+
+      const selectAll = document.createElement('input');
+      selectAll.type = 'checkbox';
+      selectAll.className = 'group-select-all';
+      selectAll.title = unversionedGroup ? 'Select all in folder' : 'Include all in folder';
+      selectAll.disabled = fileCount === 0;
+      selectAll.checked = fileCount > 0 && selectedCount === fileCount;
+      selectAll.indeterminate = selectedCount > 0 && selectedCount < fileCount;
+      selectAll.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!fileCount) {
+          return;
+        }
+        const checked = selectAll.checked;
+        if (unversionedGroup) {
+          for (const item of actionableItems) {
+            toggleUnversionedChecked(repoRoot, item.path, checked);
+          }
+        } else {
+          for (const item of actionableItems) {
+            setChangeChecked(repoRoot, item.path, checked);
+          }
+        }
+        renderFiles();
+      });
+
+      const chevron = document.createElement('span');
+      chevron.className = 'dir-group-chevron';
+      chevron.textContent = isCollapsed ? '▸' : '▾';
+
+      const folderIcon = document.createElement('span');
+      folderIcon.className = 'dir-group-icon';
+      folderIcon.setAttribute('aria-hidden', 'true');
+      const folderSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      folderSvg.setAttribute('viewBox', '0 0 16 16');
+      folderSvg.setAttribute('width', '14');
+      folderSvg.setAttribute('height', '14');
+      folderSvg.setAttribute('focusable', 'false');
+      const folderPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      folderPath.setAttribute('fill', 'currentColor');
+      folderPath.setAttribute(
+        'd',
+        'M1.5 3.5A1.5 1.5 0 0 1 3 2h3.2c.3 0 .6.1.8.3L8.2 3.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3.5Z'
+      );
+      folderSvg.appendChild(folderPath);
+      folderIcon.appendChild(folderSvg);
+
+      const name = document.createElement('span');
+      name.className = 'dir-group-name';
+      name.textContent = dirNode.name;
+
+      const count = document.createElement('span');
+      count.className = 'dir-group-count';
+      if (groupContext.ignoredGroup) {
+        const summary = countTreeSummary(dirNode);
+        count.textContent = formatDirsAndFiles(summary.dirs, summary.files);
       } else {
-        checkbox.checked = included;
-        checkbox.title = included ? 'Included in commit' : 'Excluded from commit';
-        checkbox.addEventListener('click', (e) => {
-          e.stopPropagation();
-          setChangeChecked(repoRoot, item.path, checkbox.checked);
-          renderFiles();
-        });
+        count.textContent = `${fileCount} ${fileCount === 1 ? 'file' : 'files'}`;
       }
-      row.appendChild(checkbox);
 
-      const status = document.createElement('span');
-      status.className = 'status ' + (item.status === '?' ? 'A' : item.status);
-      status.textContent = item.status;
+      head.appendChild(selectAll);
+      head.appendChild(chevron);
+      head.appendChild(folderIcon);
+      head.appendChild(name);
+      head.appendChild(count);
 
-      const pathEl = document.createElement('span');
-      pathEl.className = 'path';
-      const { name, dir } = splitPath(item.path);
+      const toggleCollapse = () => toggleDirCollapsed(groupId, repoRoot, dirNode.path);
 
-      const nameEl = document.createElement('span');
-      nameEl.className = 'file-name';
-      nameEl.textContent = name;
-      pathEl.appendChild(nameEl);
+      head.addEventListener('mousedown', (e) => {
+        if (e.button !== 0 || e.target.closest('input')) {
+          return;
+        }
+        if (e.target.closest('.dir-group-chevron')) {
+          return;
+        }
+        const clickKey = `dir|${repoKey(repoRoot)}|${groupId}|${dirNode.path}`;
+        if (consumePointerDouble(clickKey)) {
+          toggleCollapse();
+        }
+      });
 
+      head.addEventListener('click', (e) => {
+        if (shouldSuppressPointerFollowUp()) {
+          e.preventDefault();
+          return;
+        }
+        if (e.target.closest('input')) {
+          return;
+        }
+        if (e.target.closest('.dir-group-chevron')) {
+          toggleCollapse();
+          return;
+        }
+        clearGroupSelection();
+        selectedFiles = actionableItems.map((item) => ({
+          repoRoot,
+          path: item.path,
+          staged: item.staged ?? false,
+        }));
+        if (actionableItems.length) {
+          const first = actionableItems[0];
+          selectionAnchor = {
+            repoRoot,
+            groupId,
+            index: indexByPath.get(first.path) ?? 0,
+          };
+        }
+        syncSelectionToHost();
+        hideContextMenu();
+        applyFileListSelectionVisuals();
+        if (repoRoot) {
+          focusCommitLogRepo(repoRoot, true);
+        }
+      });
+
+      head.addEventListener('dblclick', (e) => {
+        if (shouldSuppressPointerFollowUp()) {
+          e.preventDefault();
+          return;
+        }
+        if (e.target.closest('input')) {
+          return;
+        }
+        if (e.target.closest('.dir-group-chevron')) {
+          return;
+        }
+        e.preventDefault();
+        markPointerFollowUpSuppressed();
+        toggleCollapse();
+      });
+
+      head.addEventListener('contextmenu', (e) => {
+        if (e.target.closest('input')) {
+          return;
+        }
+        e.preventDefault();
+        clearGroupSelection();
+        selectedFiles = actionableItems.map((item) => ({
+          repoRoot,
+          path: item.path,
+          staged: item.staged ?? false,
+        }));
+        if (actionableItems.length) {
+          const first = actionableItems[0];
+          selectionAnchor = {
+            repoRoot,
+            groupId,
+            index: indexByPath.get(first.path) ?? 0,
+          };
+        }
+        syncSelectionToHost();
+        applyFileListSelectionVisuals();
+        if (!actionableItems.length) {
+          return;
+        }
+        showContextMenuAt(
+          e.clientX,
+          e.clientY,
+          targetsFromGroup(repoRoot, groupId, actionableItems, unversionedGroup),
+          unversionedGroup,
+          !!groupContext.ignoredGroup
+        );
+      });
+
+      wrap.appendChild(head);
+
+      if (isCollapsed) {
+        wrap.classList.add('collapsed');
+        return wrap;
+      }
+
+      const children = document.createElement('div');
+      children.className = 'dir-group-children';
+      appendNode(children, dirNode, depth + 1);
+      wrap.appendChild(children);
+      return wrap;
+    }
+
+    appendNode(list, tree, 0);
+    return list;
+  }
+
+  function createFileRow(item, repoRoot, unversionedGroup, groupId, groupContext, indexInGroup, depth, showDir) {
+    const gitStaged = item.staged;
+    const included = unversionedGroup ? false : isChangeChecked(repoRoot, item.path);
+    const row = document.createElement('div');
+    const ignoredGroup = !!groupContext.ignoredGroup;
+    row.className =
+      'file-row ' +
+      (ignoredGroup ? 'group-ignored' : unversionedGroup ? 'group-unversioned' : 'group-changes');
+    row.dataset.repoRoot = repoRoot;
+    row.dataset.filePath = item.path;
+    row.dataset.fileStaged = gitStaged ? '1' : '0';
+    row.style.setProperty('--tree-depth', String(depth));
+    if (isSelectedItem(null, repoRoot, item, gitStaged)) {
+      row.classList.add('selected');
+    }
+
+    const entry = { repoRoot, path: item.path, staged: gitStaged };
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    if (unversionedGroup) {
+      const checked = isUnversionedChecked(repoRoot, item.path);
+      checkbox.checked = checked;
+      checkbox.title = ignoredGroup
+        ? checked
+          ? 'Selected to force-add to Git'
+          : 'Not selected'
+        : checked
+          ? 'Selected to add to Git'
+          : 'Not selected';
+      checkbox.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleUnversionedChecked(repoRoot, item.path, checkbox.checked);
+        renderFiles();
+      });
+    } else {
+      checkbox.checked = included;
+      checkbox.title = included ? 'Included in commit' : 'Excluded from commit';
+      checkbox.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setChangeChecked(repoRoot, item.path, checkbox.checked);
+        renderFiles();
+      });
+    }
+    row.appendChild(checkbox);
+
+    const typeIcon = createFileTypeIcon(item.path, !!item.directory);
+    const gitLetter = statusLetterLabel(item.status);
+    if (gitLetter) {
+      typeIcon.title = `Git: ${gitLetter}`;
+      typeIcon.dataset.gitStatus = gitLetter;
+    }
+
+    const pathEl = document.createElement('span');
+    pathEl.className = 'path';
+    const { name, dir } = splitPath(item.path);
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'file-name';
+    nameEl.textContent = item.directory ? `${name}/` : name;
+    pathEl.appendChild(nameEl);
+
+    if (showDir) {
       const dirEl = document.createElement('span');
       dirEl.className = 'file-dir';
-      if (unversionedGroup) {
+      if (unversionedGroup || ignoredGroup) {
         dirEl.textContent = item.path;
         pathEl.appendChild(dirEl);
       } else if (dir) {
         dirEl.textContent = dir;
         pathEl.appendChild(dirEl);
       }
-      if (item.unsaved) {
-        const unsavedEl = document.createElement('span');
-        unsavedEl.className = 'file-unsaved';
-        unsavedEl.textContent = '(unsaved)';
-        pathEl.appendChild(unsavedEl);
-      }
-
-      pathEl.title = item.unsaved
-        ? `${item.path} — unsaved`
-        : unversionedGroup
-          ? `${item.path} — checked = add to Git (Ctrl+Alt+A); right-click for more`
-          : `${item.path} — checked = commit; right-click for more`;
-
-      row.appendChild(status);
-      row.appendChild(pathEl);
-      row.addEventListener('mousedown', (e) => {
-        if (e.button !== 0 || e.target.closest('input')) {
-          return;
-        }
-        const clickKey = `file|${repoKey(repoRoot)}|${item.path}|${gitStaged ? '1' : '0'}`;
-        if (consumePointerDouble(clickKey)) {
-          openFileDiff(entry, groupId, indexInGroup);
-        }
-      });
-      row.addEventListener('click', (e) => {
-        if (shouldSuppressPointerFollowUp()) {
-          e.preventDefault();
-          return;
-        }
-        if (e.target.closest('input')) {
-          return;
-        }
-        handleFileSelectionClick(e, entry, groupContext, indexInGroup);
-        hideContextMenu();
-        applyFileListSelectionVisuals();
-      });
-      row.addEventListener('dblclick', (e) => {
-        if (shouldSuppressPointerFollowUp()) {
-          e.preventDefault();
-          return;
-        }
-        if (e.target.closest('input')) {
-          return;
-        }
-        e.preventDefault();
-        markPointerFollowUpSuppressed();
-        openFileDiff(entry, groupId, indexInGroup);
-      });
-      row.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        clearGroupSelection();
-        if (selectedFiles.length <= 1 || !isFileSelected(repoRoot, item, gitStaged)) {
-          selectedFiles = [entry];
-          selectionAnchor = { repoRoot, groupId, index: indexInGroup };
-        }
-        syncSelectionToHost();
-        applyFileListSelectionVisuals();
-        showContextMenuAt(
-          e.clientX,
-          e.clientY,
-          targetsForContextMenu(entry, groupContext, indexInGroup),
-          unversionedGroup
-        );
-      });
-      list.appendChild(row);
     }
-    return list;
+
+    if (item.unsaved) {
+      const unsavedEl = document.createElement('span');
+      unsavedEl.className = 'file-unsaved';
+      unsavedEl.textContent = '(unsaved)';
+      pathEl.appendChild(unsavedEl);
+    }
+
+    const statusHint = gitLetter ? ` [${gitLetter}]` : '';
+    pathEl.title = item.unsaved
+      ? `${item.path}${statusHint} — unsaved`
+      : ignoredGroup
+        ? `${item.path}${statusHint} — ignored by Git; right-click to force-add`
+        : unversionedGroup
+          ? `${item.path}${statusHint} — checked = add to Git (Ctrl+Alt+A); right-click for more`
+          : `${item.path}${statusHint} — checked = commit; right-click for more`;
+
+    row.appendChild(typeIcon);
+    row.appendChild(pathEl);
+    row.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || e.target.closest('input')) {
+        return;
+      }
+      const clickKey = `file|${repoKey(repoRoot)}|${item.path}|${gitStaged ? '1' : '0'}`;
+      if (consumePointerDouble(clickKey)) {
+        openFileDiff(entry, groupId, indexInGroup);
+      }
+    });
+    row.addEventListener('click', (e) => {
+      if (shouldSuppressPointerFollowUp()) {
+        e.preventDefault();
+        return;
+      }
+      if (e.target.closest('input')) {
+        return;
+      }
+      handleFileSelectionClick(e, entry, groupContext, indexInGroup);
+      hideContextMenu();
+      applyFileListSelectionVisuals();
+    });
+    row.addEventListener('dblclick', (e) => {
+      if (shouldSuppressPointerFollowUp()) {
+        e.preventDefault();
+        return;
+      }
+      if (e.target.closest('input')) {
+        return;
+      }
+      e.preventDefault();
+      markPointerFollowUpSuppressed();
+      openFileDiff(entry, groupId, indexInGroup);
+    });
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      clearGroupSelection();
+      if (selectedFiles.length <= 1 || !isFileSelected(repoRoot, item, gitStaged)) {
+        selectedFiles = [entry];
+        selectionAnchor = { repoRoot, groupId, index: indexInGroup };
+      }
+      syncSelectionToHost();
+      applyFileListSelectionVisuals();
+      showContextMenuAt(
+        e.clientX,
+        e.clientY,
+        targetsForContextMenu(entry, groupContext, indexInGroup),
+        unversionedGroup,
+        !!groupContext.ignoredGroup
+      );
+    });
+    return row;
   }
 
   function validateBeforeCommit() {
     const message = messageEl.value.trim();
     if (!message) {
+      setCommitFormExpanded(true);
       showFormError('Commit message cannot be empty.');
+      messageEl.focus();
       return null;
     }
     if (!totalIncludableCount()) {
@@ -2324,6 +3112,7 @@
     if (generatingMessage || workspace.busy) {
       return;
     }
+    setCommitFormExpanded(true);
     if (!totalIncludableCount()) {
       showFormError('Select files to include before generating a commit message.');
       return;
@@ -2335,6 +3124,41 @@
   });
 
   try {
+    commitFormToggle?.addEventListener('click', () => {
+      setCommitFormExpanded(!commitFormExpanded);
+    });
+
+    expandAllBtn?.addEventListener('click', () => {
+      closeViewOptionsMenu();
+      expandAllGroups();
+    });
+
+    collapseAllBtn?.addEventListener('click', () => {
+      closeViewOptionsMenu();
+      collapseAllGroups();
+    });
+
+    viewOptionsBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleViewOptionsMenu();
+    });
+
+    groupByDirectoryChk?.addEventListener('change', () => {
+      setGroupByDirectory(groupByDirectoryChk.checked);
+    });
+
+    groupByModuleChk?.addEventListener('change', () => {
+      setGroupByModule(groupByModuleChk.checked);
+    });
+
+    showIgnoredFilesChk?.addEventListener('change', () => {
+      setShowIgnoredFiles(showIgnoredFilesChk.checked);
+    });
+
+    viewOptionsMenu?.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+
     commitLogToggle?.addEventListener('click', () => {
       setCommitLogExpanded(!commitLogExpanded);
     });
@@ -2392,6 +3216,18 @@
 
     if (commitLogPane && commitLogToggle && commitLogRepo && commitLogList) {
       setCommitLogExpanded(commitLogExpanded);
+    }
+    if (commitForm && commitFormToggle) {
+      setCommitFormExpanded(commitFormExpanded);
+    }
+    if (groupByDirectoryChk) {
+      groupByDirectoryChk.checked = groupByDirectory;
+    }
+    if (groupByModuleChk) {
+      groupByModuleChk.checked = groupByModule;
+    }
+    if (showIgnoredFilesChk) {
+      showIgnoredFilesChk.checked = showIgnoredFiles;
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -2626,10 +3462,20 @@
     ) {
       closeCommitPushMenu();
     }
+    if (
+      viewOptionsMenu &&
+      !viewOptionsMenu.classList.contains('hidden') &&
+      viewOptionsBtn &&
+      !viewOptionsBtn.contains(e.target) &&
+      !viewOptionsMenu.contains(e.target)
+    ) {
+      closeViewOptionsMenu();
+    }
   });
   window.addEventListener('blur', () => {
     hideContextMenu();
     closeCommitPushMenu();
+    closeViewOptionsMenu();
   });
 
   document.addEventListener('keydown', (e) => {
@@ -2656,6 +3502,11 @@
     if (e.key === 'Escape' && isCommitPushMenuOpen()) {
       e.preventDefault();
       closeCommitPushMenu();
+      return;
+    }
+    if (e.key === 'Escape' && viewOptionsMenu && !viewOptionsMenu.classList.contains('hidden')) {
+      e.preventDefault();
+      closeViewOptionsMenu();
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'a' && !e.shiftKey) {
@@ -2801,6 +3652,7 @@
         break;
       }
       case 'focusMessage':
+        setCommitFormExpanded(true);
         messageEl.focus();
         const end = messageEl.value.length;
         messageEl.setSelectionRange(end, end);
