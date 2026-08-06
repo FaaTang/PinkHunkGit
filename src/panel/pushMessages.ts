@@ -8,6 +8,24 @@ export type PushCommitItem = {
 	date: string;
 };
 
+export type PushCommitFileItem = {
+	path: string;
+	status: string;
+};
+
+export type PushCommitDetails = {
+	repoRoot: string;
+	repoName: string;
+	hash: string;
+	shortHash: string;
+	subject: string;
+	message: string;
+	author: string;
+	email: string;
+	date: string;
+	files: PushCommitFileItem[];
+};
+
 export type PushTarget = {
 	repoRoot: string;
 	repoName: string;
@@ -87,6 +105,7 @@ export type PushHostToWebview =
 	| { type: 'showSyncPreview'; payload: SyncPreviewPayload }
 	| { type: 'showSyncConflict'; payload: SyncConflictPayload }
 	| { type: 'showAskPush'; payload: AskPushPayload }
+	| { type: 'commitDetails'; payload: PushCommitDetails }
 	| { type: 'close' };
 
 export type PushWebviewToHost =
@@ -108,4 +127,6 @@ export type PushWebviewToHost =
 	  }
 	| { type: 'getPreviousRemoteTags'; repoRoots: string[]; requestId: number }
 	| { type: 'selectTarget'; repoRoot: string }
+	| { type: 'getCommitDetails'; repoRoot: string; hash: string }
+	| { type: 'openCommitFileDiff'; repoRoot: string; hash: string; path: string }
 	| { type: 'refresh' };
