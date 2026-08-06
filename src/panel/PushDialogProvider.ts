@@ -301,6 +301,28 @@ export class PushDialogProvider implements vscode.Disposable {
 						// ignore stale root
 					}
 					break;
+				case 'getCommitDetails': {
+					try {
+						const details = await this.git.getPushCommitDetails(msg.repoRoot, msg.hash);
+						this.post({ type: 'commitDetails', payload: details });
+					} catch (error) {
+						this.post({
+							type: 'error',
+							message: error instanceof Error ? error.message : String(error),
+						});
+					}
+					break;
+				}
+				case 'openCommitFileDiff':
+					try {
+						await this.git.openCommitFileDiff(msg.repoRoot, msg.hash, msg.path);
+					} catch (error) {
+						this.post({
+							type: 'error',
+							message: error instanceof Error ? error.message : String(error),
+						});
+					}
+					break;
 				case 'push':
 					await this.withBusy(async () => {
 						await this.runPushMany(msg.repoRoots, !!msg.pushTags);
@@ -767,13 +789,30 @@ export class PushDialogProvider implements vscode.Disposable {
         <button id="closeBtn" class="icon" type="button" title="Close">×</button>
       </header>
       <div class="dialog-body">
-        <div id="mainView">
-          <div class="split-pane">
-            <div id="targetList" class="target-list"></div>
-            <div class="commit-pane">
+        <div id="mainView" class="main-view">
+          <div class="idea-layout">
+            <aside class="commits-pane">
+              <div id="targetList" class="target-list"></div>
+              <div id="branchMapping" class="branch-mapping"></div>
               <ul id="commitList" class="commit-list hidden"></ul>
-              <div id="noCommitSelected" class="placeholder">No commits selected</div>
-            </div>
+              <div id="noCommitSelected" class="placeholder">No commits to push</div>
+            </aside>
+            <section class="details-pane">
+              <div class="files-pane">
+                <div class="files-toolbar">
+                  <div class="files-toolbar-actions">
+                    <button id="expandFilesBtn" type="button" title="Expand All" aria-label="Expand All">▾▾</button>
+                    <button id="collapseFilesBtn" type="button" title="Collapse All" aria-label="Collapse All">▸▸</button>
+                  </div>
+                </div>
+                <div id="fileTree" class="file-tree"></div>
+                <div id="noFileSelected" class="placeholder">Select a commit to view changed files</div>
+              </div>
+              <div class="commit-detail-pane">
+                <div id="commitDetailMessage" class="commit-detail-message"></div>
+                <div id="commitDetailMeta" class="commit-detail-meta"></div>
+              </div>
+            </section>
           </div>
         </div>
         <div id="altView" class="alt-view hidden">
@@ -794,13 +833,13 @@ export class PushDialogProvider implements vscode.Disposable {
           <button id="newTagBtn" type="button">New tag</button>
         </div>
         <div class="footer-actions">
-          <button id="cancelBtn" type="button">Cancel</button>
           <button id="mergeBtn" class="hidden" type="button">Merge</button>
           <button id="rebaseBtn" class="hidden" type="button">Rebase</button>
           <button id="abortBtn" class="danger hidden" type="button">Abort</button>
           <button id="continueBtn" class="primary hidden" type="button">Continue</button>
           <button id="laterBtn" class="hidden" type="button">Later</button>
           <button id="pushBtn" class="primary" type="button">Push</button>
+          <button id="cancelBtn" type="button">Cancel</button>
         </div>
       </footer>
     </div>

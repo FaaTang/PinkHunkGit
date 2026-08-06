@@ -7,8 +7,15 @@
   const altView = document.getElementById('altView');
   const statusBanner = document.getElementById('statusBanner');
   const targetList = document.getElementById('targetList');
+  const branchMapping = document.getElementById('branchMapping');
   const commitList = document.getElementById('commitList');
   const noCommitSelected = document.getElementById('noCommitSelected');
+  const fileTree = document.getElementById('fileTree');
+  const noFileSelected = document.getElementById('noFileSelected');
+  const commitDetailMessage = document.getElementById('commitDetailMessage');
+  const commitDetailMeta = document.getElementById('commitDetailMeta');
+  const expandFilesBtn = document.getElementById('expandFilesBtn');
+  const collapseFilesBtn = document.getElementById('collapseFilesBtn');
   const altSplitPane = document.getElementById('altSplitPane');
   const altLeftPane = document.getElementById('altLeftPane');
   const altRightPane = document.getElementById('altRightPane');
@@ -42,6 +49,9 @@
   let tagRowState = new Map();
   let selectedTargetRoot = null;
   let selectedCommitHash = null;
+  let selectedFilePath = null;
+  let commitDetails = null;
+  let collapsedFileDirs = new Set();
   let checkedRoots = new Set();
   let targetSelectionInitialized = false;
   let pushRepoRoot = null;
@@ -438,11 +448,17 @@
     selectedTargetRoot = key;
     if (changed) {
       selectedCommitHash = null;
+      selectedFilePath = null;
+      commitDetails = null;
+      collapsedFileDirs = new Set();
     }
     pushRepoRoot = findTargetByKey(key)?.repoRoot || pushRepoRoot;
     renderTargets();
+    renderBranchMapping();
     renderCommits();
+    renderCommitDetails();
     updateTitle();
+    autoSelectFirstCommit();
   }
 
   function toggleTargetChecked(key, checked) {
@@ -455,8 +471,38 @@
     renderTargets();
   }
 
+  function formatBranchMapping(target) {
+    if (!target) {
+      return '';
+    }
+    const local = target.branch || '(detached)';
+    if (target.remote && target.upstreamBranch) {
+      return `${local} → ${target.remote} : ${target.upstreamBranch}`;
+    }
+    if (target.upstream) {
+      return `${local} → ${target.upstream}`;
+    }
+    return local;
+  }
+
+  function renderBranchMapping() {
+    if (!branchMapping) {
+      return;
+    }
+    const target = findTargetByKey(selectedTargetRoot) || payload.targets[0];
+    branchMapping.textContent = formatBranchMapping(target);
+    branchMapping.title = branchMapping.textContent;
+  }
+
   function renderTargets() {
+    if (!targetList) {
+      return;
+    }
     targetList.innerHTML = '';
+    // IDEA focuses one repo; only show checkbox list when multiple repos.
+    if (payload.targets.length <= 1) {
+      return;
+    }
     if (!payload.targets.length) {
       const empty = document.createElement('div');
       empty.className = 'placeholder';
@@ -527,6 +573,7 @@
       noCommitSelected.textContent = 'No commits to push';
       noCommitSelected.classList.remove('hidden');
       commitList.classList.add('hidden');
+      clearCommitDetails();
       return;
     }
 
@@ -540,17 +587,373 @@
       subject.className = 'commit-subject';
       subject.textContent = commit.subject;
       subject.title = commit.subject;
-      const meta = document.createElement('div');
-      meta.className = 'commit-meta';
-      meta.textContent = `${commit.shortHash} · ${commit.author} · ${commit.date}`;
       li.appendChild(subject);
-      li.appendChild(meta);
       li.addEventListener('click', () => {
-        selectedCommitHash = commit.hash;
-        renderCommits();
+        selectCommit(commit.hash);
       });
       commitList.appendChild(li);
     });
+  }
+
+  function autoSelectFirstCommit() {
+    const target = findTargetByKey(selectedTargetRoot) || payload.targets[0];
+    const commits = target?.commits || [];
+    if (!commits.length) {
+      clearCommitDetails();
+      return;
+    }
+    if (selectedCommitHash && commits.some((c) => c.hash === selectedCommitHash)) {
+      requestCommitDetails(selectedCommitHash);
+      return;
+    }
+    selectCommit(commits[0].hash);
+  }
+
+  function selectCommit(hash) {
+    selectedCommitHash = hash;
+    selectedFilePath = null;
+    renderCommits();
+    requestCommitDetails(hash);
+  }
+
+  function requestCommitDetails(hash) {
+    const target = findTargetByKey(selectedTargetRoot) || payload.targets[0];
+    if (!target || !hash) {
+      clearCommitDetails();
+      return;
+    }
+    commitDetails = null;
+    if (fileTree) {
+      fileTree.innerHTML = '';
+    }
+    if (noFileSelected) {
+      noFileSelected.textContent = 'Loading…';
+      noFileSelected.classList.remove('hidden');
+    }
+    if (commitDetailMessage) {
+      commitDetailMessage.textContent = '';
+    }
+    if (commitDetailMeta) {
+      commitDetailMeta.textContent = '';
+    }
+    post({ type: 'getCommitDetails', repoRoot: target.repoRoot, hash });
+  }
+
+  function clearCommitDetails() {
+    commitDetails = null;
+    selectedFilePath = null;
+    if (fileTree) {
+      fileTree.innerHTML = '';
+    }
+    if (noFileSelected) {
+      noFileSelected.textContent = 'Select a commit to view changed files';
+      noFileSelected.classList.remove('hidden');
+    }
+    if (commitDetailMessage) {
+      commitDetailMessage.textContent = '';
+    }
+    if (commitDetailMeta) {
+      commitDetailMeta.textContent = '';
+    }
+  }
+
+  function applyCommitDetails(details) {
+    commitDetails = details;
+    collapsedFileDirs = new Set();
+    renderCommitDetails();
+  }
+
+  function renderCommitDetails() {
+    if (!commitDetails) {
+      return;
+    }
+    if (commitDetailMessage) {
+      commitDetailMessage.innerHTML = '';
+      const raw = (commitDetails.message || commitDetails.subject || '').replace(/\r\n/g, '\n');
+      const lines = raw.split('\n');
+      const subjectLine = lines[0] || '';
+      const body = lines.slice(1).join('\n').replace(/^\n+/, '');
+      const subjectEl = document.createElement('div');
+      subjectEl.className = 'commit-detail-subject';
+      subjectEl.textContent = subjectLine;
+      commitDetailMessage.appendChild(subjectEl);
+      if (body.trim()) {
+        const bodyEl = document.createElement('div');
+        bodyEl.className = 'commit-detail-body';
+        bodyEl.textContent = body;
+        commitDetailMessage.appendChild(bodyEl);
+      }
+    }
+    if (commitDetailMeta) {
+      const email = commitDetails.email ? `<${commitDetails.email}>` : '';
+      const date = commitDetails.date ? `on ${commitDetails.date}` : '';
+      commitDetailMeta.textContent = [commitDetails.shortHash, commitDetails.author, email, date]
+        .filter(Boolean)
+        .join('  ');
+      commitDetailMeta.title = commitDetailMeta.textContent;
+    }
+    renderFileTree();
+  }
+
+  function splitPushPath(fullPath) {
+    const normalized = (fullPath || '').replace(/\\/g, '/');
+    const idx = normalized.lastIndexOf('/');
+    if (idx < 0) {
+      return { name: normalized, dir: '' };
+    }
+    return { name: normalized.slice(idx + 1), dir: normalized.slice(0, idx) };
+  }
+
+  const PUSH_FILE_ICON_BY_EXT = {
+    java: { label: 'J', color: '#b07219' },
+    ts: { label: 'TS', color: '#3178c6' },
+    tsx: { label: 'TSX', color: '#3178c6' },
+    js: { label: 'JS', color: '#f1e05a' },
+    jsx: { label: 'JSX', color: '#f1e05a' },
+    vue: { label: 'V', color: '#41b883' },
+    css: { label: 'CSS', color: '#563d7c' },
+    scss: { label: 'SCSS', color: '#c6538c' },
+    html: { label: 'HTML', color: '#e34c26' },
+    json: { label: '{}', color: '#cbcb41' },
+    md: { label: 'MD', color: '#083fa1' },
+    py: { label: 'PY', color: '#3572A5' },
+    go: { label: 'GO', color: '#00ADD8' },
+    xml: { label: 'XML', color: '#e37933' },
+    yml: { label: 'YML', color: '#cb171e' },
+    yaml: { label: 'YML', color: '#cb171e' },
+    sql: { label: 'SQL', color: '#e38c10' },
+  };
+
+  function resolvePushFileIcon(filePath) {
+    const { name } = splitPushPath(filePath);
+    const lower = name.toLowerCase();
+    const dot = lower.lastIndexOf('.');
+    if (dot >= 0) {
+      const ext = lower.slice(dot + 1);
+      if (PUSH_FILE_ICON_BY_EXT[ext]) {
+        return PUSH_FILE_ICON_BY_EXT[ext];
+      }
+    }
+    return { label: 'F', color: '#8a8a8a' };
+  }
+
+  function buildPushDirTree(files) {
+    const root = { name: '', path: '', dirs: new Map(), files: [] };
+    for (const item of files) {
+      const normalized = (item.path || '').replace(/\\/g, '/');
+      const parts = normalized.split('/').filter(Boolean);
+      if (!parts.length) {
+        continue;
+      }
+      let node = root;
+      for (let i = 0; i < parts.length - 1; i += 1) {
+        const part = parts[i];
+        if (!node.dirs.has(part)) {
+          const childPath = node.path ? `${node.path}/${part}` : part;
+          node.dirs.set(part, { name: part, path: childPath, dirs: new Map(), files: [] });
+        }
+        node = node.dirs.get(part);
+      }
+      node.files.push(item);
+    }
+    return root;
+  }
+
+  function compactPushDirTree(node) {
+    const children = [...node.dirs.values()];
+    node.dirs.clear();
+    for (const child of children) {
+      compactPushDirTree(child);
+      while (child.dirs.size === 1 && child.files.length === 0) {
+        const only = child.dirs.values().next().value;
+        child.name = `${child.name}/${only.name}`;
+        child.path = only.path;
+        child.dirs = only.dirs;
+        child.files = only.files;
+      }
+      node.dirs.set(child.name, child);
+    }
+  }
+
+  function countPushTreeFiles(node) {
+    let total = node.files.length;
+    for (const child of node.dirs.values()) {
+      total += countPushTreeFiles(child);
+    }
+    return total;
+  }
+
+  function walkPushDirPaths(node, out = []) {
+    for (const child of node.dirs.values()) {
+      if (child.path) {
+        out.push(child.path);
+      }
+      walkPushDirPaths(child, out);
+    }
+    return out;
+  }
+
+  function createPushFolderIcon() {
+    const el = document.createElement('span');
+    el.className = 'push-dir-icon';
+    el.setAttribute('aria-hidden', 'true');
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('width', '14');
+    svg.setAttribute('height', '14');
+    const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    pathEl.setAttribute('fill', 'currentColor');
+    pathEl.setAttribute(
+      'd',
+      'M1.5 3.5A1.5 1.5 0 0 1 3 2h3.2c.3 0 .6.1.8.3L8.2 3.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3.5Z'
+    );
+    svg.appendChild(pathEl);
+    el.appendChild(svg);
+    return el;
+  }
+
+  function renderFileTree() {
+    if (!fileTree || !noFileSelected) {
+      return;
+    }
+    fileTree.innerHTML = '';
+    const files = commitDetails?.files || [];
+    if (!files.length) {
+      noFileSelected.textContent = 'No changed files in this commit';
+      noFileSelected.classList.remove('hidden');
+      return;
+    }
+    noFileSelected.classList.add('hidden');
+
+    const tree = buildPushDirTree(files);
+    compactPushDirTree(tree);
+    const repoName = commitDetails.repoName || 'repository';
+    const total = files.length;
+
+    // Root module-like header (IDEA shows project root + count).
+    const rootHead = document.createElement('div');
+    rootHead.className = 'push-dir-group-title';
+    rootHead.style.setProperty('--tree-depth', '0');
+    rootHead.appendChild(createPushFolderIcon());
+    const rootName = document.createElement('span');
+    rootName.className = 'push-dir-name';
+    rootName.textContent = repoName;
+    const rootCount = document.createElement('span');
+    rootCount.className = 'push-dir-count';
+    rootCount.textContent = `${total} ${total === 1 ? 'file' : 'files'}`;
+    rootHead.appendChild(rootName);
+    rootHead.appendChild(rootCount);
+    fileTree.appendChild(rootHead);
+
+    function appendNode(parentEl, node, depth) {
+      const dirNames = [...node.dirs.keys()].sort((a, b) => a.localeCompare(b));
+      for (const dirName of dirNames) {
+        parentEl.appendChild(renderDir(node.dirs.get(dirName), depth));
+      }
+      const fileItems = [...node.files].sort((a, b) => a.path.localeCompare(b.path));
+      for (const item of fileItems) {
+        parentEl.appendChild(renderFile(item, depth));
+      }
+    }
+
+    function renderDir(dirNode, depth) {
+      const wrap = document.createElement('div');
+      wrap.className = 'push-dir-group';
+      const collapsed = collapsedFileDirs.has(dirNode.path);
+      const fileCount = countPushTreeFiles(dirNode);
+
+      const head = document.createElement('div');
+      head.className = 'push-dir-group-title';
+      head.style.setProperty('--tree-depth', String(depth));
+
+      const chevron = document.createElement('span');
+      chevron.className = 'push-dir-chevron';
+      chevron.textContent = collapsed ? '▸' : '▾';
+
+      const name = document.createElement('span');
+      name.className = 'push-dir-name';
+      name.textContent = dirNode.name;
+
+      const count = document.createElement('span');
+      count.className = 'push-dir-count';
+      count.textContent = `${fileCount} ${fileCount === 1 ? 'file' : 'files'}`;
+
+      head.appendChild(chevron);
+      head.appendChild(createPushFolderIcon());
+      head.appendChild(name);
+      head.appendChild(count);
+      head.addEventListener('click', () => {
+        if (collapsedFileDirs.has(dirNode.path)) {
+          collapsedFileDirs.delete(dirNode.path);
+        } else {
+          collapsedFileDirs.add(dirNode.path);
+        }
+        renderFileTree();
+      });
+      wrap.appendChild(head);
+
+      if (!collapsed) {
+        const children = document.createElement('div');
+        appendNode(children, dirNode, depth + 1);
+        wrap.appendChild(children);
+      }
+      return wrap;
+    }
+
+    function renderFile(item, depth) {
+      const row = document.createElement('div');
+      row.className = 'push-file-row' + (selectedFilePath === item.path ? ' selected' : '');
+      row.style.setProperty('--tree-depth', String(depth));
+      const statusLetter = item.status || 'M';
+      row.title = `${item.path} (${statusLetter})`;
+
+      const iconSpec = resolvePushFileIcon(item.path);
+      const icon = document.createElement('span');
+      icon.className = 'push-file-type-icon' + (iconSpec.label.length > 2 ? ' wide' : iconSpec.label.length > 1 ? ' mid' : '');
+      icon.style.color = iconSpec.color;
+      icon.textContent = iconSpec.label;
+
+      const name = document.createElement('span');
+      name.className = 'push-file-name';
+      name.textContent = splitPushPath(item.path).name;
+
+      row.appendChild(icon);
+      row.appendChild(name);
+      row.addEventListener('click', () => {
+        selectedFilePath = item.path;
+        renderFileTree();
+      });
+      row.addEventListener('dblclick', () => {
+        selectedFilePath = item.path;
+        renderFileTree();
+        if (commitDetails?.hash && commitDetails?.repoRoot) {
+          post({
+            type: 'openCommitFileDiff',
+            repoRoot: commitDetails.repoRoot,
+            hash: commitDetails.hash,
+            path: item.path,
+          });
+        }
+      });
+      return row;
+    }
+
+    appendNode(fileTree, tree, 1);
+  }
+
+  function expandAllFileDirs() {
+    collapsedFileDirs = new Set();
+    renderFileTree();
+  }
+
+  function collapseAllFileDirs() {
+    if (!commitDetails?.files?.length) {
+      return;
+    }
+    const tree = buildPushDirTree(commitDetails.files);
+    compactPushDirTree(tree);
+    collapsedFileDirs = new Set(walkPushDirPaths(tree));
+    renderFileTree();
   }
 
   function findTargetByKey(key) {
@@ -562,7 +965,10 @@
 
   function updateTitle() {
     if (modalState === 'confirm') {
-      dialogTitle.textContent = 'Push Commits';
+      const target = findTargetByKey(selectedTargetRoot) || payload.targets[0];
+      dialogTitle.textContent = target?.repoName
+        ? `Push Commits to ${target.repoName}`
+        : 'Push Commits';
     } else if (modalState === 'rejected') {
       dialogTitle.textContent = 'Push Rejected';
     } else if (modalState === 'syncPreview') {
@@ -583,6 +989,7 @@
   function showConfirmView(data) {
     modalState = 'confirm';
     const prevSelected = selectedTargetRoot;
+    const prevCommit = selectedCommitHash;
     payload = data;
     const targetKeys = new Set(data.targets.map((target) => normalizeRepoRoot(target.repoRoot)));
     if (!targetSelectionInitialized || data.pendingRepoRoots?.length) {
@@ -601,6 +1008,9 @@
     }
     if (prevSelected !== selectedTargetRoot) {
       selectedCommitHash = null;
+      commitDetails = null;
+    } else {
+      selectedCommitHash = prevCommit;
     }
     pushRepoRoot = findTargetByKey(selectedTargetRoot)?.repoRoot || data.targets[0]?.repoRoot || null;
     conflictItems = [];
@@ -618,7 +1028,9 @@
 
     updateTitle();
     renderTargets();
+    renderBranchMapping();
     renderCommits();
+    autoSelectFirstCommit();
     applyPushTagsPreference();
     setTagsVisible(true);
     setFooterActions(['cancelBtn', 'pushBtn']);
@@ -956,6 +1368,12 @@
 
   cancelBtn.addEventListener('click', () => post({ type: 'cancel' }));
   closeBtn.addEventListener('click', () => post({ type: 'cancel' }));
+  if (expandFilesBtn) {
+    expandFilesBtn.addEventListener('click', expandAllFileDirs);
+  }
+  if (collapseFilesBtn) {
+    collapseFilesBtn.addEventListener('click', collapseAllFileDirs);
+  }
   if (newTagBtn) {
     newTagBtn.addEventListener('click', () => {
       const roots = getCheckedRepoRoots();
@@ -1156,6 +1574,20 @@
           true,
           false
         );
+        break;
+      }
+      case 'commitDetails': {
+        const details = msg.payload;
+        if (!details?.hash || !selectedCommitHash) {
+          break;
+        }
+        const selected = String(selectedCommitHash).toLowerCase();
+        const full = String(details.hash).toLowerCase();
+        const short = String(details.shortHash || '').toLowerCase();
+        if (full !== selected && short !== selected && !full.startsWith(selected) && !selected.startsWith(short)) {
+          break;
+        }
+        applyCommitDetails(details);
         break;
       }
       default:

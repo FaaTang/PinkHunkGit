@@ -22,7 +22,7 @@ import {
 	SyncMode,
 	WorkspaceSnapshot,
 } from '../panel/messages';
-import { PushCommitItem, PushTarget } from '../panel/pushMessages';
+import { PushCommitItem, PushCommitDetails, PushTarget } from '../panel/pushMessages';
 import {
 	buildLocaleFallbackMessage,
 	formatCommitMessageStyle,
@@ -805,6 +805,93 @@ export class GitService implements vscode.Disposable {
 		}
 		const message = await this.queryGit(repoRoot, ['log', '-1', '--pretty=format:%B', commit]);
 		return message.replace(/\s+$/u, '');
+	}
+
+	/** Full commit details for the Push dialog (message, author, changed files). */
+	async getPushCommitDetails(repoRoot: string, hash: string): Promise<PushCommitDetails> {
+		const commit = hash.trim();
+		if (!commit) {
+			throw new Error('Commit hash is empty.');
+		}
+		const repo = this.requireRepoByRoot(repoRoot);
+		const root = repo.rootUri.fsPath;
+		const metaRaw = await this.queryGit(root, [
+			'log',
+			'-1',
+			'--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%ad%x1f%s%x1f%B',
+			'--date=format:%Y/%m/%d at %H:%M',
+			commit,
+		]);
+		const parts = metaRaw.split('\x1f');
+		const fullHash = (parts[0] || commit).trim();
+		const shortHash = (parts[1] || fullHash.slice(0, 8)).trim();
+		const author = (parts[2] || '').trim();
+		const email = (parts[3] || '').trim();
+		const date = (parts[4] || '').trim();
+		const subject = (parts[5] || '').trim();
+		const message = (parts.slice(6).join('\x1f') || subject).replace(/\s+$/u, '');
+
+		const filesRaw = await this.queryGit(root, [
+			'show',
+			'--name-status',
+			'--format=',
+			'--find-renames',
+			fullHash,
+		]);
+		const files = parseCommitNameStatus(filesRaw);
+
+		return {
+			repoRoot: root,
+			repoName: this.repoDisplayName(root),
+			hash: fullHash,
+			shortHash,
+			subject,
+			message,
+			author,
+			email,
+			date,
+			files,
+		};
+	}
+
+	/** Diff a file between parent and commit (or open commit content if newly added). */
+	async openCommitFileDiff(repoRoot: string, hash: string, relativePath: string): Promise<void> {
+		if (!this.api) {
+			throw new Error('VS Code Git extension is not available.');
+		}
+		const commit = hash.trim();
+		const rel = relativePath.replace(/\\/g, '/');
+		if (!commit || !rel) {
+			throw new Error('Commit hash or path is empty.');
+		}
+		const repo = this.requireRepoByRoot(repoRoot);
+		const fsPath = path.join(repo.rootUri.fsPath, rel);
+		const fileUri = vscode.Uri.file(fsPath);
+		const right = this.api.toGitUri(fileUri, commit);
+		const parentRef = `${commit}^`;
+		let parentHasFile = false;
+		try {
+			await execFile('git', ['cat-file', '-e', `${parentRef}:${rel}`], {
+				cwd: repo.rootUri.fsPath,
+				maxBuffer: 1024 * 1024,
+				env: process.env,
+			});
+			parentHasFile = true;
+		} catch {
+			parentHasFile = false;
+		}
+
+		const title = `${path.basename(rel)} (${commit.slice(0, 8)})`;
+		if (parentHasFile) {
+			const left = this.api.toGitUri(fileUri, parentRef);
+			await vscode.commands.executeCommand('vscode.diff', left, right, title, {
+				preview: true,
+				preserveFocus: false,
+			});
+			return;
+		}
+		const doc = await vscode.workspace.openTextDocument(right);
+		await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
 	}
 
 	/**
@@ -2566,6 +2653,34 @@ function parsePushCommits(raw: string): PushCommitItem[] {
 		const [hash = '', shortHash = '', subject = '', author = '', date = ''] = line.split('|');
 		return { hash, shortHash, subject, author, date };
 	});
+}
+
+function parseCommitNameStatus(raw: string): Array<{ path: string; status: string }> {
+	if (!raw.trim()) {
+		return [];
+	}
+	const files: Array<{ path: string; status: string }> = [];
+	for (const line of raw.split(/\r?\n/)) {
+		const trimmed = line.trim();
+		if (!trimmed) {
+			continue;
+		}
+		const tab = trimmed.indexOf('\t');
+		if (tab < 0) {
+			continue;
+		}
+		const statusRaw = trimmed.slice(0, tab).trim();
+		const pathPart = trimmed.slice(tab + 1).trim();
+		if (!pathPart) {
+			continue;
+		}
+		// Renames: R100\told\tnew  or show as "old => new"
+		const paths = pathPart.split('\t').filter(Boolean);
+		const filePath = (paths[paths.length - 1] || pathPart).replace(/\\/g, '/');
+		const status = statusRaw.charAt(0) || 'M';
+		files.push({ path: filePath, status });
+	}
+	return files;
 }
 
 function parseMultiRepoCommitMessage(message: string): Map<string, string> {
