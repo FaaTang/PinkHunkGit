@@ -110,7 +110,8 @@
   let commitLogPendingRoot = '';
   let commitFormExpanded = webviewState.commitFormExpanded !== false;
   let groupByDirectory = webviewState.groupByDirectory === true;
-  let groupByModule = webviewState.groupByModule === true;
+  // IDEA-style: show every Git repo header, including empty 0/0 modules.
+  let groupByModule = webviewState.groupByModule !== false;
   let showIgnoredFiles = webviewState.showIgnoredFiles !== false;
   let workspace = {
     ok: true,
