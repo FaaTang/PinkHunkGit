@@ -1,0 +1,373 @@
+:root {
+  color-scheme: light dark;
+  --bg: var(--vscode-editor-background);
+  --fg: var(--vscode-foreground);
+  --border: var(--vscode-panel-border, var(--vscode-widget-border, #444));
+  --list-hover: var(--vscode-list-hoverBackground);
+  --list-active: var(--vscode-list-activeSelectionBackground);
+  --list-active-fg: var(--vscode-list-activeSelectionForeground);
+  --btn-bg: var(--vscode-button-secondaryBackground);
+  --btn-fg: var(--vscode-button-secondaryForeground);
+  --btn-primary-bg: var(--vscode-button-background);
+  --btn-primary-fg: var(--vscode-button-foreground);
+  --error: var(--vscode-errorForeground);
+  --title-bg: var(--vscode-titleBar-activeBackground, var(--bg));
+  --sidebar-bg: color-mix(in srgb, var(--bg) 88%, var(--fg));
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.45);
+  color: var(--fg);
+}
+
+.hidden {
+  display: none !important;
+}
+
+.dialog-backdrop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 24px;
+}
+
+.clone-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 100%);
+  height: min(420px, calc(100vh - 40px));
+  max-height: min(420px, calc(100vh - 40px));
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--title-bg);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.dialog-header h1 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dialog-header button.icon {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.dialog-header button.icon:hover {
+  opacity: 1;
+}
+
+.dialog-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.clone-layout {
+  display: grid;
+  grid-template-columns: 168px 1fr;
+  flex: 1;
+  min-height: 0;
+}
+
+.clone-sidebar {
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  padding: 8px 0;
+  min-width: 0;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: default;
+  user-select: none;
+  border-left: 2px solid transparent;
+}
+
+.sidebar-item.selected {
+  background: var(--list-active);
+  color: var(--list-active-fg);
+  border-left-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.sidebar-icon {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  opacity: 0.9;
+  font-size: 13px;
+}
+
+.clone-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+  overflow: auto;
+  min-width: 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field-label {
+  display: block;
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.field-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--vscode-input-background, var(--bg));
+  border: 1px solid var(--vscode-input-border, var(--border));
+  border-radius: 2px;
+  min-width: 0;
+}
+
+.field-input:focus {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+.field-input:disabled,
+select.field-input:disabled {
+  opacity: 0.75;
+  cursor: default;
+}
+
+.protocol-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 85%, var(--fg));
+  opacity: 0.9;
+  min-width: 52px;
+  text-align: center;
+}
+
+.protocol-badge.empty {
+  visibility: hidden;
+}
+
+.browse-btn {
+  flex-shrink: 0;
+  min-width: 44px;
+  padding: 5px 10px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.field-note {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.8;
+  word-break: break-all;
+}
+
+.field-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--error);
+  white-space: pre-wrap;
+}
+
+.dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+button {
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  border: 1px solid transparent;
+  border-radius: 2px;
+  padding: 5px 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+}
+
+body.busy .dialog-footer button,
+body.busy .browse-btn {
+  opacity: 0.7;
+}
+
+body.busy .dialog-body {
+  opacity: 0.92;
+  pointer-events: none;
+}
+
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.loading-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  min-width: 380px;
+  max-width: min(80vw, 680px);
+}
+
+.loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid color-mix(in srgb, var(--fg) 25%, transparent);
+  border-top-color: var(--fg);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.loading-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.loading-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.stage-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 86%, var(--fg));
+  color: var(--fg);
+}
+
+.progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--vscode-progressBar-background, rgba(127, 127, 127, 0.25));
+}
+
+.progress-bar {
+  width: 0%;
+  height: 100%;
+  transition: width 120ms linear;
+  background: var(--vscode-progressBar-background, #0e70c0);
+}
+
+.progress-text {
+  font-size: 12px;
+  opacity: 0.9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
