@@ -85,6 +85,7 @@ export class GitService implements vscode.Disposable {
 	readonly onDidChange = this._onDidChange.event;
 	private repoDisposables: vscode.Disposable[] = [];
 	private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+	private snapshotTimer: ReturnType<typeof setTimeout> | undefined;
 	/** While > 0, skip auto refresh so file watchers cannot race user git writes (index.lock). */
 	private refreshSuspended = 0;
 	/** Coalesce repo-state events during suspended ops; flush once afterwards. */
@@ -105,6 +106,13 @@ export class GitService implements vscode.Disposable {
 	/** Cached ignored paths per repo root (from `git status --ignored`). */
 	private ignoredByRoot = new Map<string, ChangeItem[]>();
 	private ignoredRefreshInFlight: Promise<void> | undefined;
+	/** Incremental refresh queue: only status these repo roots (unless pendingStatusAll). */
+	private pendingStatusRoots = new Set<string>();
+	private pendingStatusAll = false;
+	private pendingIgnoredRoots = new Set<string>();
+	private pendingIgnoredAll = false;
+	private refreshInFlight: Promise<void> | undefined;
+	private refreshQueued = false;
 
 	async init(): Promise<{ ok: true } | { ok: false; error: string }> {
 		this.gitExecutable = await this.resolveGitExecutable();
@@ -243,17 +251,19 @@ export class GitService implements vscode.Disposable {
 					if (editor?.document.uri.scheme === 'file') {
 						this.rememberFileUri(editor.document.uri);
 					}
-					this.scheduleRefresh();
+					// Repo/active file switch only needs a cheap UI snapshot push.
+					this.scheduleSnapshot();
 				}),
 				vscode.workspace.onDidChangeTextDocument((event) => {
 					if (event.document.uri.scheme === 'file') {
 						this.rememberFileUri(event.document.uri);
-						this.scheduleRefresh();
+						// Unsaved edits are merged via collectDirtyDocuments — no git status.
+						this.scheduleSnapshot();
 					}
 				}),
 				vscode.workspace.onDidSaveTextDocument((doc) => {
 					if (doc.uri.scheme === 'file') {
-						this.scheduleRefresh();
+						this.scheduleRefresh(doc.uri);
 					}
 				})
 			);
@@ -282,9 +292,9 @@ export class GitService implements vscode.Disposable {
 			const watcher = vscode.workspace.createFileSystemWatcher(pattern);
 			this.disposables.push(
 				watcher,
-				watcher.onDidChange(() => this.scheduleRefresh()),
-				watcher.onDidCreate(() => this.scheduleRefresh()),
-				watcher.onDidDelete(() => this.scheduleRefresh())
+				watcher.onDidChange((uri) => this.scheduleRefresh(uri)),
+				watcher.onDidCreate((uri) => this.scheduleRefresh(uri, { ignored: true })),
+				watcher.onDidDelete((uri) => this.scheduleRefresh(uri, { ignored: true }))
 			);
 		}
 	}
@@ -342,6 +352,9 @@ export class GitService implements vscode.Disposable {
 	dispose(): void {
 		if (this.refreshTimer) {
 			clearTimeout(this.refreshTimer);
+		}
+		if (this.snapshotTimer) {
+			clearTimeout(this.snapshotTimer);
 		}
 		this.repoDisposables.forEach((d) => d.dispose());
 		this.disposables.forEach((d) => d.dispose());
@@ -822,17 +835,32 @@ export class GitService implements vscode.Disposable {
 		};
 	}
 
-	/** Refresh ignored-file cache for all repositories (traditional mode: dirs as single entries). */
-	async refreshIgnoredFiles(): Promise<void> {
-		if (this.ignoredRefreshInFlight) {
-			await this.ignoredRefreshInFlight;
-			return;
-		}
+	/** Refresh ignored-file cache (traditional mode: dirs as single entries). */
+	async refreshIgnoredFiles(repoRoots?: string[]): Promise<void> {
 		if (!this.api?.repositories.length) {
 			this.ignoredByRoot.clear();
 			return;
 		}
-		const repos = [...this.api.repositories];
+		const repos = repoRoots?.length
+			? this.api.repositories.filter((repo) =>
+					repoRoots.some((root) => pathsEqual(repo.rootUri.fsPath, root))
+				)
+			: [...this.api.repositories];
+		if (!repos.length) {
+			return;
+		}
+
+		const isFull = !repoRoots?.length;
+		if (isFull && this.ignoredRefreshInFlight) {
+			await this.ignoredRefreshInFlight;
+			return;
+		}
+		if (!isFull && this.ignoredRefreshInFlight) {
+			// A full scan already covers these roots.
+			await this.ignoredRefreshInFlight;
+			return;
+		}
+
 		const task = (async () => {
 			await Promise.all(
 				repos.map(async (repo) => {
@@ -847,18 +875,23 @@ export class GitService implements vscode.Disposable {
 					}
 				})
 			);
-			const liveRoots = repos.map((r) => r.rootUri.fsPath);
-			for (const key of [...this.ignoredByRoot.keys()]) {
-				if (!liveRoots.some((root) => pathsEqual(root, key))) {
-					this.ignoredByRoot.delete(key);
+			if (isFull) {
+				const liveRoots = repos.map((r) => r.rootUri.fsPath);
+				for (const key of [...this.ignoredByRoot.keys()]) {
+					if (!liveRoots.some((root) => pathsEqual(root, key))) {
+						this.ignoredByRoot.delete(key);
+					}
 				}
 			}
 		})();
-		this.ignoredRefreshInFlight = task;
+
+		if (isFull) {
+			this.ignoredRefreshInFlight = task;
+		}
 		try {
 			await task;
 		} finally {
-			if (this.ignoredRefreshInFlight === task) {
+			if (isFull && this.ignoredRefreshInFlight === task) {
 				this.ignoredRefreshInFlight = undefined;
 			}
 		}
@@ -925,36 +958,150 @@ export class GitService implements vscode.Disposable {
 		);
 	}
 
+	/**
+	 * Full status refresh for all repositories (manual refresh / after git ops).
+	 * Includes ignored scan once — not used on every keystroke or single-file save.
+	 */
 	async refresh(): Promise<void> {
 		if (this.refreshSuspended > 0) {
 			return;
 		}
-		if (!this.api?.repositories.length) {
-			this.bindRepositoryEvents();
-			this.ignoredByRoot.clear();
-			this._onDidChange.fire();
-			return;
+		this.pendingStatusAll = true;
+		this.pendingIgnoredAll = true;
+		this.pendingStatusRoots.clear();
+		this.pendingIgnoredRoots.clear();
+		if (this.refreshTimer) {
+			clearTimeout(this.refreshTimer);
+			this.refreshTimer = undefined;
 		}
-
-		// Note: do NOT call the built-in 'git.refresh' command here. Without a repository
-		// argument it opens a "Choose a repository" quick pick in multi-repo workspaces.
-		await Promise.all(this.api.repositories.map((repo) => repo.status().catch(() => undefined)));
-		await this.refreshIgnoredFiles();
-
-		this.bindRepositoryEvents();
-		this._onDidChange.fire();
+		await this.flushRefresh();
 	}
 
-	scheduleRefresh(): void {
+	/**
+	 * Debounced incremental refresh for a single changed file's repository.
+	 * Pass no uri for a full catch-up (e.g. after suspended batch ops).
+	 */
+	scheduleRefresh(uri?: vscode.Uri, options?: { ignored?: boolean }): void {
 		if (this.refreshSuspended > 0) {
 			return;
 		}
+
+		if (!uri) {
+			this.pendingStatusAll = true;
+			if (options?.ignored) {
+				this.pendingIgnoredAll = true;
+			}
+		} else {
+			const needsIgnored = options?.ignored || pathNeedsIgnoredRefresh(uri.fsPath);
+			// Ignore .git chatter (index, FETCH_HEAD, …) except exclude-style paths.
+			if (isGitInternalPath(uri.fsPath) && !needsIgnored) {
+				return;
+			}
+			const repo = this.api?.getRepository(uri);
+			if (!repo) {
+				return;
+			}
+			const root = repo.rootUri.fsPath;
+			if (!isGitInternalPath(uri.fsPath)) {
+				this.pendingStatusRoots.add(root);
+			}
+			if (needsIgnored) {
+				this.pendingIgnoredRoots.add(root);
+			}
+			if (
+				!this.pendingStatusAll &&
+				!this.pendingStatusRoots.size &&
+				!this.pendingIgnoredAll &&
+				!this.pendingIgnoredRoots.size
+			) {
+				return;
+			}
+		}
+
 		if (this.refreshTimer) {
 			clearTimeout(this.refreshTimer);
 		}
 		this.refreshTimer = setTimeout(() => {
-			void this.refresh();
+			this.refreshTimer = undefined;
+			void this.flushRefresh();
 		}, 250);
+	}
+
+	/** Cheap UI update from dirty docs / active editor — no git process. */
+	scheduleSnapshot(): void {
+		if (this.refreshSuspended > 0) {
+			this.changePendingWhileSuspended = true;
+			return;
+		}
+		if (this.snapshotTimer) {
+			clearTimeout(this.snapshotTimer);
+		}
+		this.snapshotTimer = setTimeout(() => {
+			this.snapshotTimer = undefined;
+			this._onDidChange.fire();
+		}, 50);
+	}
+
+	private async flushRefresh(): Promise<void> {
+		if (this.refreshSuspended > 0) {
+			return;
+		}
+		if (this.refreshInFlight) {
+			this.refreshQueued = true;
+			return;
+		}
+
+		const statusAll = this.pendingStatusAll;
+		const statusRoots = [...this.pendingStatusRoots];
+		const ignoredAll = this.pendingIgnoredAll;
+		const ignoredRoots = [...this.pendingIgnoredRoots];
+		this.pendingStatusAll = false;
+		this.pendingStatusRoots.clear();
+		this.pendingIgnoredAll = false;
+		this.pendingIgnoredRoots.clear();
+
+		const run = (async () => {
+			if (!this.api?.repositories.length) {
+				this.bindRepositoryEvents();
+				this.ignoredByRoot.clear();
+				this._onDidChange.fire();
+				return;
+			}
+
+			const repos = statusAll
+				? this.api.repositories
+				: this.api.repositories.filter((repo) =>
+						statusRoots.some((root) => pathsEqual(repo.rootUri.fsPath, root))
+					);
+
+			// Note: do NOT call the built-in 'git.refresh' command here. Without a repository
+			// argument it opens a "Choose a repository" quick pick in multi-repo workspaces.
+			if (repos.length) {
+				await Promise.all(repos.map((repo) => repo.status().catch(() => undefined)));
+			}
+
+			if (ignoredAll) {
+				await this.refreshIgnoredFiles();
+			} else if (ignoredRoots.length) {
+				await this.refreshIgnoredFiles(ignoredRoots);
+			}
+
+			this.bindRepositoryEvents();
+			this._onDidChange.fire();
+		})();
+
+		this.refreshInFlight = run;
+		try {
+			await run;
+		} finally {
+			if (this.refreshInFlight === run) {
+				this.refreshInFlight = undefined;
+			}
+			if (this.refreshQueued) {
+				this.refreshQueued = false;
+				void this.flushRefresh();
+			}
+		}
 	}
 
 	async stage(fsPath: string, options?: { force?: boolean }): Promise<void> {
@@ -3274,6 +3421,22 @@ function isPathInsideRoot(fsPath: string, root: string): boolean {
 	const fileKey = normalizePathKey(fsPath);
 	const rootKey = normalizePathKey(root).replace(/\/$/, '');
 	return fileKey === rootKey || fileKey.startsWith(`${rootKey}/`);
+}
+
+/** Skip .git internals so status/index writes do not re-trigger our watchers. */
+function isGitInternalPath(fsPath: string): boolean {
+	const normalized = fsPath.replace(/\\/g, '/');
+	return /(?:^|\/)\.git(?:\/|$)/.test(normalized);
+}
+
+/** Create/delete/.gitignore-style paths may change the ignored list. */
+function pathNeedsIgnoredRefresh(fsPath: string): boolean {
+	const base = path.basename(fsPath);
+	if (base === '.gitignore' || base === '.ignore') {
+		return true;
+	}
+	const normalized = fsPath.replace(/\\/g, '/');
+	return normalized.endsWith('/.git/info/exclude');
 }
 
 async function fileExists(fsPath: string): Promise<boolean> {
