@@ -22,6 +22,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private busy = false;
 	/** Skip mid-operation snapshot pushes so the UI updates once, like IDEA. */
 	private snapshotDeferredWhileBusy = false;
+	/** Coalesce rapid onDidChange → snapshot pushes (status + dirty edits). */
+	private snapshotTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Bust webview media cache only when commit.js/css actually change. */
 	private loadedMediaVersion = '';
 	private selected?: { repoRoot: string; path: string; staged: boolean };
@@ -56,12 +58,16 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					this.snapshotDeferredWhileBusy = true;
 					return;
 				}
-				void this.pushSnapshot();
+				this.schedulePushSnapshot();
 			})
 		);
 	}
 
 	dispose(): void {
+		if (this.snapshotTimer) {
+			clearTimeout(this.snapshotTimer);
+			this.snapshotTimer = undefined;
+		}
 		this.resolveUpdateAll(undefined);
 		this.resolveFastPushCommit(undefined);
 		this.fastPushConfirmOpen = false;
@@ -970,8 +976,17 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		await promise;
 	}
 
+	private schedulePushSnapshot(): void {
+		if (this.snapshotTimer) {
+			clearTimeout(this.snapshotTimer);
+		}
+		this.snapshotTimer = setTimeout(() => {
+			this.snapshotTimer = undefined;
+			void this.pushSnapshot();
+		}, 40);
+	}
+
 	private async pushSnapshot(): Promise<void> {
-		await this.git.refreshIgnoredFiles();
 		const snapshot = this.git.getWorkspaceSnapshot();
 		this.post({ type: 'snapshot', payload: { ...snapshot, busy: this.busy } });
 	}
