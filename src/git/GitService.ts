@@ -84,6 +84,8 @@ export class GitService implements vscode.Disposable {
 	readonly onDidChange = this._onDidChange.event;
 	private repoDisposables: vscode.Disposable[] = [];
 	private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+	/** While > 0, skip auto refresh so file watchers cannot race user git writes (index.lock). */
+	private refreshSuspended = 0;
 	private lastKnownFileUri: vscode.Uri | undefined;
 	private contextUri: vscode.Uri | undefined;
 	private activeRepoRoot: string | undefined;
@@ -345,10 +347,19 @@ export class GitService implements vscode.Disposable {
 
 	async runWithUserLogging<T>(fn: () => Promise<T>): Promise<T> {
 		setUserGitLogging(true);
+		this.refreshSuspended += 1;
+		if (this.refreshTimer) {
+			clearTimeout(this.refreshTimer);
+			this.refreshTimer = undefined;
+		}
 		try {
 			return await fn();
 		} finally {
+			this.refreshSuspended = Math.max(0, this.refreshSuspended - 1);
 			setUserGitLogging(false);
+			if (this.refreshSuspended === 0) {
+				this.scheduleRefresh();
+			}
 		}
 	}
 
@@ -903,6 +914,9 @@ export class GitService implements vscode.Disposable {
 	}
 
 	async refresh(): Promise<void> {
+		if (this.refreshSuspended > 0) {
+			return;
+		}
 		if (!this.api?.repositories.length) {
 			this.bindRepositoryEvents();
 			this.ignoredByRoot.clear();
@@ -920,6 +934,9 @@ export class GitService implements vscode.Disposable {
 	}
 
 	scheduleRefresh(): void {
+		if (this.refreshSuspended > 0) {
+			return;
+		}
 		if (this.refreshTimer) {
 			clearTimeout(this.refreshTimer);
 		}
@@ -929,15 +946,46 @@ export class GitService implements vscode.Disposable {
 	}
 
 	async stage(fsPath: string, options?: { force?: boolean }): Promise<void> {
-		await this.ensureSaved(fsPath);
-		const repo = this.requireRepoForFsPath(fsPath);
-		if (options?.force) {
-			const relative = path.relative(repo.rootUri.fsPath, fsPath).replace(/\\/g, '/');
-			await this.execGit(repo.rootUri.fsPath, ['add', '-f', '--', relative]);
-			await this.runGitApi(repo, 'status', '', () => repo.status().catch(() => undefined));
+		await this.stageMany([fsPath], options);
+	}
+
+	/**
+	 * Stage many paths in as few git writes as possible (group by repo, chunk args).
+	 * Avoids per-file add+status races that produce index.lock errors on large modules.
+	 */
+	async stageMany(fsPaths: string[], options?: { force?: boolean }): Promise<void> {
+		if (!fsPaths.length) {
 			return;
 		}
-		await this.runGitApi(repo, 'add', this.formatPaths([fsPath]), () => repo.add([fsPath]));
+
+		for (const fsPath of fsPaths) {
+			await this.ensureSaved(fsPath);
+		}
+
+		const byRepo = new Map<Repository, string[]>();
+		for (const fsPath of fsPaths) {
+			const repo = this.requireRepoForFsPath(fsPath);
+			const list = byRepo.get(repo);
+			if (list) {
+				list.push(fsPath);
+			} else {
+				byRepo.set(repo, [fsPath]);
+			}
+		}
+
+		for (const [repo, paths] of byRepo) {
+			if (options?.force) {
+				const relatives = paths.map((fsPath) =>
+					path.relative(repo.rootUri.fsPath, fsPath).replace(/\\/g, '/')
+				);
+				for (const args of chunkGitArgs(['add', '-f', '--'], relatives)) {
+					await this.execGitWithIndexLockRetry(repo.rootUri.fsPath, args);
+				}
+				await this.runGitApi(repo, 'status', '', () => repo.status().catch(() => undefined));
+				continue;
+			}
+			await this.runGitApi(repo, 'add', this.formatPaths(paths), () => repo.add(paths));
+		}
 	}
 
 	async unstage(fsPath: string): Promise<void> {
@@ -2281,26 +2329,74 @@ export class GitService implements vscode.Disposable {
 	 * - Unstaged tracked → restore working tree to HEAD
 	 */
 	async rollbackFile(relativePath: string, repoRoot: string, staged?: boolean): Promise<void> {
-		const repo = this.requireRepoByRoot(repoRoot);
-		const fsPath = path.join(repo.rootUri.fsPath, relativePath);
+		await this.rollbackMany([{ path: relativePath, repoRoot, staged }]);
+	}
 
-		if (this.isUntracked(relativePath, repoRoot)) {
-			await this.runGitApi(repo, 'clean (untracked)', relativePath, () => repo.clean([fsPath]));
-			if (await fileExists(fsPath)) {
-				await fs.unlink(fsPath);
+	/**
+	 * Batch rollback: group by repo and issue one clean / revert / restore (or checkout) per class.
+	 */
+	async rollbackMany(
+		entries: Array<{ path: string; repoRoot: string; staged?: boolean }>
+	): Promise<void> {
+		if (!entries.length) {
+			return;
+		}
+
+		type PathItem = { relativePath: string; fsPath: string };
+		type Bucket = {
+			repo: Repository;
+			repoRoot: string;
+			untracked: PathItem[];
+			staged: PathItem[];
+			unstaged: PathItem[];
+		};
+		const byRepo = new Map<string, Bucket>();
+
+		for (const entry of entries) {
+			const repo = this.requireRepoByRoot(entry.repoRoot);
+			const key = repo.rootUri.fsPath.replace(/\\/g, '/').toLowerCase();
+			let bucket = byRepo.get(key);
+			if (!bucket) {
+				bucket = { repo, repoRoot: entry.repoRoot, untracked: [], staged: [], unstaged: [] };
+				byRepo.set(key, bucket);
 			}
-			await this.refresh();
-			return;
+			const fsPath = path.join(repo.rootUri.fsPath, entry.path);
+			if (this.isUntracked(entry.path, entry.repoRoot)) {
+				bucket.untracked.push({ relativePath: entry.path, fsPath });
+				continue;
+			}
+			const treatAsStaged = entry.staged ?? this.isStaged(entry.path, entry.repoRoot);
+			if (treatAsStaged) {
+				bucket.staged.push({ relativePath: entry.path, fsPath });
+			} else {
+				bucket.unstaged.push({ relativePath: entry.path, fsPath });
+			}
 		}
 
-		const treatAsStaged = staged ?? this.isStaged(relativePath, repoRoot);
-		if (treatAsStaged) {
-			await this.runGitApi(repo, 'revert (unstage)', relativePath, () => repo.revert([fsPath]));
-			await this.refresh();
-			return;
+		for (const bucket of byRepo.values()) {
+			const { repo, untracked, staged, unstaged } = bucket;
+			if (untracked.length) {
+				const fsPaths = untracked.map((item) => item.fsPath);
+				await this.runGitApi(repo, 'clean (untracked)', this.formatPaths(fsPaths), () =>
+					repo.clean(fsPaths)
+				);
+				for (const item of untracked) {
+					if (await fileExists(item.fsPath)) {
+						await fs.unlink(item.fsPath);
+					}
+				}
+			}
+			if (staged.length) {
+				const fsPaths = staged.map((item) => item.fsPath);
+				await this.runGitApi(repo, 'revert (unstage)', this.formatPaths(fsPaths), () =>
+					repo.revert(fsPaths)
+				);
+			}
+			if (unstaged.length) {
+				await this.discardPathsToHead(repo, unstaged);
+			}
 		}
 
-		await this.discardFileToHead(repo, relativePath, fsPath);
 		await this.refresh();
 	}
 
@@ -2356,13 +2452,20 @@ export class GitService implements vscode.Disposable {
 		}
 	}
 
-	/** Restore working tree to HEAD for an unstaged tracked change. */
-	private async discardFileToHead(repo: Repository, relativePath: string, fsPath: string): Promise<void> {
+	/** Restore working tree to HEAD for unstaged tracked changes (batched). */
+	private async discardPathsToHead(
+		repo: Repository,
+		items: Array<{ relativePath: string; fsPath: string }>
+	): Promise<void> {
+		if (!items.length) {
+			return;
+		}
+		const fsPaths = items.map((item) => item.fsPath);
 		const restoreFn = (repo as Repository & { restore?: typeof repo.restore }).restore;
 		if (typeof restoreFn === 'function') {
 			try {
-				await this.runGitApi(repo, 'restore (working tree)', relativePath, () =>
-					restoreFn.call(repo, [fsPath], { ref: 'HEAD' })
+				await this.runGitApi(repo, 'restore (working tree)', this.formatPaths(fsPaths), () =>
+					restoreFn.call(repo, fsPaths, { ref: 'HEAD' })
 				);
 				return;
 			} catch {
@@ -2370,7 +2473,10 @@ export class GitService implements vscode.Disposable {
 			}
 		}
 
-		await this.execGit(repo.rootUri.fsPath, ['checkout', 'HEAD', '--', relativePath]);
+		const relatives = items.map((item) => item.relativePath);
+		for (const args of chunkGitArgs(['checkout', 'HEAD', '--'], relatives)) {
+			await this.execGitWithIndexLockRetry(repo.rootUri.fsPath, args);
+		}
 	}
 
 	private async runGitApi<T>(
@@ -2442,6 +2548,27 @@ export class GitService implements vscode.Disposable {
 			const output = combineGitOutput(stdout, stderr);
 			logGitFail(err, Date.now() - started, output);
 			throw new Error(stderr || stdout || e.message || String(err));
+		}
+	}
+
+	/** Retry briefly when another git process (often VS Code's) holds index.lock. */
+	private async execGitWithIndexLockRetry(
+		cwd: string,
+		args: string[],
+		env?: NodeJS.ProcessEnv
+	): Promise<void> {
+		const maxAttempts = 6;
+		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+			try {
+				await this.execGit(cwd, args, env);
+				return;
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				if (!isIndexLockError(message) || attempt === maxAttempts) {
+					throw err;
+				}
+				await sleep(40 * attempt);
+			}
 		}
 	}
 
@@ -3287,4 +3414,36 @@ export function bumpTrailingVTag(tagName: string | undefined): string | undefine
 	}
 	const next = `${match[1]}${Number(match[2]) + 1}`;
 	return isValidTagName(next) ? next : undefined;
+}
+
+function isIndexLockError(message: string): boolean {
+	return /index\.lock/i.test(message) || /Another git process seems to be running/i.test(message);
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Keep git argv under typical Windows CreateProcess length limits. */
+function chunkGitArgs(baseArgs: string[], pathArgs: string[], maxLen = 7000): string[][] {
+	if (!pathArgs.length) {
+		return [];
+	}
+	const chunks: string[][] = [];
+	let current = [...baseArgs];
+	let len = current.reduce((sum, part) => sum + part.length + 1, 0);
+	for (const pathArg of pathArgs) {
+		const add = pathArg.length + 1;
+		if (current.length > baseArgs.length && len + add > maxLen) {
+			chunks.push(current);
+			current = [...baseArgs];
+			len = current.reduce((sum, part) => sum + part.length + 1, 0);
+		}
+		current.push(pathArg);
+		len += add;
+	}
+	if (current.length > baseArgs.length) {
+		chunks.push(current);
+	}
+	return chunks;
 }
