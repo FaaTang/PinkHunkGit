@@ -4,6 +4,7 @@ import {
 	installRecommendedKeybindings,
 	promptInstallKeybindings,
 } from './keybindings/installRecommendedKeybindings';
+import { CloneDialogProvider } from './panel/CloneDialogProvider';
 import { CommitViewProvider } from './panel/CommitViewProvider';
 import { PushDialogProvider } from './panel/PushDialogProvider';
 import { initGitOutput, logExtension } from './git/gitOutput';
@@ -12,35 +13,42 @@ import { showTimedInfoMessage } from './ui/notify';
 let gitService: GitService | undefined;
 let commitViewProvider: CommitViewProvider | undefined;
 let pushDialogProvider: PushDialogProvider | undefined;
+let cloneDialogProvider: CloneDialogProvider | undefined;
 let gitReady = false;
 let gitInitError = 'Git service is not initialized.';
 let gitInitPromise: Promise<void> | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
+let gitInitStarted = false;
+let extensionContextRef: vscode.ExtensionContext | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+	extensionContextRef = context;
 	outputChannel = vscode.window.createOutputChannel('Pink Hunk Git');
 	context.subscriptions.push(outputChannel);
 	initGitOutput(outputChannel);
 
 	try {
 		gitService = new GitService();
-		gitInitPromise = initializeGit(context);
 		pushDialogProvider = new PushDialogProvider(context.extensionUri, gitService);
+		cloneDialogProvider = new CloneDialogProvider(context.extensionUri, gitService, context);
 		commitViewProvider = new CommitViewProvider(
 			context.extensionUri,
 			gitService,
 			pushDialogProvider,
 			async () => {
-			const result = await installRecommendedKeybindings(context);
-			if (!result.ok) {
-				vscode.window.showErrorMessage(result.error);
-			}
-		},
-			() => gitInitPromise ?? Promise.resolve(),
+				const result = await installRecommendedKeybindings(context);
+				if (!result.ok) {
+					vscode.window.showErrorMessage(result.error);
+				}
+			},
+			async () => {
+				ensureGitInitStarted(context);
+				await (gitInitPromise ?? Promise.resolve());
+			},
 			context
 		);
 
-		context.subscriptions.push(gitService, pushDialogProvider, commitViewProvider);
+		context.subscriptions.push(gitService, pushDialogProvider, cloneDialogProvider, commitViewProvider);
 
 		void vscode.commands.executeCommand('setContext', 'copyIdeaGitUi.hasSelection', false);
 
@@ -54,6 +62,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 		context.subscriptions.push(
 			vscode.commands.registerCommand('copyIdeaGitUi.openCommit', async () => {
+				ensureGitInitStarted(context);
 				await ensureGitReady(true);
 				if (!gitService || !commitViewProvider) {
 					return;
@@ -68,6 +77,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				await commitViewProvider.reveal(true, true);
 			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.openPush', async () => {
+				ensureGitInitStarted(context);
 				if (!(await ensureGitReady(true))) {
 					return;
 				}
@@ -77,7 +87,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				gitService.rememberEditorContext();
 				await pushDialogProvider.show();
 			}),
+			vscode.commands.registerCommand('copyIdeaGitUi.openClone', async () => {
+				ensureGitInitStarted(context);
+				if (!(await ensureGitReady(true))) {
+					return;
+				}
+				if (!gitService || !cloneDialogProvider) {
+					return;
+				}
+				await cloneDialogProvider.show();
+			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.updateAllRepositories', async () => {
+				ensureGitInitStarted(context);
 				if (!(await ensureGitReady(true)) || !gitService || !commitViewProvider) {
 					return;
 				}
@@ -198,6 +219,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				await commitViewProvider.addToGit();
 			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.commit', async () => {
+				ensureGitInitStarted(context);
 				if (!(await ensureGitReady(true))) {
 					return;
 				}
@@ -207,6 +229,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				await commitViewProvider.triggerCommit();
 			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.commitAndPush', async () => {
+				ensureGitInitStarted(context);
 				if (!(await ensureGitReady(true))) {
 					return;
 				}
@@ -216,6 +239,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				await commitViewProvider.triggerCommitAndPush();
 			}),
 			vscode.commands.registerCommand('copyIdeaGitUi.fastPush', async () => {
+				ensureGitInitStarted(context);
 				if (!(await ensureGitReady(true))) {
 					return;
 				}
@@ -270,6 +294,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			})
 		);
 
+		// Warm up Git shortly after activate (non-blocking). Do not await here —
+		// awaiting vscode.git can stall the Extension Host debugger past 10s.
+		const warmupTimer = setTimeout(() => {
+			ensureGitInitStarted(context, { startupWarmup: true });
+		}, 0);
+		context.subscriptions.push({
+			dispose: () => clearTimeout(warmupTimer),
+		});
+
 		logExtension(`Activated v${context.extension.packageJSON.version ?? 'unknown'}`);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
@@ -279,7 +312,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	}
 }
 
-async function initializeGit(context: vscode.ExtensionContext): Promise<void> {
+function ensureGitInitStarted(
+	context: vscode.ExtensionContext,
+	options?: { startupWarmup?: boolean }
+): void {
+	if (gitInitStarted) {
+		return;
+	}
+	gitInitStarted = true;
+	gitInitPromise = initializeGit(context, { suppressWarning: !!options?.startupWarmup });
+}
+
+async function initializeGit(
+	context: vscode.ExtensionContext,
+	options?: { suppressWarning?: boolean }
+): Promise<void> {
 	if (!gitService) {
 		gitReady = false;
 		gitInitError = 'Git service is not initialized.';
@@ -300,7 +347,7 @@ async function initializeGit(context: vscode.ExtensionContext): Promise<void> {
 
 	if (gitReady) {
 		void promptInstallKeybindings(context);
-	} else {
+	} else if (!options?.suppressWarning) {
 		vscode.window.showWarningMessage(
 			`Pink Hunk Git: ${gitInitError || 'Git not ready'}. Keybindings remain available; details will be shown when opening the panel.`
 		);
@@ -308,6 +355,10 @@ async function initializeGit(context: vscode.ExtensionContext): Promise<void> {
 }
 
 async function ensureGitReady(showError: boolean): Promise<boolean> {
+	if (!gitInitStarted && extensionContextRef) {
+		// Best effort lazy init when commands run before warmup fires.
+		ensureGitInitStarted(extensionContextRef);
+	}
 	if (gitInitPromise) {
 		await gitInitPromise;
 	}
@@ -330,5 +381,9 @@ export function deactivate(): void {
 	gitService = undefined;
 	commitViewProvider = undefined;
 	pushDialogProvider = undefined;
+	cloneDialogProvider = undefined;
 	gitInitPromise = undefined;
+	extensionContextRef = undefined;
+	gitInitStarted = false;
+	gitReady = false;
 }

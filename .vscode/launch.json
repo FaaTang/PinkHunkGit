@@ -10,7 +10,8 @@
         "${workspaceFolder}"
       ],
       "outFiles": ["${workspaceFolder}/out/**/*.js"],
-      "preLaunchTask": "npm: compile"
+      "preLaunchTask": "npm: watch",
+      "timeout": 120000
     }
   ]
 }

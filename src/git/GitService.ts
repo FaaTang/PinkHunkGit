@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import { execFile as execFileCb } from 'child_process';
+import { execFile as execFileCb, spawn } from 'child_process';
 import { promisify } from 'util';
 
 const execFile = promisify(execFileCb);
@@ -13,6 +13,7 @@ import {
 	logGitStart,
 	setUserGitLogging,
 } from './gitOutput';
+import { isLikelyCloneUrl, parseCloneUrl } from './cloneUrl';
 import {
 	ChangeItem,
 	CommitLogItem,
@@ -53,8 +54,31 @@ export type PullAllResult = {
 	failed: Array<{ repository: string; error: string }>;
 };
 
+export type CloneProgress = {
+	phase: 'counting' | 'compressing' | 'receiving' | 'resolving' | 'updating' | 'other';
+	overallPercent?: number;
+	percent?: number;
+	downloadedKB?: number;
+	totalKB?: number;
+	speedKBps?: number;
+	detail: string;
+};
+
+export type CloneTask = {
+	promise: Promise<string>;
+	cancel: () => void;
+};
+
+export type GitProxyStatus = {
+	currentProxy?: string;
+	usingSessionProxy: boolean;
+};
+
 export class GitService implements vscode.Disposable {
 	private api: API | undefined;
+	private gitExecutable = 'git';
+	private configuredGitProxy: string | undefined;
+	private sessionGitProxy: string | undefined;
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly _onDidChange = new vscode.EventEmitter<void>();
 	readonly onDidChange = this._onDidChange.event;
@@ -78,6 +102,8 @@ export class GitService implements vscode.Disposable {
 	private ignoredRefreshInFlight: Promise<void> | undefined;
 
 	async init(): Promise<{ ok: true } | { ok: false; error: string }> {
+		this.gitExecutable = await this.resolveGitExecutable();
+		this.configuredGitProxy = await this.readConfiguredGitProxy();
 		const extension = vscode.extensions.getExtension<GitExtension>('vscode.git');
 		if (!extension) {
 			this.initState = 'failed';
@@ -122,6 +148,80 @@ export class GitService implements vscode.Disposable {
 		this.initState = 'ready';
 		this._onDidChange.fire();
 		return { ok: true };
+	}
+
+	private async resolveGitExecutable(): Promise<string> {
+		const configValue = vscode.workspace.getConfiguration('git').get<string | string[]>('path');
+		const candidates = Array.isArray(configValue)
+			? configValue
+			: typeof configValue === 'string'
+				? [configValue]
+				: [];
+		for (const raw of candidates) {
+			const candidate = raw.trim();
+			if (!candidate) {
+				continue;
+			}
+			try {
+				await execFile(candidate, ['--version'], {
+					maxBuffer: 256 * 1024,
+					env: process.env,
+				});
+				return candidate;
+			} catch {
+				// Try next configured path.
+			}
+		}
+		return 'git';
+	}
+
+	private async readConfiguredGitProxy(): Promise<string | undefined> {
+		const fromEnv =
+			process.env.HTTPS_PROXY ||
+			process.env.https_proxy ||
+			process.env.HTTP_PROXY ||
+			process.env.http_proxy;
+		if (fromEnv?.trim()) {
+			return fromEnv.trim();
+		}
+		const readKey = async (key: string): Promise<string | undefined> => {
+			try {
+				const { stdout } = await execFile(this.gitExecutable, ['config', '--get', key], {
+					maxBuffer: 256 * 1024,
+					env: process.env,
+				});
+				const value = bufferToString(stdout).trim();
+				return value || undefined;
+			} catch {
+				return undefined;
+			}
+		};
+		return (await readKey('https.proxy')) || (await readKey('http.proxy'));
+	}
+
+	getGitProxyStatus(): GitProxyStatus {
+		return {
+			currentProxy: this.sessionGitProxy || this.configuredGitProxy,
+			usingSessionProxy: Boolean(this.sessionGitProxy),
+		};
+	}
+
+	setSessionGitProxy(proxy?: string): void {
+		const value = proxy?.trim();
+		this.sessionGitProxy = value || undefined;
+	}
+
+	private withSessionProxyArgs(args: string[]): string[] {
+		if (!this.sessionGitProxy) {
+			return args;
+		}
+		return [
+			'-c',
+			`http.proxy=${this.sessionGitProxy}`,
+			'-c',
+			`https.proxy=${this.sessionGitProxy}`,
+			...args,
+		];
 	}
 
 	markInitFailed(error: string): void {
@@ -250,6 +350,173 @@ export class GitService implements vscode.Disposable {
 		} finally {
 			setUserGitLogging(false);
 		}
+	}
+
+	/**
+	 * Clone a remote repository into `targetDirectory` via `git clone`.
+	 * Does not require an existing workspace repository.
+	 * @returns Absolute path of the cloned directory.
+	 */
+	async cloneRepository(url: string, targetDirectory: string): Promise<string> {
+		const task = this.startCloneRepository(url, targetDirectory);
+		return task.promise;
+	}
+
+	startCloneRepository(
+		url: string,
+		targetDirectory: string,
+		onProgress?: (progress: CloneProgress) => void
+	): CloneTask {
+		const trimmedUrl = url.trim();
+		const target = path.resolve(targetDirectory.trim());
+		let child: ReturnType<typeof spawn> | undefined;
+		let cancelled = false;
+		let rejectSettle: ((reason?: unknown) => void) | undefined;
+		let killTimer: ReturnType<typeof setTimeout> | undefined;
+
+		const promise = (async () => {
+			if (!trimmedUrl) {
+				throw new Error('Repository URL is required.');
+			}
+			if (!isLikelyCloneUrl(trimmedUrl)) {
+				throw new Error('Repository URL is invalid. Use an HTTPS or SSH URL.');
+			}
+			const parsed = parseCloneUrl(trimmedUrl);
+			if (parsed.protocol === 'unknown') {
+				throw new Error('Unable to detect repository protocol. Use an HTTPS or SSH URL.');
+			}
+
+			const parentDir = path.dirname(target);
+			await fs.mkdir(parentDir, { recursive: true });
+
+			try {
+				const stat = await fs.stat(target);
+				if (stat.isDirectory()) {
+					const entries = await fs.readdir(target);
+					if (entries.length > 0) {
+						throw new Error(`Target directory already exists and is not empty: ${target}`);
+					}
+				} else {
+					throw new Error(`Target path already exists and is not a directory: ${target}`);
+				}
+			} catch (err) {
+				const code = (err as NodeJS.ErrnoException).code;
+				if (code !== 'ENOENT') {
+					throw err;
+				}
+			}
+
+			const args = this.withSessionProxyArgs(['clone', '--progress', trimmedUrl, target]);
+			const command = formatGitShellCommand(args);
+			logGitStart(parentDir, command);
+			const started = Date.now();
+			const stderrChunks: string[] = [];
+			const stdoutChunks: string[] = [];
+			let stderrBuffer = '';
+
+			return await new Promise<string>((resolve, reject) => {
+				rejectSettle = reject;
+				child = spawn(this.gitExecutable, args, {
+					cwd: parentDir,
+					env: process.env,
+					stdio: ['ignore', 'pipe', 'pipe'],
+				});
+
+				child.stdout?.on('data', (chunk: Buffer) => {
+					const text = chunk.toString('utf8');
+					stdoutChunks.push(text);
+				});
+
+				child.stderr?.on('data', (chunk: Buffer) => {
+					const text = chunk.toString('utf8');
+					stderrChunks.push(text);
+					stderrBuffer += text;
+					const lines = stderrBuffer.split(/\r?\n|\r/);
+					stderrBuffer = lines.pop() ?? '';
+					for (const line of lines) {
+						const parsedProgress = parseCloneProgressLine(line);
+						if (parsedProgress) {
+							onProgress?.(parsedProgress);
+						}
+					}
+				});
+
+				child.on('error', (err) => {
+					if (killTimer) {
+						clearTimeout(killTimer);
+						killTimer = undefined;
+					}
+					logGitFail(err, Date.now() - started);
+					reject(err);
+				});
+
+				child.on('close', (code) => {
+					if (killTimer) {
+						clearTimeout(killTimer);
+						killTimer = undefined;
+					}
+					const tailLine = stderrBuffer.trim();
+					if (tailLine) {
+						const parsedTail = parseCloneProgressLine(tailLine);
+						if (parsedTail) {
+							onProgress?.(parsedTail);
+						}
+					}
+					const output = combineGitOutput(stdoutChunks.join(''), stderrChunks.join(''));
+					if (cancelled) {
+						const cancelError = new Error('Clone was force-cancelled.');
+						logGitFail(cancelError, Date.now() - started, output);
+						reject(cancelError);
+						return;
+					}
+					if (code === 0) {
+						logGitOk(Date.now() - started, output);
+						resolve(target);
+						return;
+					}
+					const message = (stderrChunks.join('').trim() || stdoutChunks.join('').trim() || `git clone failed with exit code ${code}`).trim();
+					const err = new Error(message);
+					logGitFail(err, Date.now() - started, output);
+					reject(err);
+				});
+			});
+		})();
+
+		return {
+			promise,
+			cancel: () => {
+				cancelled = true;
+				if (!child || child.exitCode !== null) {
+					return;
+				}
+				try {
+					child.kill('SIGTERM');
+				} catch {
+					// ignore
+				}
+				killTimer = setTimeout(() => {
+					if (!child || child.exitCode !== null) {
+						return;
+					}
+					try {
+						child.kill('SIGKILL');
+					} catch {
+						// ignore
+					}
+				}, 1200);
+				// If process doesn't emit close due to abnormal environment, fail-safe reject.
+				setTimeout(() => {
+					if (child && child.exitCode === null) {
+						try {
+							child.kill('SIGKILL');
+						} catch {
+							// ignore
+						}
+					}
+					rejectSettle?.(new Error('Clone was force-cancelled.'));
+				}, 5000);
+			},
+		};
 	}
 
 	getRepositoryCount(): number {
@@ -872,7 +1139,7 @@ export class GitService implements vscode.Disposable {
 		const parentRef = `${commit}^`;
 		let parentHasFile = false;
 		try {
-			await execFile('git', ['cat-file', '-e', `${parentRef}:${rel}`], {
+			await execFile(this.gitExecutable, ['cat-file', '-e', `${parentRef}:${rel}`], {
 				cwd: repo.rootUri.fsPath,
 				maxBuffer: 1024 * 1024,
 				env: process.env,
@@ -1419,7 +1686,8 @@ export class GitService implements vscode.Disposable {
 		logGitStart(cwd, command);
 		const started = Date.now();
 		try {
-			const { stdout, stderr } = await execFile('git', args, {
+			const runArgs = this.withSessionProxyArgs(args);
+			const { stdout, stderr } = await execFile(this.gitExecutable, runArgs, {
 				cwd,
 				maxBuffer: 10 * 1024 * 1024,
 				env: process.env,
@@ -2077,7 +2345,7 @@ export class GitService implements vscode.Disposable {
 		// Authoritative check — do not trust status alone for tracked-looking paths.
 		const headPath = relativePath.replace(/\\/g, '/');
 		try {
-			await execFile('git', ['cat-file', '-e', `HEAD:${headPath}`], {
+			await execFile(this.gitExecutable, ['cat-file', '-e', `HEAD:${headPath}`], {
 				cwd: root,
 				maxBuffer: 1024 * 1024,
 				env: process.env,
@@ -2155,11 +2423,12 @@ export class GitService implements vscode.Disposable {
 	}
 
 	private async execGit(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<void> {
-		const command = formatGitShellCommand(args);
+			const runArgs = this.withSessionProxyArgs(args);
+			const command = formatGitShellCommand(runArgs);
 		logGitStart(cwd, command);
 		const started = Date.now();
 		try {
-			const { stdout, stderr } = await execFile('git', args, {
+				const { stdout, stderr } = await execFile(this.gitExecutable, runArgs, {
 				cwd,
 				maxBuffer: 10 * 1024 * 1024,
 				env: env ? { ...process.env, ...env } : process.env,
@@ -2615,6 +2884,130 @@ function bufferToString(value: string | Buffer | undefined): string {
 function combineGitOutput(stdout: string | Buffer | undefined, stderr: string | Buffer | undefined): string {
 	const parts = [bufferToString(stdout).trim(), bufferToString(stderr).trim()].filter(Boolean);
 	return parts.join('\n');
+}
+
+function parseCloneProgressLine(rawLine: string): CloneProgress | undefined {
+	const line = rawLine.replace(/^remote:\s*/i, '').trim();
+	if (!line) {
+		return undefined;
+	}
+	const make = (
+		phase: CloneProgress['phase'],
+		detail: string,
+		percent?: number,
+		meta?: { downloadedKB?: number; totalKB?: number; speedKBps?: number }
+	): CloneProgress => ({
+		phase,
+		overallPercent: mapCloneOverallPercent(phase, percent),
+		percent,
+		downloadedKB: meta?.downloadedKB,
+		totalKB: meta?.totalKB,
+		speedKBps: meta?.speedKBps,
+		detail: detail.trim(),
+	});
+	let m = /^(Enumerating|Counting) objects:\s*(\d+)%/.exec(line);
+	if (m) {
+		return make('counting', line, clampPercent(Number(m[2])));
+	}
+	m = /^Compressing objects:\s*(\d+)%/.exec(line);
+	if (m) {
+		return make('compressing', line, clampPercent(Number(m[1])));
+	}
+	m = /^Receiving objects:\s*(\d+)%/.exec(line);
+	if (m) {
+		const percent = clampPercent(Number(m[1]));
+		const downloadedKB = parseSizeToKB(captureAmount(line));
+		const speedKBps = parseSizeToKB(captureSpeed(line));
+		const totalKB =
+			typeof downloadedKB === 'number' && percent > 0
+				? roundKB(downloadedKB / (percent / 100))
+				: undefined;
+		return make('receiving', line, percent, { downloadedKB, totalKB, speedKBps });
+	}
+	m = /^Resolving deltas:\s*(\d+)%/.exec(line);
+	if (m) {
+		return make('resolving', line, clampPercent(Number(m[1])));
+	}
+	if (/^Updating files:/i.test(line)) {
+		const p = /(\d+)%/.exec(line);
+		return make('updating', line, p ? clampPercent(Number(p[1])) : undefined);
+	}
+	if (/^Receiving objects:/i.test(line)) {
+		const downloadedKB = parseSizeToKB(captureAmount(line));
+		const speedKBps = parseSizeToKB(captureSpeed(line));
+		return make('receiving', line, undefined, { downloadedKB, speedKBps });
+	}
+	if (/^Resolving deltas:/i.test(line)) {
+		return make('resolving', line);
+	}
+	return make('other', line);
+}
+
+function clampPercent(v: number): number {
+	if (!Number.isFinite(v)) {
+		return 0;
+	}
+	return Math.max(0, Math.min(100, v));
+}
+
+function mapCloneOverallPercent(phase: CloneProgress['phase'], percent?: number): number | undefined {
+	const p = typeof percent === 'number' ? clampPercent(percent) : undefined;
+	switch (phase) {
+		case 'counting':
+			return p == null ? 2 : roundKB((p / 100) * 10);
+		case 'compressing':
+			return p == null ? 12 : roundKB(10 + (p / 100) * 12);
+		case 'receiving':
+			return p == null ? 24 : roundKB(22 + (p / 100) * 63);
+		case 'resolving':
+			return p == null ? 88 : roundKB(85 + (p / 100) * 13);
+		case 'updating':
+			return p == null ? 99 : roundKB(98 + (p / 100) * 2);
+		default:
+			return p;
+	}
+}
+
+function captureAmount(line: string): string | undefined {
+	const m = /,\s*([0-9.]+\s*[KMGT]?i?B)\s*(?:\||$)/i.exec(line);
+	return m?.[1];
+}
+
+function captureSpeed(line: string): string | undefined {
+	const m = /\|\s*([0-9.]+\s*[KMGT]?i?B)\/s/i.exec(line);
+	return m?.[1];
+}
+
+function parseSizeToKB(raw?: string): number | undefined {
+	if (!raw) {
+		return undefined;
+	}
+	const m = /^([0-9.]+)\s*([KMGT]?i?B)$/i.exec(raw.trim());
+	if (!m) {
+		return undefined;
+	}
+	const value = Number(m[1]);
+	if (!Number.isFinite(value)) {
+		return undefined;
+	}
+	const unit = m[2].toUpperCase();
+	let kb = value;
+	if (unit === 'B') {
+		kb = value / 1024;
+	} else if (unit === 'KIB' || unit === 'KB') {
+		kb = value;
+	} else if (unit === 'MIB' || unit === 'MB') {
+		kb = value * 1024;
+	} else if (unit === 'GIB' || unit === 'GB') {
+		kb = value * 1024 * 1024;
+	} else if (unit === 'TIB' || unit === 'TB') {
+		kb = value * 1024 * 1024 * 1024;
+	}
+	return roundKB(kb);
+}
+
+function roundKB(value: number): number {
+	return Math.round(value * 100) / 100;
 }
 
 function dedupeByPath(items: ChangeItem[]): ChangeItem[] {

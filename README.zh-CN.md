@@ -47,8 +47,19 @@ npm run package
 - 勾选纳入提交；右键 Diff / 回滚 / 打开文件 / 定位资源管理器
 - Commit / Commit and Push；多仓库切换
 - Fast Push（Commit and Push ▾ 下拉）：可选 AI 生成说明 → 提交 → 可选自动 `v*` tag 递增 → 可选推送并自动合并
+- Clone Repository 对话框（仿 IDEA）：粘贴 HTTPS/SSH URL、选择目录后执行 `git clone`
 - 一次拉取并更新当前工作区内的所有 Git 仓库
 - 快捷键安装按钮（写入用户 `keybindings.json`）
+
+### Clone Repository
+
+命令面板运行 **Pink Hunk Git: Clone Repository**，或点击 Commit 面板标题栏的克隆图标。
+
+1. 输入仓库 URL（HTTPS 或 SSH，界面会自动识别协议）
+2. 确认目标 Directory（会按仓库名自动建议；可用 **…** 浏览文件夹）
+3. 点击 **Clone**。成功后可选择 **Open** 或 **Open in New Window**
+
+最近使用的 URL 会记住。认证沿用本机 Git / SSH 凭据助手。
 
 ### Fast Push
 

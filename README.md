@@ -47,8 +47,19 @@ npm run package
 - Check files to include in commit; right-click for Diff / Rollback / Open File / Reveal in Explorer
 - Commit / Commit and Push; multi-repo switching
 - Fast Push (from Commit and Push ▾): optional AI commit message → commit → optional auto `v*` tag bump → optional push with auto-merge
+- Clone Repository dialog (IDEA-style): paste HTTPS/SSH URL, pick directory, `git clone`
 - Pull and update all Git repositories in the workspace at once
 - Keybindings install button (writes to user `keybindings.json`)
+
+### Clone Repository
+
+Run **Pink Hunk Git: Clone Repository** from the Command Palette, or use the clone icon in the Commit panel title bar.
+
+1. Enter a Git repository URL (HTTPS or SSH — protocol is detected automatically)
+2. Confirm the target Directory (auto-suggested from the repo name; use **…** to browse)
+3. Click **Clone**. On success you can **Open** or **Open in New Window**
+
+Recent URLs are remembered. Authentication uses your existing Git / SSH credential helpers.
 
 ### Fast Push
 

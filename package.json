@@ -2,7 +2,7 @@
   "name": "pink-hunk-git",
   "displayName": "Pink Hunk Git",
   "description": "IDEA-like Git commit panel for VS Code",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "publisher": "FaaTang",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -12,9 +12,6 @@
   "categories": [
     "SCM Providers",
     "Other"
-  ],
-  "activationEvents": [
-    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "extensionKind": [
@@ -32,6 +29,12 @@
         "command": "copyIdeaGitUi.openPush",
         "title": "Open Push",
         "category": "Pink Hunk Git"
+      },
+      {
+        "command": "copyIdeaGitUi.openClone",
+        "title": "Clone Repository",
+        "category": "Pink Hunk Git",
+        "icon": "$(repo-clone)"
       },
       {
         "command": "copyIdeaGitUi.updateAllRepositories",
@@ -123,15 +126,21 @@
     "menus": {
       "view/title": [
         {
-          "command": "copyIdeaGitUi.updateAllRepositories",
+          "command": "copyIdeaGitUi.openClone",
           "when": "view == copyIdeaGitUi.commitView",
           "group": "navigation@0",
+          "title": "Clone Repository"
+        },
+        {
+          "command": "copyIdeaGitUi.updateAllRepositories",
+          "when": "view == copyIdeaGitUi.commitView",
+          "group": "navigation@1",
           "title": "Update All Git Repositories"
         },
         {
           "command": "copyIdeaGitUi.openExplorer",
           "when": "view == copyIdeaGitUi.commitView",
-          "group": "navigation@1",
+          "group": "navigation@2",
           "title": "Explorer"
         }
       ]
