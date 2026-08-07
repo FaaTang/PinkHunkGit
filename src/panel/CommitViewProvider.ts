@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { bumpTrailingVTag, GitService } from '../git/GitService';
 import { FastPushFlags, FastPushSettingsStore } from '../fastPush/settings';
 import {
@@ -21,6 +22,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private busy = false;
 	/** Skip mid-operation snapshot pushes so the UI updates once, like IDEA. */
 	private snapshotDeferredWhileBusy = false;
+	/** Bust webview media cache only when commit.js/css actually change. */
+	private loadedMediaVersion = '';
 	private selected?: { repoRoot: string; path: string; staged: boolean };
 	private operationChain: Promise<void> = Promise.resolve();
 	private pendingFocusMessage = false;
@@ -142,6 +145,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		};
 
 		try {
+			this.loadedMediaVersion = this.getMediaVersion();
 			webviewView.webview.html = this.getHtml(webviewView.webview);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
@@ -151,9 +155,19 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		this.disposables.push(
 			webviewView.webview.onDidReceiveMessage((msg: WebviewToHost) => this.onMessage(msg)),
 			webviewView.onDidChangeVisibility(() => {
-				if (webviewView.visible) {
-					void this.refreshAndPush();
+				if (!webviewView.visible) {
+					return;
 				}
+				const mediaVersion = this.getMediaVersion();
+				if (mediaVersion !== this.loadedMediaVersion) {
+					this.loadedMediaVersion = mediaVersion;
+					try {
+						webviewView.webview.html = this.getHtml(webviewView.webview);
+					} catch {
+						// keep existing html
+					}
+				}
+				void this.refreshAndPush();
 			})
 		);
 
@@ -959,6 +973,18 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		return path.join(repoRoot, relativePath);
 	}
 
+	private getMediaVersion(): string {
+		try {
+			const jsPath = path.join(this.extensionUri.fsPath, 'media', 'commit.js');
+			const cssPath = path.join(this.extensionUri.fsPath, 'media', 'commit.css');
+			const jsMtime = fs.statSync(jsPath).mtimeMs;
+			const cssMtime = fs.statSync(cssPath).mtimeMs;
+			return `${Math.max(jsMtime, cssMtime)}`;
+		} catch {
+			return Date.now().toString();
+		}
+	}
+
 	private post(message: HostToWebview): void {
 		if (this.view) {
 			void this.view.webview.postMessage(message);
@@ -966,8 +992,13 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private getHtml(webview: vscode.Webview): string {
-		const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'commit.css'));
-		const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'commit.js'));
+		const mediaVersion = this.getMediaVersion();
+		const styleUri = webview
+			.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'commit.css'))
+			.with({ query: `v=${mediaVersion}` });
+		const scriptUri = webview
+			.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'commit.js'))
+			.with({ query: `v=${mediaVersion}` });
 		const nonce = getNonce();
 
 		return `<!DOCTYPE html>

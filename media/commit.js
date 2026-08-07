@@ -730,6 +730,19 @@
       groupByModuleChk.checked = groupByModule;
     }
     saveWebviewState({ groupByModule });
+    // When enabling Module, expand categories so empty module rows are actually visible.
+    if (groupByModule) {
+      let changed = false;
+      for (const groupId of ['changes', 'unversioned']) {
+        if (collapsedGroups.has(categoryCollapseKey(groupId))) {
+          collapsedGroups.delete(categoryCollapseKey(groupId));
+          changed = true;
+        }
+      }
+      if (changed) {
+        saveCollapsedGroups();
+      }
+    }
     renderFiles();
   }
 
@@ -2374,19 +2387,22 @@
       return wrap;
     }
 
-    if (!entries.length) {
-      return wrap;
-    }
-
-    // Module = repository grouping (IDEA modules ≈ workspace Git repos).
-    // Always list modules when Group by Module is on — including empty ones —
-    // so Unversioned matches Changes (IDEA-style).
+    // Module grouping: always list every repository under this category,
+    // including modules with 0 files (IDEA-style). Do this before any
+    // empty-list early return so a clean tree still shows module headers.
     if (groupByModule) {
+      if (!entries.length) {
+        return wrap;
+      }
       for (const { repo, items } of entries) {
         wrap.appendChild(
           renderRepoSubgroup(repo, items, groupId, unversionedGroup, focusedRoot, ignoredGroup)
         );
       }
+      return wrap;
+    }
+
+    if (!entries.length) {
       return wrap;
     }
 
