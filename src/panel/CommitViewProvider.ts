@@ -7,6 +7,7 @@ import {
 	CommitMessagePrefixSettingsStore,
 } from '../commitMessage/prefixSettings';
 import { UpdateAllSelectionStore } from '../updateAll/selectionStore';
+import { notifyGitError } from '../git/gitOutput';
 import { showTimedInfoMessage } from '../ui/notify';
 import { CommitRepoResult, HostToWebview, WebviewToHost } from './messages';
 import { PushDialogProvider } from './PushDialogProvider';
@@ -18,6 +19,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	private readonly disposables: vscode.Disposable[] = [];
 	private busy = false;
+	/** Skip mid-operation snapshot pushes so the UI updates once, like IDEA. */
+	private snapshotDeferredWhileBusy = false;
 	private selected?: { repoRoot: string; path: string; staged: boolean };
 	private operationChain: Promise<void> = Promise.resolve();
 	private pendingFocusMessage = false;
@@ -44,7 +47,15 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		this.fastPushSettings = new FastPushSettingsStore(context);
 		this.commitPrefixSettings = new CommitMessagePrefixSettingsStore(context);
 		this.updateAllSelection = new UpdateAllSelectionStore(context);
-		this.disposables.push(this.git.onDidChange(() => void this.pushSnapshot()));
+		this.disposables.push(
+			this.git.onDidChange(() => {
+				if (this.busy) {
+					this.snapshotDeferredWhileBusy = true;
+					return;
+				}
+				void this.pushSnapshot();
+			})
+		);
 	}
 
 	dispose(): void {
@@ -315,9 +326,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			const message = this.applyConfiguredCommitPrefix(generated);
 			this.post({ type: 'setMessage', message });
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
+			const message = await notifyGitError(err);
 			this.post({ type: 'error', message });
-			vscode.window.showErrorMessage(message);
 		} finally {
 			this.post({ type: 'generateCommitMessageState', busy: false });
 		}
@@ -694,9 +704,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			try {
 				await this.git.openCommitChanges(msg.repoRoot, msg.hash);
 			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
+				const message = await notifyGitError(err);
 				this.post({ type: 'error', message });
-				vscode.window.showErrorMessage(message);
 			}
 			return;
 		}
@@ -711,9 +720,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				await vscode.env.clipboard.writeText(text);
 				vscode.window.setStatusBarMessage('Commit message copied', 2000);
 			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
+				const message = await notifyGitError(err);
 				this.post({ type: 'error', message });
-				vscode.window.showErrorMessage(message);
 			}
 			return;
 		}
@@ -727,7 +735,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				this.setSelection(msg.repoRoot, null, false);
 				await this.pushSnapshot();
 			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
+				const message = await notifyGitError(err);
 				this.post({ type: 'error', message });
 			}
 			return;
@@ -891,9 +899,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 			}
 		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
+			const message = await notifyGitError(err);
 			this.post({ type: 'error', message });
-			vscode.window.showErrorMessage(message);
 		} finally {
 			await this.refreshAndPush();
 		}
@@ -902,12 +909,17 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private async withBusy(fn: () => Promise<void>, message?: string): Promise<void> {
 		const run = this.operationChain.then(async () => {
 			this.busy = true;
+			this.snapshotDeferredWhileBusy = false;
 			this.post({ type: 'busy', busy: true, message });
 			try {
 				await this.git.runWithUserLogging(fn);
 			} finally {
 				this.busy = false;
 				this.post({ type: 'busy', busy: false });
+				if (this.snapshotDeferredWhileBusy) {
+					this.snapshotDeferredWhileBusy = false;
+					await this.pushSnapshot();
+				}
 			}
 		});
 		this.operationChain = run.catch(() => undefined);
@@ -925,7 +937,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				const payload = await this.git.getCommitLog(repoRoot);
 				this.post({ type: 'commitLog', payload });
 			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
+				const message = await notifyGitError(err);
 				this.post({ type: 'error', message });
 			}
 		})().finally(() => {

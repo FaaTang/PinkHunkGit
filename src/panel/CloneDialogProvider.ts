@@ -2,6 +2,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { parseCloneUrl, protocolLabel } from '../git/cloneUrl';
+import { notifyGitError } from '../git/gitOutput';
 import { CloneProgress, CloneTask, GitService } from '../git/GitService';
 import {
 	CloneDialogPayload,
@@ -173,8 +174,8 @@ export class CloneDialogProvider implements vscode.Disposable {
 				void vscode.window.showInformationMessage(message);
 				return;
 			}
-			this.post({ type: 'error', message });
-			vscode.window.showErrorMessage(message);
+			const detailed = await notifyGitError(err);
+			this.post({ type: 'error', message: detailed });
 		}
 	}
 

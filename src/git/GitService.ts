@@ -7,6 +7,7 @@ import { promisify } from 'util';
 const execFile = promisify(execFileCb);
 import { API, Change, GitErrorCodes, GitExtension, Repository, Status } from '../git/git';
 import {
+	formatGitError,
 	formatGitShellCommand,
 	logGitFail,
 	logGitOk,
@@ -86,6 +87,8 @@ export class GitService implements vscode.Disposable {
 	private refreshTimer: ReturnType<typeof setTimeout> | undefined;
 	/** While > 0, skip auto refresh so file watchers cannot race user git writes (index.lock). */
 	private refreshSuspended = 0;
+	/** Coalesce repo-state events during suspended ops; flush once afterwards. */
+	private changePendingWhileSuspended = false;
 	private lastKnownFileUri: vscode.Uri | undefined;
 	private contextUri: vscode.Uri | undefined;
 	private activeRepoRoot: string | undefined;
@@ -358,6 +361,8 @@ export class GitService implements vscode.Disposable {
 			this.refreshSuspended = Math.max(0, this.refreshSuspended - 1);
 			setUserGitLogging(false);
 			if (this.refreshSuspended === 0) {
+				this.changePendingWhileSuspended = false;
+				// One catch-up refresh after the whole batch (IDEA-style UI update).
 				this.scheduleRefresh();
 			}
 		}
@@ -2497,7 +2502,7 @@ export class GitService implements vscode.Disposable {
 			return result;
 		} catch (err) {
 			logGitFail(err, Date.now() - started);
-			throw err;
+			throw new Error(formatGitError(err));
 		}
 	}
 
@@ -2831,7 +2836,13 @@ export class GitService implements vscode.Disposable {
 		}
 		for (const repo of this.api.repositories) {
 			this.repoDisposables.push(
-				repo.state.onDidChange(() => this._onDidChange.fire())
+				repo.state.onDidChange(() => {
+					if (this.refreshSuspended > 0) {
+						this.changePendingWhileSuspended = true;
+						return;
+					}
+					this._onDidChange.fire();
+				})
 			);
 			if (repo.onDidCommit) {
 				this.repoDisposables.push(repo.onDidCommit(() => this.scheduleRefresh()));
@@ -2984,21 +2995,6 @@ function isConflictError(err: unknown): boolean {
 		text.includes('fix conflict') ||
 		text.includes('needs merge')
 	);
-}
-
-function formatGitError(err: unknown): string {
-	const e = err as { message?: string; stderr?: string | Buffer; stdout?: string | Buffer };
-	const combined = combineGitOutput(e.stdout, e.stderr).trim();
-	if (combined) {
-		return combined;
-	}
-	if (typeof e.message === 'string' && e.message.trim()) {
-		return e.message.trim();
-	}
-	if (err instanceof Error && err.message.trim()) {
-		return err.message.trim();
-	}
-	return String(err);
 }
 
 function bufferToString(value: string | Buffer | undefined): string {
