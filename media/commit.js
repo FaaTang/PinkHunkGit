@@ -345,14 +345,22 @@
     return checkedUnversioned.has(unversionedCheckKey(repoRoot, path));
   }
 
-  function toggleUnversionedChecked(repoRoot, path, checked) {
+  function persistCheckedUnversioned() {
+    saveWebviewState({ checkedUnversioned: Array.from(checkedUnversioned) });
+  }
+
+  function setUnversionedCheckedQuiet(repoRoot, path, checked) {
     const key = unversionedCheckKey(repoRoot, path);
     if (checked) {
       checkedUnversioned.add(key);
     } else {
       checkedUnversioned.delete(key);
     }
-    saveWebviewState({ checkedUnversioned: Array.from(checkedUnversioned) });
+  }
+
+  function toggleUnversionedChecked(repoRoot, path, checked) {
+    setUnversionedCheckedQuiet(repoRoot, path, checked);
+    persistCheckedUnversioned();
   }
 
   function pruneCheckedUnversioned() {
@@ -370,7 +378,7 @@
       }
     }
     if (changed) {
-      saveWebviewState({ checkedUnversioned: Array.from(checkedUnversioned) });
+      persistCheckedUnversioned();
     }
   }
 
@@ -387,9 +395,17 @@
     return true;
   }
 
-  function setChangeChecked(repoRoot, path, checked) {
-    changeIncludeState.set(changeCheckKey(repoRoot, path), checked);
+  function persistChangeIncludeState() {
     saveWebviewState({ changeIncludeState: Object.fromEntries(changeIncludeState) });
+  }
+
+  function setChangeCheckedQuiet(repoRoot, path, checked) {
+    changeIncludeState.set(changeCheckKey(repoRoot, path), checked);
+  }
+
+  function setChangeChecked(repoRoot, path, checked) {
+    setChangeCheckedQuiet(repoRoot, path, checked);
+    persistChangeIncludeState();
   }
 
   function pruneChangeIncludeState() {
@@ -407,7 +423,7 @@
       }
     }
     if (changed) {
-      saveWebviewState({ changeIncludeState: Object.fromEntries(changeIncludeState) });
+      persistChangeIncludeState();
     }
   }
 
@@ -1152,7 +1168,159 @@
     for (const { repoRoot, path } of paths) {
       checkedUnversioned.delete(unversionedCheckKey(repoRoot, path));
     }
-    saveWebviewState({ checkedUnversioned: Array.from(checkedUnversioned) });
+    persistCheckedUnversioned();
+  }
+
+  function isUnversionedFileRow(row) {
+    return row.classList.contains('group-unversioned') || row.classList.contains('group-ignored');
+  }
+
+  function isFileRowChecked(row) {
+    const repoRoot = row.dataset.repoRoot;
+    const path = row.dataset.filePath;
+    if (isUnversionedFileRow(row)) {
+      return isUnversionedChecked(repoRoot, path);
+    }
+    return isChangeChecked(repoRoot, path);
+  }
+
+  function applyFileCheckboxTitle(checkbox, row, checked) {
+    if (row.classList.contains('group-ignored')) {
+      checkbox.title = checked ? 'Selected to force-add to Git' : 'Not selected';
+    } else if (row.classList.contains('group-unversioned')) {
+      checkbox.title = checked ? 'Selected to add to Git' : 'Not selected';
+    } else {
+      checkbox.title = checked ? 'Included in commit' : 'Excluded from commit';
+    }
+  }
+
+  function applyGroupSelectAllState(selectAll, selected, total) {
+    selectAll.disabled = total === 0;
+    selectAll.checked = total > 0 && selected === total;
+    selectAll.indeterminate = selected > 0 && selected < total;
+  }
+
+  /** Path lists for group checkboxes; survives collapse (children may be absent from DOM). */
+  const groupCheckMeta = new WeakMap();
+
+  function setCheckEntriesMeta(el, entries, unversionedGroup) {
+    groupCheckMeta.set(el, {
+      kind: 'entries',
+      unversioned: !!unversionedGroup,
+      entries: entries.flatMap(({ repo, items }) =>
+        items.map((item) => ({ repoRoot: repo.rootPath, path: item.path }))
+      ),
+    });
+  }
+
+  function setCheckPathsMeta(el, repoRoot, items, unversionedGroup) {
+    groupCheckMeta.set(el, {
+      kind: 'paths',
+      unversioned: !!unversionedGroup,
+      repoRoot,
+      paths: items.map((item) => item.path),
+    });
+  }
+
+  function countCheckedFromGroupMeta(meta) {
+    if (!meta) {
+      return { selected: 0, total: 0 };
+    }
+    if (meta.kind === 'entries') {
+      let selected = 0;
+      for (const entry of meta.entries) {
+        if (
+          meta.unversioned
+            ? isUnversionedChecked(entry.repoRoot, entry.path)
+            : isChangeChecked(entry.repoRoot, entry.path)
+        ) {
+          selected += 1;
+        }
+      }
+      return { selected, total: meta.entries.length };
+    }
+    let selected = 0;
+    for (const path of meta.paths) {
+      if (
+        meta.unversioned
+          ? isUnversionedChecked(meta.repoRoot, path)
+          : isChangeChecked(meta.repoRoot, path)
+      ) {
+        selected += 1;
+      }
+    }
+    return { selected, total: meta.paths.length };
+  }
+
+  /**
+   * Refresh checkbox / indeterminate visuals without rebuilding the file tree.
+   * Full renderFiles() is too expensive when toggling modules or large folders.
+   */
+  function syncIncludeCheckboxes() {
+    if (!fileList) {
+      return;
+    }
+
+    for (const row of fileList.querySelectorAll('.file-row[data-file-path]')) {
+      const checkbox = row.querySelector(':scope > input[type="checkbox"]');
+      if (!checkbox) {
+        continue;
+      }
+      const checked = isFileRowChecked(row);
+      checkbox.checked = checked;
+      applyFileCheckboxTitle(checkbox, row, checked);
+    }
+
+    for (const wrap of fileList.querySelectorAll('.dir-group')) {
+      const meta = groupCheckMeta.get(wrap);
+      if (!meta) {
+        continue;
+      }
+      const selectAll = wrap.querySelector(':scope > .dir-group-title > .group-select-all');
+      if (!selectAll) {
+        continue;
+      }
+      const { selected, total } = countCheckedFromGroupMeta(meta);
+      applyGroupSelectAllState(selectAll, selected, total);
+    }
+
+    for (const wrap of fileList.querySelectorAll('.repo-subgroup')) {
+      const meta = groupCheckMeta.get(wrap);
+      if (!meta) {
+        continue;
+      }
+      const title = wrap.querySelector(':scope > .repo-subgroup-title');
+      const selectAll = title?.querySelector(':scope > .group-select-all');
+      if (!selectAll) {
+        continue;
+      }
+      const { selected, total } = countCheckedFromGroupMeta(meta);
+      applyGroupSelectAllState(selectAll, selected, total);
+      const countEl = title.querySelector(':scope > .repo-subgroup-count');
+      const ignored = wrap.closest('.category-ignored');
+      if (countEl && !ignored && !meta.unversioned) {
+        countEl.textContent = formatGroupCount(selected, total);
+      }
+    }
+
+    for (const wrap of fileList.querySelectorAll('.category-group')) {
+      const meta = groupCheckMeta.get(wrap);
+      if (!meta) {
+        continue;
+      }
+      const title = wrap.querySelector(':scope > .group-title');
+      const selectAll = title?.querySelector(':scope > .group-select-all');
+      if (!selectAll) {
+        continue;
+      }
+      const { selected, total } = countCheckedFromGroupMeta(meta);
+      applyGroupSelectAllState(selectAll, selected, total);
+      const countEl = title.querySelector(':scope > .group-title-count');
+      const ignored = wrap.classList.contains('category-ignored');
+      if (countEl && !ignored && !meta.unversioned) {
+        countEl.textContent = formatGroupCount(selected, total);
+      }
+    }
   }
 
   function performAddToGit() {
@@ -2022,11 +2190,16 @@
     for (const { repo, items } of entries) {
       for (const item of items) {
         if (unversionedGroup) {
-          toggleUnversionedChecked(repo.rootPath, item.path, checked);
+          setUnversionedCheckedQuiet(repo.rootPath, item.path, checked);
         } else {
-          setChangeChecked(repo.rootPath, item.path, checked);
+          setChangeCheckedQuiet(repo.rootPath, item.path, checked);
         }
       }
+    }
+    if (unversionedGroup) {
+      persistCheckedUnversioned();
+    } else {
+      persistChangeIncludeState();
     }
   }
 
@@ -2118,6 +2291,7 @@
     const wrap = document.createElement('div');
     wrap.className = 'category-group' + (ignoredGroup ? ' category-ignored' : '');
     wrap.dataset.groupId = groupId;
+    setCheckEntriesMeta(wrap, entries, unversionedGroup);
 
     const { selected, total } = countSelectedInEntries(entries, unversionedGroup);
     const isCollapsed = collapsedGroups.has(categoryCollapseKey(groupId));
@@ -2145,7 +2319,7 @@
         return;
       }
       setAllInEntries(entries, unversionedGroup, selectAll.checked);
-      renderFiles();
+      syncIncludeCheckboxes();
     });
 
     const chevron = document.createElement('span');
@@ -2232,6 +2406,7 @@
     wrap.className = 'repo-subgroup';
     wrap.dataset.repoRoot = repo.rootPath;
     wrap.dataset.groupId = groupId;
+    setCheckPathsMeta(wrap, repo.rootPath, items, unversionedGroup);
 
     if (focusedRoot && repoKey(repo.rootPath) === repoKey(focusedRoot)) {
       wrap.classList.add('focused');
@@ -2263,14 +2438,16 @@
       const checked = selectAll.checked;
       if (unversionedGroup) {
         for (const item of items) {
-          toggleUnversionedChecked(repo.rootPath, item.path, checked);
+          setUnversionedCheckedQuiet(repo.rootPath, item.path, checked);
         }
+        persistCheckedUnversioned();
       } else {
         for (const item of items) {
-          setChangeChecked(repo.rootPath, item.path, checked);
+          setChangeCheckedQuiet(repo.rootPath, item.path, checked);
         }
+        persistChangeIncludeState();
       }
-      renderFiles();
+      syncIncludeCheckboxes();
     });
 
     const chevron = document.createElement('span');
@@ -2405,6 +2582,7 @@
             ? [selfDirItem]
             : [];
       const fileCount = actionableItems.length;
+      setCheckPathsMeta(wrap, repoRoot, actionableItems, unversionedGroup);
       const selectedCount = unversionedGroup
         ? actionableItems.filter((i) => isUnversionedChecked(repoRoot, i.path)).length
         : actionableItems.filter((i) => isChangeChecked(repoRoot, i.path)).length;
@@ -2430,14 +2608,16 @@
         const checked = selectAll.checked;
         if (unversionedGroup) {
           for (const item of actionableItems) {
-            toggleUnversionedChecked(repoRoot, item.path, checked);
+            setUnversionedCheckedQuiet(repoRoot, item.path, checked);
           }
+          persistCheckedUnversioned();
         } else {
           for (const item of actionableItems) {
-            setChangeChecked(repoRoot, item.path, checked);
+            setChangeCheckedQuiet(repoRoot, item.path, checked);
           }
+          persistChangeIncludeState();
         }
-        renderFiles();
+        syncIncludeCheckboxes();
       });
 
       const chevron = document.createElement('span');
@@ -2629,7 +2809,7 @@
       checkbox.addEventListener('click', (e) => {
         e.stopPropagation();
         toggleUnversionedChecked(repoRoot, item.path, checkbox.checked);
-        renderFiles();
+        syncIncludeCheckboxes();
       });
     } else {
       checkbox.checked = included;
@@ -2637,7 +2817,7 @@
       checkbox.addEventListener('click', (e) => {
         e.stopPropagation();
         setChangeChecked(repoRoot, item.path, checkbox.checked);
-        renderFiles();
+        syncIncludeCheckboxes();
       });
     }
     row.appendChild(checkbox);
