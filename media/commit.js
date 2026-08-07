@@ -1521,6 +1521,12 @@
     saveWebviewState({ lastCommitMessage, messageDraft });
   }
 
+  function setRefreshBusy(busy) {
+    refreshBtn.classList.toggle('is-busy', !!busy);
+    refreshBtn.setAttribute('aria-busy', busy ? 'true' : 'false');
+    refreshBtn.title = busy ? 'Refreshing…' : 'Refresh Git status';
+  }
+
   function setBusy(busy, message) {
     workspace.busy = busy;
     document.body.classList.toggle('panel-busy', !!busy);
@@ -1528,12 +1534,16 @@
       panelLoadingOverlay.classList.toggle('hidden', !busy);
     }
     if (!busy) {
+      setRefreshBusy(false);
       clearFastPushProgress();
       if (panelLoadingTitle) {
         panelLoadingTitle.textContent = 'Working…';
       }
     } else if (panelLoadingTitle && message) {
       panelLoadingTitle.textContent = message;
+      if (/refresh/i.test(message)) {
+        setRefreshBusy(true);
+      }
     } else if (panelLoadingTitle && !panelLoadingProgress?.classList.contains('hidden')) {
       // keep progress-driven title
     } else if (panelLoadingTitle) {
@@ -3699,7 +3709,14 @@
 
   stageAllBtn.addEventListener('click', () => post({ type: 'stageAll', staged: true }));
   unstageAllBtn.addEventListener('click', () => post({ type: 'stageAll', staged: false }));
-  refreshBtn.addEventListener('click', () => post({ type: 'refresh' }));
+  refreshBtn.addEventListener('click', () => {
+    if (workspace.busy || refreshBtn.classList.contains('is-busy') || refreshBtn.disabled) {
+      return;
+    }
+    setRefreshBusy(true);
+    setBusy(true, 'Refreshing…');
+    post({ type: 'refresh' });
+  });
   locateBtn.addEventListener('click', () => {
     performRevealInExplorer();
   });

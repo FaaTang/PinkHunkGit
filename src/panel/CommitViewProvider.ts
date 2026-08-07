@@ -909,7 +909,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				case 'refresh':
 					await this.withBusy(async () => {
 						await this.refreshAndPush();
-					});
+					}, 'Refreshing…');
 					break;
 				case 'installKeybindings':
 					await this.onInstallKeybindings();
