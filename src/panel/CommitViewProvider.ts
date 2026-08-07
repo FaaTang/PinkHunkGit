@@ -295,9 +295,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		if (!paths?.length) {
 			return;
 		}
-		for (const { repoRoot, path } of paths) {
-			await this.git.stage(this.toFsPath(repoRoot, path));
-		}
+		const fsPaths = paths.map(({ repoRoot, path: rel }) => this.toFsPath(repoRoot, rel));
+		await this.git.stageMany(fsPaths);
 	}
 
 	private async generateCommitMessage(
@@ -751,10 +750,11 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'addToGit':
 					await this.withBusy(async () => {
-						for (const { repoRoot, path } of msg.paths) {
-							// -f so ignored paths can be force-added (IDEA-style).
-							await this.git.stage(this.toFsPath(repoRoot, path), { force: true });
-						}
+						// Batch by repo — per-file add+status races with refresh on index.lock.
+						const fsPaths = msg.paths.map(({ repoRoot, path: rel }) =>
+							this.toFsPath(repoRoot, rel)
+						);
+						await this.git.stageMany(fsPaths, { force: true });
 					});
 					break;
 				case 'stageAll':
@@ -784,9 +784,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'rollbackBatchConfirm':
 					await this.withBusy(async () => {
-						for (const { repoRoot, path, staged } of msg.paths) {
-							await this.git.rollbackFile(path, repoRoot, staged);
-						}
+						await this.git.rollbackMany(msg.paths);
 					});
 					break;
 				case 'rollbackCancel':
