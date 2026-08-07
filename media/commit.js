@@ -1336,6 +1336,16 @@
     }
   }
 
+  /** After Add to Git, files move into Changes — mark them included for commit. */
+  function markAddedPathsForCommit(paths) {
+    for (const { repoRoot, path } of paths) {
+      setChangeCheckedQuiet(repoRoot, path, true);
+    }
+    if (paths.length) {
+      persistChangeIncludeState();
+    }
+  }
+
   function performAddToGit() {
     const paths = collectAddToGitPaths();
     if (!paths.length) {
@@ -1343,6 +1353,7 @@
       return;
     }
     showFormError('');
+    markAddedPathsForCommit(paths);
     clearUnversionedChecks(paths);
     post({ type: 'addToGit', paths });
   }
@@ -2057,9 +2068,12 @@
         : `Add to Git (Ctrl+Alt+A)${countLabel}`;
       addToGit.addEventListener('click', () => {
         hideContextMenu();
+        const paths = targets.map(({ repoRoot, path }) => ({ repoRoot, path }));
+        markAddedPathsForCommit(paths);
+        clearUnversionedChecks(paths);
         post({
           type: 'addToGit',
-          paths: targets.map(({ repoRoot, path }) => ({ repoRoot, path })),
+          paths,
         });
       });
       contextMenu.appendChild(addToGit);

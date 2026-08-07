@@ -928,12 +928,19 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			try {
 				await this.git.runWithUserLogging(fn);
 			} finally {
+				// Push an up-to-date snapshot before clearing busy so a quick Commit /
+				// Fast Push cannot collect checkbox paths from a pre-add UI state
+				// (applyCommitSelection would then unstage the just-added files).
+				try {
+					if (this.snapshotDeferredWhileBusy) {
+						this.snapshotDeferredWhileBusy = false;
+					}
+					await this.pushSnapshot();
+				} catch {
+					// Snapshot failure must not leave the panel stuck busy.
+				}
 				this.busy = false;
 				this.post({ type: 'busy', busy: false });
-				if (this.snapshotDeferredWhileBusy) {
-					this.snapshotDeferredWhileBusy = false;
-					await this.pushSnapshot();
-				}
 			}
 		});
 		this.operationChain = run.catch(() => undefined);

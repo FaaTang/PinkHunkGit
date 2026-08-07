@@ -361,7 +361,14 @@ export class GitService implements vscode.Disposable {
 			this.refreshSuspended = Math.max(0, this.refreshSuspended - 1);
 			setUserGitLogging(false);
 			if (this.refreshSuspended === 0) {
+				const pending = this.changePendingWhileSuspended;
 				this.changePendingWhileSuspended = false;
+				// Flush UI listeners for status updates that arrived while suspended
+				// (e.g. repo.status() after batch add). Dropping this caused stale
+				// checkboxes and Fast Push unstaging freshly-added files.
+				if (pending) {
+					this._onDidChange.fire();
+				}
 				// One catch-up refresh after the whole batch (IDEA-style UI update).
 				this.scheduleRefresh();
 			}
