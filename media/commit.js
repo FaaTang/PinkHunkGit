@@ -431,6 +431,18 @@
     return getUnversioned(repo).some((i) => i.path === sel.path);
   }
 
+  function isSelectedIgnored(sel) {
+    const repo = findRepo(sel.repoRoot);
+    if (!repo) {
+      return false;
+    }
+    return getIgnored(repo).some((i) => i.path === sel.path);
+  }
+
+  function isAddableUntracked(sel) {
+    return isSelectedUnversioned(sel) || isSelectedIgnored(sel);
+  }
+
   function collectCheckedUnversionedPaths() {
     const paths = [];
     for (const repo of allRepos()) {
@@ -439,19 +451,86 @@
           paths.push({ repoRoot: repo.rootPath, path: item.path });
         }
       }
+      for (const item of getIgnored(repo)) {
+        if (isUnversionedChecked(repo.rootPath, item.path)) {
+          paths.push({ repoRoot: repo.rootPath, path: item.path });
+        }
+      }
     }
     return paths;
   }
 
+  /** Items under a category/repo group (Changes / Unversioned / Ignored). */
+  function itemsForGroupId(repo, groupId) {
+    if (groupId === 'unversioned') {
+      return getUnversioned(repo);
+    }
+    if (groupId === 'ignored') {
+      return getIgnored(repo);
+    }
+    return getMergedChanges(repo);
+  }
+
+  /**
+   * Resolve the current selection into concrete file targets.
+   * Parent selection (category / module / directory) expands to all descendants.
+   */
+  function resolveOperationTargets() {
+    if (selectedGroup) {
+      if (selectedGroup.category) {
+        const targets = [];
+        for (const repo of allRepos()) {
+          const items = itemsForGroupId(repo, selectedGroup.groupId);
+          targets.push(
+            ...targetsFromGroup(
+              repo.rootPath,
+              selectedGroup.groupId,
+              items,
+              selectedGroup.unversionedGroup
+            )
+          );
+        }
+        return targets;
+      }
+      const repo = findRepo(selectedGroup.repoRoot);
+      if (!repo) {
+        return [];
+      }
+      const items = itemsForGroupId(repo, selectedGroup.groupId);
+      return targetsFromGroup(
+        selectedGroup.repoRoot,
+        selectedGroup.groupId,
+        items,
+        selectedGroup.unversionedGroup
+      );
+    }
+    return selectedFiles.map((entry) => ({
+      repoRoot: entry.repoRoot,
+      path: entry.path,
+      staged: entry.staged ?? false,
+      unversionedGroup: isAddableUntracked(entry),
+    }));
+  }
+
   function collectAddToGitPaths() {
-    const paths = collectCheckedUnversionedPaths();
-    for (const entry of selectedFiles) {
-      if (!isSelectedUnversioned(entry)) {
+    const paths = [];
+    const seen = new Set();
+    const pushPath = (repoRoot, path) => {
+      const key = `${repoKey(repoRoot)}|${path}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      paths.push({ repoRoot, path });
+    };
+    for (const { repoRoot, path } of collectCheckedUnversionedPaths()) {
+      pushPath(repoRoot, path);
+    }
+    for (const entry of resolveOperationTargets()) {
+      if (!isAddableUntracked(entry)) {
         continue;
       }
-      if (!paths.some((p) => p.repoRoot === entry.repoRoot && p.path === entry.path)) {
-        paths.push({ repoRoot: entry.repoRoot, path: entry.path });
-      }
+      pushPath(entry.repoRoot, entry.path);
     }
     return paths;
   }
@@ -488,6 +567,19 @@
         staged: primary.staged,
       });
       focusCommitLogRepo(primary.repoRoot, false);
+      return;
+    }
+    if (selectedGroup) {
+      post({
+        type: 'updateSelection',
+        repoRoot: selectedGroup.repoRoot || activeRepoRoot(),
+        path: null,
+        staged: false,
+        groupSelection: true,
+      });
+      if (selectedGroup.repoRoot) {
+        focusCommitLogRepo(selectedGroup.repoRoot, false);
+      }
       return;
     }
     post({ type: 'updateSelection', repoRoot: activeRepoRoot(), path: null, staged: false });
@@ -1072,6 +1164,78 @@
     showFormError('');
     clearUnversionedChecks(paths);
     post({ type: 'addToGit', paths });
+  }
+
+  function targetsAreUnversionedGroup(targets) {
+    return (
+      targets.length > 0 &&
+      targets.every((t) => isSelectedUnversioned(t) || isSelectedIgnored(t))
+    );
+  }
+
+  function performOpenFiles() {
+    const targets = resolveOperationTargets();
+    if (!targets.length) {
+      showFormError('Select files first.');
+      return;
+    }
+    showFormError('');
+    for (const target of targets) {
+      post({ type: 'openFile', repoRoot: target.repoRoot, path: target.path });
+    }
+  }
+
+  function performShowDiffs() {
+    const targets = resolveOperationTargets().filter((t) => !isSelectedIgnored(t));
+    if (!targets.length) {
+      showFormError('Select files first.');
+      return;
+    }
+    showFormError('');
+    for (const target of targets) {
+      post({
+        type: 'openDiff',
+        repoRoot: target.repoRoot,
+        path: target.path,
+        staged: target.staged,
+      });
+    }
+  }
+
+  function performRevealInExplorer() {
+    const targets = resolveOperationTargets();
+    if (!targets.length) {
+      showFormError('Select files first.');
+      return;
+    }
+    showFormError('');
+    for (const target of targets) {
+      post({ type: 'revealInExplorer', repoRoot: target.repoRoot, path: target.path });
+    }
+  }
+
+  function performRollback() {
+    const targets = resolveOperationTargets().filter((t) => !isSelectedIgnored(t));
+    if (!targets.length) {
+      showFormError('Select files first.');
+      return;
+    }
+    showFormError('');
+    if (targets.length === 1) {
+      const target = targets[0];
+      post({
+        type: 'rollback',
+        repoRoot: target.repoRoot,
+        path: target.path,
+        staged: target.staged,
+      });
+      return;
+    }
+    post({
+      type: 'rollbackBatch',
+      paths: targets.map(({ repoRoot, path, staged }) => ({ repoRoot, path, staged })),
+      unversionedGroup: targetsAreUnversionedGroup(targets),
+    });
   }
 
   function formatGroupCount(selected, total) {
@@ -3316,15 +3480,7 @@
   unstageAllBtn.addEventListener('click', () => post({ type: 'stageAll', staged: false }));
   refreshBtn.addEventListener('click', () => post({ type: 'refresh' }));
   locateBtn.addEventListener('click', () => {
-    const primary = getPrimarySelection();
-    if (!primary) {
-      return;
-    }
-    post({
-      type: 'revealInExplorer',
-      repoRoot: primary.repoRoot,
-      path: primary.path,
-    });
+    performRevealInExplorer();
   });
   installKeysBtn.addEventListener('click', () => {
     keysModal.classList.remove('hidden');
@@ -3514,17 +3670,12 @@
       performAddToGit();
       return;
     }
-    if (!getPrimarySelection()) {
+    if (!resolveOperationTargets().length) {
       return;
     }
-    const selected = getPrimarySelection();
     if (e.key === 'F4' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
       e.preventDefault();
-      post({
-        type: 'openFile',
-        repoRoot: selected.repoRoot,
-        path: selected.path,
-      });
+      performOpenFiles();
       return;
     }
     if (!(e.ctrlKey || e.metaKey)) {
@@ -3533,22 +3684,12 @@
     const key = e.key.toLowerCase();
     if (key === 'd' && !e.shiftKey && !e.altKey) {
       e.preventDefault();
-      post({
-        type: 'openDiff',
-        repoRoot: selected.repoRoot,
-        path: selected.path,
-        staged: selected.staged,
-      });
+      performShowDiffs();
       return;
     }
     if (key === 'z' && e.altKey && !e.shiftKey) {
       e.preventDefault();
-      post({
-        type: 'rollback',
-        repoRoot: selected.repoRoot,
-        path: selected.path,
-        staged: selected.staged,
-      });
+      performRollback();
     }
   });
 
@@ -3665,6 +3806,18 @@
         break;
       case 'triggerAddToGit':
         performAddToGit();
+        break;
+      case 'triggerOpenFile':
+        performOpenFiles();
+        break;
+      case 'triggerShowDiff':
+        performShowDiffs();
+        break;
+      case 'triggerRevealInExplorer':
+        performRevealInExplorer();
+        break;
+      case 'triggerRollback':
+        performRollback();
         break;
       case 'triggerCommit':
         runCommit();
