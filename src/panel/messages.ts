@@ -172,6 +172,10 @@ export type HostToWebview =
 	| { type: 'commitLog'; payload: CommitLogPayload }
 	| { type: 'expandChanges' }
 	| { type: 'triggerAddToGit' }
+	| { type: 'triggerOpenFile' }
+	| { type: 'triggerShowDiff' }
+	| { type: 'triggerRevealInExplorer' }
+	| { type: 'triggerRollback' }
 	| { type: 'triggerCommit' }
 	| { type: 'triggerCommitAndPush' }
 	| { type: 'triggerFastPush' }
@@ -181,7 +185,7 @@ export type WebviewToHost =
 	| { type: 'ready' }
 	| { type: 'switchRepo'; repoRoot: string }
 	| { type: 'stageAll'; staged: boolean }
-	| { type: 'updateSelection'; repoRoot: string; path: string | null; staged: boolean }
+	| { type: 'updateSelection'; repoRoot: string; path: string | null; staged: boolean; groupSelection?: boolean }
 	| { type: 'openDiff'; repoRoot: string; path: string; staged: boolean }
 	| { type: 'openFile'; repoRoot: string; path: string }
 	| { type: 'revealInExplorer'; repoRoot: string; path: string }

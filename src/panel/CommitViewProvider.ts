@@ -190,31 +190,18 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	async showDiffForSelection(): Promise<void> {
-		if (!this.selected) {
-			vscode.window.showWarningMessage('Select a file in the Commit list first.');
-			return;
-		}
-		await this.git.openDiffInEditor(
-			this.selected.path,
-			this.selected.staged,
-			this.selected.repoRoot
-		);
+		await this.reveal();
+		this.post({ type: 'triggerShowDiff' });
 	}
 
 	async openFileForSelection(): Promise<void> {
-		if (!this.selected) {
-			vscode.window.showWarningMessage('Select a file in the Commit list first.');
-			return;
-		}
-		await this.openFile(this.selected.repoRoot, this.selected.path);
+		await this.reveal();
+		this.post({ type: 'triggerOpenFile' });
 	}
 
 	async revealSelectionInExplorer(): Promise<void> {
-		if (!this.selected) {
-			vscode.window.showWarningMessage('Select a file in the Commit list first.');
-			return;
-		}
-		await this.revealInExplorer(this.selected.repoRoot, this.selected.path);
+		await this.reveal();
+		this.post({ type: 'triggerRevealInExplorer' });
 	}
 
 	async selectFileInPanel(repoRoot: string, filePath: string, staged: boolean): Promise<void> {
@@ -250,11 +237,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	async rollbackForSelection(): Promise<void> {
-		if (!this.selected) {
-			vscode.window.showWarningMessage('Select a file in the Commit list first.');
-			return;
-		}
-		await this.startRollbackFlow(this.selected);
+		await this.reveal();
+		this.post({ type: 'triggerRollback' });
 	}
 
 	async addToGit(): Promise<void> {
@@ -676,10 +660,19 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		});
 	}
 
-	private setSelection(repoRoot: string, filePath: string | null, staged: boolean): void {
+	private setSelection(
+		repoRoot: string,
+		filePath: string | null,
+		staged: boolean,
+		groupSelection = false
+	): void {
 		if (!filePath) {
 			this.selected = undefined;
-			void vscode.commands.executeCommand('setContext', 'copyIdeaGitUi.hasSelection', false);
+			void vscode.commands.executeCommand(
+				'setContext',
+				'copyIdeaGitUi.hasSelection',
+				!!groupSelection
+			);
 			return;
 		}
 		this.selected = { repoRoot, path: filePath, staged };
@@ -726,7 +719,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 		if (msg.type === 'updateSelection') {
-			this.setSelection(msg.repoRoot, msg.path, msg.staged);
+			this.setSelection(msg.repoRoot, msg.path, msg.staged, !!msg.groupSelection);
 			return;
 		}
 		if (msg.type === 'switchRepo') {
