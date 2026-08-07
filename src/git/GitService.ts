@@ -97,7 +97,6 @@ export class GitService implements vscode.Disposable {
 	private pinnedRepoRoot: string | undefined;
 	private fileWatchersSetup = false;
 	private editorListenersSetup = false;
-	private pendingFolderWatch = false;
 	private initState: 'pending' | 'ready' | 'failed' = 'pending';
 	private initError = '';
 	private pendingDiffAdvance: { repoRoot: string; path: string } | undefined;
@@ -113,6 +112,7 @@ export class GitService implements vscode.Disposable {
 	private pendingIgnoredAll = false;
 	private refreshInFlight: Promise<void> | undefined;
 	private refreshQueued = false;
+	private discoverReposInFlight: Promise<void> | undefined;
 
 	async init(): Promise<{ ok: true } | { ok: false; error: string }> {
 		this.gitExecutable = await this.resolveGitExecutable();
@@ -157,6 +157,7 @@ export class GitService implements vscode.Disposable {
 
 		this.bindRepositoryEvents();
 		this.setupWorkspaceWatchers();
+		await this.ensureWorkspaceRepositoriesDiscovered();
 
 		this.initState = 'ready';
 		this._onDidChange.fire();
@@ -265,6 +266,12 @@ export class GitService implements vscode.Disposable {
 					if (doc.uri.scheme === 'file') {
 						this.scheduleRefresh(doc.uri);
 					}
+				}),
+				vscode.workspace.onDidChangeWorkspaceFolders(() => {
+					void this.ensureWorkspaceRepositoriesDiscovered().then(() => {
+						this.bindRepositoryEvents();
+						this._onDidChange.fire();
+					});
 				})
 			);
 		}
@@ -275,14 +282,6 @@ export class GitService implements vscode.Disposable {
 
 		const folders = vscode.workspace.workspaceFolders;
 		if (!folders?.length) {
-			if (!this.pendingFolderWatch) {
-				this.pendingFolderWatch = true;
-				this.disposables.push(
-					vscode.workspace.onDidChangeWorkspaceFolders(() => {
-						this.setupWorkspaceWatchers();
-					})
-				);
-			}
 			return;
 		}
 
@@ -296,6 +295,127 @@ export class GitService implements vscode.Disposable {
 				watcher.onDidCreate((uri) => this.scheduleRefresh(uri, { ignored: true })),
 				watcher.onDidDelete((uri) => this.scheduleRefresh(uri, { ignored: true }))
 			);
+		}
+	}
+
+	/**
+	 * IDEA lists every VCS root (including clean 0/0 modules). vscode.git may miss
+	 * nested repos depending on scan depth / detection mode — open them ourselves.
+	 */
+	private async ensureWorkspaceRepositoriesDiscovered(): Promise<void> {
+		if (!this.api?.openRepository) {
+			return;
+		}
+		if (this.discoverReposInFlight) {
+			await this.discoverReposInFlight;
+			return;
+		}
+
+		this.discoverReposInFlight = this.discoverWorkspaceRepositories();
+		try {
+			await this.discoverReposInFlight;
+		} finally {
+			this.discoverReposInFlight = undefined;
+		}
+	}
+
+	private async discoverWorkspaceRepositories(): Promise<void> {
+		if (!this.api?.openRepository) {
+			return;
+		}
+
+		const folders = vscode.workspace.workspaceFolders ?? [];
+		if (!folders.length) {
+			return;
+		}
+
+		const configuredDepth = vscode.workspace
+			.getConfiguration('git')
+			.get<number>('repositoryScanMaxDepth', 1);
+		// Match VS Code when unlimited (-1); otherwise at least depth 1 so sibling
+		// module folders under a workspace root are found (ecp/payment, …).
+		const maxDepth =
+			configuredDepth < 0 ? 4 : Math.max(1, Math.min(configuredDepth || 1, 4));
+
+		const roots = new Set<string>();
+		for (const folder of folders) {
+			for (const root of await this.findGitRoots(folder.uri.fsPath, maxDepth)) {
+				roots.add(path.normalize(root));
+			}
+		}
+
+		let opened = 0;
+		for (const root of roots) {
+			const uri = vscode.Uri.file(root);
+			if (this.api.getRepository(uri)) {
+				continue;
+			}
+			try {
+				const repo = await this.api.openRepository(uri);
+				if (repo) {
+					opened += 1;
+				}
+			} catch {
+				// Not a usable git root (or Git extension rejected it).
+			}
+		}
+
+		if (opened > 0) {
+			this.bindRepositoryEvents();
+		}
+	}
+
+	/** Breadth-first find directories that contain a `.git` dir/file, up to maxDepth. */
+	private async findGitRoots(startDir: string, maxDepth: number): Promise<string[]> {
+		const found: string[] = [];
+		const skipNames = new Set([
+			'node_modules',
+			'.git',
+			'out',
+			'dist',
+			'build',
+			'.next',
+			'target',
+			'vendor',
+			'__pycache__',
+		]);
+
+		type QueueItem = { dir: string; depth: number };
+		const queue: QueueItem[] = [{ dir: startDir, depth: 0 }];
+
+		while (queue.length) {
+			const { dir, depth } = queue.shift()!;
+			if (await this.hasGitMetadata(dir)) {
+				found.push(dir);
+				// Still scan children: nested repos are common in multi-module trees.
+			}
+			if (depth >= maxDepth) {
+				continue;
+			}
+			let entries: Array<{ name: string; isDirectory(): boolean }> = [];
+			try {
+				entries = await fs.readdir(dir, { withFileTypes: true });
+			} catch {
+				continue;
+			}
+			for (const entry of entries) {
+				if (!entry.isDirectory() || skipNames.has(entry.name) || entry.name.startsWith('.')) {
+					continue;
+				}
+				queue.push({ dir: path.join(dir, entry.name), depth: depth + 1 });
+			}
+		}
+
+		return found;
+	}
+
+	private async hasGitMetadata(dir: string): Promise<boolean> {
+		try {
+			const gitPath = path.join(dir, '.git');
+			const stat = await fs.stat(gitPath);
+			return stat.isDirectory() || stat.isFile();
+		} catch {
+			return false;
 		}
 	}
 
@@ -966,6 +1086,7 @@ export class GitService implements vscode.Disposable {
 		if (this.refreshSuspended > 0) {
 			return;
 		}
+		await this.ensureWorkspaceRepositoriesDiscovered();
 		this.pendingStatusAll = true;
 		this.pendingIgnoredAll = true;
 		this.pendingStatusRoots.clear();

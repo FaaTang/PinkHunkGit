@@ -160,6 +160,8 @@ export interface API {
 	readonly onDidCloseRepository: Event<Repository>;
 	getRepository(uri: Uri): Repository | null;
 	toGitUri(uri: Uri, ref: string): Uri;
+	/** Open (or return) a repository at the given root. Missing on older Git extensions. */
+	openRepository?(root: Uri): Promise<Repository | null>;
 }
 
 export interface GitExtension {
