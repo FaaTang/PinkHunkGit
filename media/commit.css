@@ -147,6 +147,10 @@ body {
   background: color-mix(in srgb, var(--error) 12%, var(--bg));
   color: var(--error);
   font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 7.5em;
+  overflow: auto;
 }
 
 .banner.info {
@@ -1043,6 +1047,10 @@ textarea {
 .form-error {
   color: var(--error);
   font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 9em;
+  overflow: auto;
 }
 
 .commit-actions {

@@ -1651,6 +1651,15 @@
     formError.classList.remove('hidden');
   }
 
+  function showHostError(message) {
+    const text = String(message || '').trim();
+    if (!text) {
+      return;
+    }
+    showFormError(text);
+    showBanner(text, 'error');
+  }
+
   function hideContextMenu() {
     contextMenu.classList.add('hidden');
     contextMenu.innerHTML = '';
@@ -2370,17 +2379,19 @@
     }
 
     // Module = repository grouping (IDEA modules ≈ workspace Git repos).
-    const nonEmpty = entries.filter(({ items }) => items.length > 0);
-    if (!nonEmpty.length) {
-      return wrap;
-    }
-
+    // Always list modules when Group by Module is on — including empty ones —
+    // so Unversioned matches Changes (IDEA-style).
     if (groupByModule) {
       for (const { repo, items } of entries) {
         wrap.appendChild(
           renderRepoSubgroup(repo, items, groupId, unversionedGroup, focusedRoot, ignoredGroup)
         );
       }
+      return wrap;
+    }
+
+    const nonEmpty = entries.filter(({ items }) => items.length > 0);
+    if (!nonEmpty.length) {
       return wrap;
     }
 
@@ -3925,6 +3936,9 @@
         break;
       case 'busy':
         setBusy(msg.busy, msg.message);
+        break;
+      case 'error':
+        showHostError(msg.message);
         break;
       case 'fastPushProgress':
         setFastPushProgress(msg);

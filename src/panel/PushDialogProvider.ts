@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { notifyGitError } from '../git/gitOutput';
 import { GitService, PushRejectedError, isValidTagName } from '../git/GitService';
 import { showTimedInfoMessage } from '../ui/notify';
 import {
@@ -408,9 +409,8 @@ export class PushDialogProvider implements vscode.Disposable {
 				this.postPushRejected(err.message, rejectedRoot);
 				return;
 			}
-			const message = err instanceof Error ? err.message : String(err);
+			const message = await notifyGitError(err);
 			this.post({ type: 'error', message });
-			vscode.window.showErrorMessage(message);
 		}
 	}
 
