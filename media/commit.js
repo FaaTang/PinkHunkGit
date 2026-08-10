@@ -111,7 +111,7 @@
   let commitLogLoading = false;
   /** Repo root currently being fetched for commit log (dedupe in-flight requests). */
   let commitLogPendingRoot = '';
-  let commitFormExpanded = webviewState.commitFormExpanded !== false;
+  let commitFormExpanded = webviewState.commitFormExpanded === true;
   let groupByDirectory = webviewState.groupByDirectory === true;
   // IDEA-style: show every Git repo header, including empty 0/0 modules.
   let groupByModule = webviewState.groupByModule !== false;

@@ -1126,9 +1126,9 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
         </div>
         <div id="fileList" class="file-list"></div>
       </aside>
-      <div id="commitForm" class="commit-form">
+      <div id="commitForm" class="commit-form collapsed">
         <div class="commit-form-header">
-          <button id="commitFormToggle" class="commit-form-toggle" type="button" title="Expand or collapse commit message" aria-expanded="true">▾</button>
+          <button id="commitFormToggle" class="commit-form-toggle" type="button" title="Expand or collapse commit message" aria-expanded="false">▸</button>
           <span class="commit-form-title">Commit Message</span>
         </div>
         <div class="commit-form-body">
