@@ -1120,8 +1120,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
         <div class="pane-header">
           <span>Changes</span>
           <div class="pane-actions">
-            <button id="stageAll" title="Stage all" type="button">+</button>
-            <button id="unstageAll" title="Unstage all" type="button">−</button>
+            <button id="stageAll" title="Include all changes in commit" type="button">+</button>
+            <button id="unstageAll" title="Exclude all changes from commit" type="button">−</button>
           </div>
         </div>
         <div id="fileList" class="file-list"></div>

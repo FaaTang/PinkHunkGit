@@ -719,6 +719,19 @@
     saveWebviewState({ commitFormExpanded });
   }
 
+  function bindSectionHeaderToggle(headerEl, toggleFn) {
+    if (!headerEl) {
+      return;
+    }
+    headerEl.addEventListener('dblclick', (e) => {
+      if (e.target.closest('button, select, input, textarea, a')) {
+        return;
+      }
+      e.preventDefault();
+      toggleFn();
+    });
+  }
+
   function setGroupByDirectory(enabled) {
     groupByDirectory = !!enabled;
     if (groupByDirectoryChk) {
@@ -842,8 +855,9 @@
     }
     if (changed) {
       saveCollapsedGroups();
-      renderFiles();
     }
+    // Always re-render so Module + Directory trees refresh even if state was already expanded.
+    renderFiles();
   }
 
   function collapseAllGroups() {
@@ -869,8 +883,15 @@
     }
     if (changed) {
       saveCollapsedGroups();
-      renderFiles();
     }
+    renderFiles();
+  }
+
+  /** Include / exclude every tracked change for the next commit (IDEA-style checkboxes). */
+  function setAllChangesIncluded(included) {
+    const entries = allRepos().map((repo) => ({ repo, items: getMergedChanges(repo) }));
+    setAllInEntries(entries, false, !!included);
+    syncIncludeCheckboxes();
   }
 
   function populateCommitLogRepoSelect() {
@@ -3560,6 +3581,9 @@
     commitFormToggle?.addEventListener('click', () => {
       setCommitFormExpanded(!commitFormExpanded);
     });
+    bindSectionHeaderToggle(commitForm?.querySelector('.commit-form-header'), () => {
+      setCommitFormExpanded(!commitFormExpanded);
+    });
 
     expandAllBtn?.addEventListener('click', () => {
       closeViewOptionsMenu();
@@ -3593,6 +3617,9 @@
     });
 
     commitLogToggle?.addEventListener('click', () => {
+      setCommitLogExpanded(!commitLogExpanded);
+    });
+    bindSectionHeaderToggle(commitLogPane?.querySelector('.commit-log-header'), () => {
       setCommitLogExpanded(!commitLogExpanded);
     });
 
@@ -3745,8 +3772,8 @@
     saveMessageDraft();
   });
 
-  stageAllBtn.addEventListener('click', () => post({ type: 'stageAll', staged: true }));
-  unstageAllBtn.addEventListener('click', () => post({ type: 'stageAll', staged: false }));
+  stageAllBtn.addEventListener('click', () => setAllChangesIncluded(true));
+  unstageAllBtn.addEventListener('click', () => setAllChangesIncluded(false));
   refreshBtn.addEventListener('click', () => {
     if (workspace.busy || refreshBtn.classList.contains('is-busy') || refreshBtn.disabled) {
       return;
