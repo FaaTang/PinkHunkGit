@@ -127,13 +127,86 @@ body {
 
 .target-list {
   overflow: auto;
-  max-height: 96px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .target-list:empty {
   display: none;
+}
+
+.commits-pane.has-targets .target-list {
+  min-height: 72px;
+}
+
+.commits-pane.has-targets .commit-pane {
+  flex: 0 0 auto;
+  height: 140px;
+  min-height: 96px;
+}
+
+.commits-pane:not(.has-targets) .commit-resize {
+  display: none !important;
+}
+
+.commits-pane:not(.has-targets) .commit-pane {
+  flex: 1 1 auto;
+  height: auto !important;
+  max-height: none;
+  min-height: 0;
+}
+
+.commit-resize {
+  position: relative;
+  height: 6px;
+  margin: 0;
+  cursor: ns-resize;
+  flex-shrink: 0;
+  z-index: 2;
+  user-select: none;
+  touch-action: none;
+  background: transparent;
+  border-top: 1px solid var(--border);
+}
+
+/* Enlarge hit target without taking extra layout space */
+.commit-resize::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -4px;
+  bottom: -4px;
+}
+
+.commit-resize::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 40px;
+  height: 3px;
+  margin: -1.5px 0 0 -20px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fg) 32%, transparent);
+  pointer-events: none;
+}
+
+.commit-resize:hover::before,
+.commit-resize:focus-visible::before,
+.commits-pane.is-resizing .commit-resize::before {
+  background: color-mix(in srgb, var(--fg) 70%, transparent);
+}
+
+.commit-resize:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+body.is-commit-split-resizing,
+body.is-commit-split-resizing * {
+  cursor: ns-resize !important;
+  user-select: none !important;
 }
 
 .target-item {
@@ -189,10 +262,12 @@ body {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .commit-list {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   margin: 0;
   padding: 0;
@@ -454,6 +529,12 @@ body {
   opacity: 0.55;
   font-size: 13px;
   padding: 24px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.commit-pane > .placeholder {
+  padding: 12px;
 }
 
 .status-banner {

@@ -7,6 +7,9 @@
   const altView = document.getElementById('altView');
   const statusBanner = document.getElementById('statusBanner');
   const targetList = document.getElementById('targetList');
+  const commitsPane = document.getElementById('commitsPane');
+  const commitResize = document.getElementById('commitResize');
+  const commitPane = document.getElementById('commitPane');
   const branchMapping = document.getElementById('branchMapping');
   const commitList = document.getElementById('commitList');
   const noCommitSelected = document.getElementById('noCommitSelected');
@@ -157,6 +160,124 @@
     const state = vscode.getState() || {};
     vscode.setState({ ...state, pushTags: pushTagsCheckbox.checked });
   }
+
+  function saveWebviewState(patch) {
+    const state = { ...(vscode.getState() || {}), ...patch };
+    vscode.setState(state);
+  }
+
+  const DEFAULT_COMMIT_PANE_HEIGHT = 140;
+  const MIN_COMMIT_PANE_HEIGHT = 96;
+
+  function maxCommitPaneHeight() {
+    if (!commitsPane) {
+      return 420;
+    }
+    const paneH = commitsPane.getBoundingClientRect().height;
+    if (paneH < 1) {
+      return 420;
+    }
+    const resizeH = commitResize ? commitResize.getBoundingClientRect().height : 8;
+    // Leave room for at least a few target rows.
+    return Math.max(MIN_COMMIT_PANE_HEIGHT, Math.floor(paneH - resizeH - 72));
+  }
+
+  function applyCommitPaneHeight(px) {
+    if (!commitPane || !commitsPane?.classList.contains('has-targets')) {
+      return;
+    }
+    const next = Math.max(MIN_COMMIT_PANE_HEIGHT, Math.min(maxCommitPaneHeight(), Math.round(px)));
+    commitPane.style.height = `${next}px`;
+    webviewState.commitPaneHeight = next;
+    saveWebviewState({ commitPaneHeight: next });
+  }
+
+  function restoreCommitPaneHeight() {
+    const preferred = Number(webviewState.commitPaneHeight) || DEFAULT_COMMIT_PANE_HEIGHT;
+    applyCommitPaneHeight(preferred);
+    requestAnimationFrame(() => applyCommitPaneHeight(preferred));
+  }
+
+  function setCommitsPaneHasTargets(hasTargets) {
+    if (!commitsPane) {
+      return;
+    }
+    commitsPane.classList.toggle('has-targets', !!hasTargets);
+    if (commitResize) {
+      commitResize.classList.toggle('hidden', !hasTargets);
+    }
+    if (!hasTargets && commitPane) {
+      commitPane.style.height = '';
+    } else if (hasTargets) {
+      restoreCommitPaneHeight();
+    }
+  }
+
+  (function initCommitPaneResize() {
+    if (!commitResize || !commitPane || !commitsPane) {
+      return;
+    }
+    let dragging = false;
+    let startY = 0;
+    let startHeight = 0;
+
+    function onPointerMove(e) {
+      if (!dragging) {
+        return;
+      }
+      // Sash sits between target list (top) and commit pane (bottom):
+      // drag sash up => commit taller; drag sash down => commit shorter.
+      applyCommitPaneHeight(startHeight + (startY - e.clientY));
+    }
+
+    function onPointerUp(e) {
+      if (!dragging) {
+        return;
+      }
+      dragging = false;
+      commitsPane.classList.remove('is-resizing');
+      document.body.classList.remove('is-commit-split-resizing');
+      try {
+        commitResize.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      commitResize.removeEventListener('pointermove', onPointerMove);
+      commitResize.removeEventListener('pointerup', onPointerUp);
+      commitResize.removeEventListener('pointercancel', onPointerUp);
+    }
+
+    commitResize.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || !commitsPane.classList.contains('has-targets')) {
+        return;
+      }
+      e.preventDefault();
+      dragging = true;
+      startY = e.clientY;
+      startHeight = commitPane.getBoundingClientRect().height;
+      commitsPane.classList.add('is-resizing');
+      document.body.classList.add('is-commit-split-resizing');
+      commitResize.setPointerCapture(e.pointerId);
+      commitResize.addEventListener('pointermove', onPointerMove);
+      commitResize.addEventListener('pointerup', onPointerUp);
+      commitResize.addEventListener('pointercancel', onPointerUp);
+    });
+
+    commitResize.addEventListener('keydown', (e) => {
+      if (!commitsPane.classList.contains('has-targets')) {
+        return;
+      }
+      const step = e.shiftKey ? 24 : 8;
+      // ArrowUp moves sash up => commit taller; ArrowDown => commit shorter.
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        applyCommitPaneHeight(commitPane.getBoundingClientRect().height + step);
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        applyCommitPaneHeight(commitPane.getBoundingClientRect().height - step);
+      }
+    });
+  })();
 
   if (pushTagsCheckbox) {
     pushTagsCheckbox.addEventListener('change', savePushTagsPreference);
@@ -503,8 +624,10 @@
     targetList.innerHTML = '';
     // IDEA focuses one repo; only show checkbox list when multiple repos.
     if (payload.targets.length <= 1) {
+      setCommitsPaneHasTargets(false);
       return;
     }
+    setCommitsPaneHasTargets(true);
     if (!payload.targets.length) {
       const empty = document.createElement('div');
       empty.className = 'placeholder';

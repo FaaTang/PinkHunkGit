@@ -794,11 +794,14 @@ export class PushDialogProvider implements vscode.Disposable {
       <div class="dialog-body">
         <div id="mainView" class="main-view">
           <div class="idea-layout">
-            <aside class="commits-pane">
+            <aside id="commitsPane" class="commits-pane">
               <div id="targetList" class="target-list"></div>
-              <div id="branchMapping" class="branch-mapping"></div>
-              <ul id="commitList" class="commit-list hidden"></ul>
-              <div id="noCommitSelected" class="placeholder">No commits to push</div>
+              <div id="commitResize" class="commit-resize hidden" title="Drag to resize" role="separator" aria-orientation="horizontal" tabindex="0"></div>
+              <div id="commitPane" class="commit-pane">
+                <div id="branchMapping" class="branch-mapping"></div>
+                <ul id="commitList" class="commit-list hidden"></ul>
+                <div id="noCommitSelected" class="placeholder">No commits to push</div>
+              </div>
             </aside>
             <section class="details-pane">
               <div class="files-pane">
