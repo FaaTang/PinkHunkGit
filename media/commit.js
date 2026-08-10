@@ -51,6 +51,9 @@
   const commitMsgPrefixClearGlobal = document.getElementById('commitMsgPrefixClearGlobal');
   const commitMsgPrefixSave = document.getElementById('commitMsgPrefixSave');
   const cmpPrefixInput = document.getElementById('cmpPrefixInput');
+  const cmpPromptInput = document.getElementById('cmpPromptInput');
+  const cmpWsPromptEnabled = document.getElementById('cmpWsPromptEnabled');
+  const cmpGlPromptEnabled = document.getElementById('cmpGlPromptEnabled');
   const cmpWsEnabled = document.getElementById('cmpWsEnabled');
   const cmpGlEnabled = document.getElementById('cmpGlEnabled');
   const stageAllBtn = document.getElementById('stageAll');
@@ -98,10 +101,10 @@
     autoGenerateCommitCapability: { available: true },
   };
   let commitMessagePrefixSettings = {
-    workspace: { enabled: false, prefix: '' },
-    global: { enabled: false, prefix: '' },
+    workspace: { enabled: false, prefix: '', promptEnabled: false, prompt: '' },
+    global: { enabled: false, prefix: '', promptEnabled: false, prompt: '' },
     workspaceConfigured: false,
-    effective: { enabled: false, prefix: '' },
+    effective: { enabled: false, prefix: '', promptEnabled: false, prompt: '' },
   };
   let commitLogExpanded = webviewState.commitLogExpanded === true;
   let commitLogRepoRoot = webviewState.commitLogRepoRoot || '';
@@ -3209,8 +3212,21 @@
             ? gl.prefix
             : ''
           : '';
+    const displayPrompt =
+      ws.promptEnabled
+        ? typeof ws.prompt === 'string'
+          ? ws.prompt
+          : ''
+        : gl.promptEnabled
+          ? typeof gl.prompt === 'string'
+            ? gl.prompt
+            : ''
+          : '';
     if (cmpPrefixInput) {
       cmpPrefixInput.value = displayPrefix;
+    }
+    if (cmpPromptInput) {
+      cmpPromptInput.value = displayPrompt;
     }
     if (cmpWsEnabled) {
       cmpWsEnabled.checked = !!ws.enabled;
@@ -3218,22 +3234,43 @@
     if (cmpGlEnabled) {
       cmpGlEnabled.checked = !!gl.enabled;
     }
+    if (cmpWsPromptEnabled) {
+      cmpWsPromptEnabled.checked = !!ws.promptEnabled;
+    }
+    if (cmpGlPromptEnabled) {
+      cmpGlPromptEnabled.checked = !!gl.promptEnabled;
+    }
   }
 
   function readCommitMessagePrefixSettingsForm() {
     const prefix = (cmpPrefixInput?.value || '').trim();
+    const prompt = (cmpPromptInput?.value || '').trim();
     const wsEnabled = !!(cmpWsEnabled && cmpWsEnabled.checked);
     const glEnabled = !!(cmpGlEnabled && cmpGlEnabled.checked);
+    const wsPromptEnabled = !!(cmpWsPromptEnabled && cmpWsPromptEnabled.checked);
+    const glPromptEnabled = !!(cmpGlPromptEnabled && cmpGlPromptEnabled.checked);
     const wsCurrent = commitMessagePrefixSettings.workspace || {};
     const glCurrent = commitMessagePrefixSettings.global || {};
     return {
       workspace: {
         enabled: wsEnabled,
         prefix: wsEnabled ? prefix : (typeof wsCurrent.prefix === 'string' ? wsCurrent.prefix : ''),
+        promptEnabled: wsPromptEnabled,
+        prompt: wsPromptEnabled
+          ? prompt
+          : typeof wsCurrent.prompt === 'string'
+            ? wsCurrent.prompt
+            : '',
       },
       global: {
         enabled: glEnabled,
         prefix: glEnabled ? prefix : (typeof glCurrent.prefix === 'string' ? glCurrent.prefix : ''),
+        promptEnabled: glPromptEnabled,
+        prompt: glPromptEnabled
+          ? prompt
+          : typeof glCurrent.prompt === 'string'
+            ? glCurrent.prompt
+            : '',
       },
     };
   }

@@ -3,6 +3,10 @@ import * as vscode from 'vscode';
 export type CommitMessagePrefixFlags = {
 	enabled: boolean;
 	prefix: string;
+	/** Whether to apply the custom generation prompt from this scope. */
+	promptEnabled: boolean;
+	/** Extra instruction forced into AI commit-message generation. */
+	prompt: string;
 };
 
 export type CommitMessagePrefixSettingsPayload = {
@@ -18,11 +22,15 @@ const WORKSPACE_KEY = 'commitMessage.prefixSettings';
 const GLOBAL_DEFAULTS: CommitMessagePrefixFlags = {
 	enabled: false,
 	prefix: '',
+	promptEnabled: false,
+	prompt: '',
 };
 
 const WORKSPACE_DEFAULTS: CommitMessagePrefixFlags = {
 	enabled: true,
 	prefix: '',
+	promptEnabled: false,
+	prompt: '',
 };
 
 function normalizeFlags(value: unknown, fallback: CommitMessagePrefixFlags): CommitMessagePrefixFlags {
@@ -33,6 +41,9 @@ function normalizeFlags(value: unknown, fallback: CommitMessagePrefixFlags): Com
 	return {
 		enabled: typeof raw.enabled === 'boolean' ? raw.enabled : fallback.enabled,
 		prefix: typeof raw.prefix === 'string' ? raw.prefix : fallback.prefix,
+		promptEnabled:
+			typeof raw.promptEnabled === 'boolean' ? raw.promptEnabled : fallback.promptEnabled,
+		prompt: typeof raw.prompt === 'string' ? raw.prompt : fallback.prompt,
 	};
 }
 
@@ -51,13 +62,29 @@ export class CommitMessagePrefixSettingsStore {
 		return normalizeFlags(raw, WORKSPACE_DEFAULTS);
 	}
 
+	/**
+	 * Effective prefix: Workspace wins only when its Apply Prefix is checked; otherwise Global.
+	 */
 	getEffective(): CommitMessagePrefixFlags {
 		const ws = this.getWorkspace();
-		// Workspace 优先级：只有当 Workspace 已启用时才生效；未勾选时回退 Global。
-		if (ws && ws.enabled) {
-			return ws;
+		const gl = this.getGlobal();
+		const prefixFromWs = !!(ws && ws.enabled);
+		const promptFromWs = !!(ws && ws.promptEnabled);
+		return {
+			enabled: prefixFromWs ? true : gl.enabled,
+			prefix: prefixFromWs ? ws!.prefix : gl.prefix,
+			promptEnabled: promptFromWs ? true : gl.promptEnabled,
+			prompt: promptFromWs ? ws!.prompt : gl.prompt,
+		};
+	}
+
+	/** Effective custom generation prompt text, or empty when disabled / blank. */
+	getEffectivePrompt(): string {
+		const effective = this.getEffective();
+		if (!effective.promptEnabled) {
+			return '';
 		}
-		return this.getGlobal();
+		return (effective.prompt || '').trim();
 	}
 
 	getPayload(): CommitMessagePrefixSettingsPayload {

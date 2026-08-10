@@ -342,7 +342,11 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			await this.git.applyCommitSelection(checkedChanges);
 			await this.stageUnversionedPaths(unversionedPaths);
 			await this.git.refresh();
-			const generated = await this.git.generateCommitMessageWithAi(checkedChanges, unversionedPaths);
+			const generated = await this.git.generateCommitMessageWithAi(
+				checkedChanges,
+				unversionedPaths,
+				this.commitPrefixSettings.getEffectivePrompt()
+			);
 			const message = this.applyConfiguredCommitPrefix(generated);
 			this.post({ type: 'setMessage', message });
 		} catch (err) {
@@ -418,7 +422,13 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				this.post({ type: 'generateCommitMessageState', busy: true });
 				try {
 					message = this.applyConfiguredCommitPrefix(
-						(await this.git.generateCommitMessageWithAi(checkedChanges, unversionedPaths)).trim()
+						(
+							await this.git.generateCommitMessageWithAi(
+								checkedChanges,
+								unversionedPaths,
+								this.commitPrefixSettings.getEffectivePrompt()
+							)
+						).trim()
 					);
 					if (message) {
 						this.post({ type: 'setMessage', message });
@@ -559,7 +569,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		const payload = await this.commitPrefixSettings.save(workspace, global);
 		this.post({ type: 'commitMessagePrefixSettings', payload });
 		showTimedInfoMessage(
-			'Commit message prefix settings saved. Workspace overrides Global in this folder.'
+			'Commit message generation settings saved. Workspace overrides Global in this folder.'
 		);
 	}
 
@@ -630,7 +640,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private async clearGlobalCommitMessagePrefixSettings(): Promise<void> {
 		const payload = await this.commitPrefixSettings.clearGlobal();
 		this.post({ type: 'commitMessagePrefixSettings', payload });
-		showTimedInfoMessage('Global commit message prefix cleared.');
+		showTimedInfoMessage('Global commit message generation settings cleared.');
 	}
 
 	private async saveFastPushSettings(workspace: FastPushFlags, global: FastPushFlags): Promise<void> {
@@ -1132,7 +1142,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
                 </svg>
                 <span class="generate-msg-spinner" aria-hidden="true"></span>
               </button>
-              <button id="generateMsgSettingsBtn" class="generate-msg-settings-btn" type="button" title="Commit message prefix settings" aria-label="Commit message prefix settings">⚙</button>
+              <button id="generateMsgSettingsBtn" class="generate-msg-settings-btn" type="button" title="Commit message generation settings" aria-label="Commit message generation settings">⚙</button>
             </div>
           </div>
           <div id="formError" class="form-error hidden"></div>
@@ -1263,24 +1273,31 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 
   <div id="commitMsgPrefixModal" class="modal hidden">
     <div class="modal-card modal-card-wide">
-      <h2>Commit Message Prefix Settings</h2>
-      <p class="fast-push-settings-hint">Set one optional prefix for auto-generated commit messages only, then choose where it applies. Workspace overrides Global in this folder. Example: v20260729#000</p>
+      <h2>Commit Message Generation Settings</h2>
+      <p class="fast-push-settings-hint">Configure an optional prefix and a mandatory generation prompt for auto-generated commit messages. Choose Workspace and/or Global for each. Workspace overrides Global in this folder.</p>
       <label class="fast-push-commit-label" for="cmpPrefixInput">Prefix</label>
       <input id="cmpPrefixInput" class="commit-prefix-single-input" type="text" placeholder="e.g. v20260729#000" />
-      <div class="fast-push-settings-table" role="table" aria-label="Commit message prefix settings">
+      <label class="fast-push-commit-label" for="cmpPromptInput">Generation prompt</label>
+      <textarea id="cmpPromptInput" class="commit-prompt-input" rows="4" placeholder="e.g. Always write subject and bullets in Simplified Chinese. Keep type(scope) in English."></textarea>
+      <div class="fast-push-settings-table" role="table" aria-label="Commit message generation settings">
         <div class="fast-push-settings-row head" role="row">
-          <span class="fast-push-settings-feature" role="columnheader">Apply Prefix</span>
+          <span class="fast-push-settings-feature" role="columnheader">Apply</span>
           <label class="fast-push-settings-scope" role="columnheader" title="Applies only to this workspace and overrides Global">Workspace</label>
           <label class="fast-push-settings-scope" role="columnheader" title="Default for all workspaces that have no Workspace override">Global</label>
         </div>
         <div class="fast-push-settings-row commit-prefix-row" role="row">
-          <span class="fast-push-settings-feature">Auto-generated commit message</span>
+          <span class="fast-push-settings-feature">Prefix on auto-generated message</span>
           <label class="fast-push-settings-scope"><input id="cmpWsEnabled" type="checkbox" /></label>
           <label class="fast-push-settings-scope"><input id="cmpGlEnabled" type="checkbox" /></label>
         </div>
+        <div class="fast-push-settings-row commit-prefix-row" role="row">
+          <span class="fast-push-settings-feature">Force generation prompt</span>
+          <label class="fast-push-settings-scope"><input id="cmpWsPromptEnabled" type="checkbox" /></label>
+          <label class="fast-push-settings-scope"><input id="cmpGlPromptEnabled" type="checkbox" /></label>
+        </div>
       </div>
       <div class="modal-actions">
-        <button id="commitMsgPrefixClearGlobal" type="button" title="Clear the Global prefix and disable it">Clear Global</button>
+        <button id="commitMsgPrefixClearGlobal" type="button" title="Clear the Global prefix/prompt and disable them">Clear Global</button>
         <button id="commitMsgPrefixCancel" type="button">Cancel</button>
         <button id="commitMsgPrefixSave" class="primary" type="button">Save</button>
       </div>

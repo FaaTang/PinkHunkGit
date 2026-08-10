@@ -17,7 +17,8 @@ const RULE_MARKER_END = '# END Pink Hunk Git — commit message language (tempor
 
 export async function generateCommitMessageWithLanguageModel(
 	repo: Repository,
-	relativePaths: string[]
+	relativePaths: string[],
+	customPrompt?: string
 ): Promise<string | undefined> {
 	if (typeof vscode.lm?.selectChatModels !== 'function') {
 		return undefined;
@@ -40,11 +41,13 @@ export async function generateCommitMessageWithLanguageModel(
 	}
 
 	const locale = resolveCommitMessageLocale();
+	const userPrompt = (customPrompt || '').trim();
 	const prompt = buildPrompt({
 		diffs,
 		recentCommits,
 		projectRules,
 		locale,
+		customPrompt: userPrompt,
 	});
 
 	let cleaned = await requestCommitMessage(model, prompt);
@@ -53,7 +56,10 @@ export async function generateCommitMessageWithLanguageModel(
 	}
 
 	if (locale.wantsCjk && !CJK_RE.test(cleaned)) {
-		const rewritten = await requestCommitMessage(model, buildRewritePrompt(cleaned, locale));
+		const rewritten = await requestCommitMessage(
+			model,
+			buildRewritePrompt(cleaned, locale, userPrompt)
+		);
 		if (rewritten && CJK_RE.test(rewritten)) {
 			cleaned = rewritten;
 		}
@@ -68,13 +74,25 @@ export async function generateCommitMessageWithLanguageModel(
  */
 export async function withTemporaryCommitLanguageRule<T>(
 	repoRoot: string,
-	fn: () => Promise<T>
+	fn: () => Promise<T>,
+	customPrompt?: string
 ): Promise<T> {
 	const locale = resolveCommitMessageLocale();
 	const rulesPath = path.join(repoRoot, '.cursorrules');
+	const userPrompt = (customPrompt || '').trim();
+	const customBlock = userPrompt
+		? [
+				'',
+				'## Mandatory user commit-message instruction',
+				'The following instruction is MANDATORY and MUST be followed when generating the Git commit message.',
+				'It overrides conflicting style preferences, except Conventional Commit type/scope must stay English ASCII.',
+				userPrompt,
+			].join('\n')
+		: '';
 	const snippet = [
 		RULE_MARKER_START,
 		locale.cursorRulesBlock,
+		customBlock,
 		RULE_MARKER_END,
 		'',
 	].join('\n');
@@ -113,7 +131,10 @@ export async function withTemporaryCommitLanguageRule<T>(
 	}
 }
 
-export async function rewriteCommitMessageForLocale(message: string): Promise<string | undefined> {
+export async function rewriteCommitMessageForLocale(
+	message: string,
+	customPrompt?: string
+): Promise<string | undefined> {
 	const locale = resolveCommitMessageLocale();
 	if (!locale.wantsCjk || CJK_RE.test(message)) {
 		return undefined;
@@ -125,7 +146,10 @@ export async function rewriteCommitMessageForLocale(message: string): Promise<st
 	if (!model) {
 		return undefined;
 	}
-	const rewritten = await requestCommitMessage(model, buildRewritePrompt(message, locale));
+	const rewritten = await requestCommitMessage(
+		model,
+		buildRewritePrompt(message, locale, (customPrompt || '').trim())
+	);
 	if (rewritten && CJK_RE.test(rewritten)) {
 		return rewritten;
 	}
@@ -516,12 +540,21 @@ function buildPrompt(input: {
 	recentCommits: string[];
 	projectRules: string;
 	locale: ReturnType<typeof resolveCommitMessageLocale>;
+	customPrompt?: string;
 }): string {
 	const recent =
 		input.recentCommits.length > 0
 			? input.recentCommits.map((m) => `- ${m.replace(/\s+/g, ' ').trim()}`).join('\n')
 			: '(none)';
 	const rules = input.projectRules.trim() || '(none found)';
+	const custom = (input.customPrompt || '').trim();
+	const customSection = custom
+		? [
+				'',
+				'MANDATORY USER INSTRUCTION (must follow; overrides conflicting style preferences except Conventional Commit type/scope English ASCII):',
+				custom,
+			]
+		: [];
 
 	return [
 		'You are generating a Git commit message for the staged changes below.',
@@ -529,6 +562,7 @@ function buildPrompt(input: {
 		'',
 		`Target language: ${input.locale.label} (locale=${input.locale.id})`,
 		input.locale.instruction,
+		...customSection,
 		'',
 		'Follow project rules related to commits and style when present:',
 		rules,
@@ -543,8 +577,17 @@ function buildPrompt(input: {
 
 function buildRewritePrompt(
 	englishMessage: string,
-	locale: ReturnType<typeof resolveCommitMessageLocale>
+	locale: ReturnType<typeof resolveCommitMessageLocale>,
+	customPrompt?: string
 ): string {
+	const custom = (customPrompt || '').trim();
+	const customSection = custom
+		? [
+				'',
+				'MANDATORY USER INSTRUCTION (must follow while rewriting):',
+				custom,
+			]
+		: [];
 	return [
 		'Rewrite the following Git commit message into the required target language and format.',
 		'Keep the same meaning and keep a Cursor-native structure: short subject, blank line, then multiple "- " bullet details.',
@@ -553,6 +596,7 @@ function buildRewritePrompt(
 		'',
 		`Target language: ${locale.label} (locale=${locale.id})`,
 		locale.instruction,
+		...customSection,
 		'',
 		'Original message:',
 		englishMessage,
