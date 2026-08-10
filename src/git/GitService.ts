@@ -760,6 +760,11 @@ export class GitService implements vscode.Disposable {
 		return this.api.repositories.find((r) => pathsEqual(r.rootUri.fsPath, this.activeRepoRoot!));
 	}
 
+	/** True until `init()` finishes (success or failure). */
+	isInitPending(): boolean {
+		return this.initState === 'pending';
+	}
+
 	getWorkspaceSnapshot(): WorkspaceSnapshot {
 		const emptyActive: RepoSnapshot = {
 			ok: false,
@@ -771,16 +776,20 @@ export class GitService implements vscode.Disposable {
 			ignored: [],
 		};
 
+		// Keep showing Loading while vscode.git is still activating / discovering roots.
+		// `api` may already be set mid-init; treating that as a hard error flashes
+		// "No Git repository selected" before repositories appear a few seconds later.
+		if (this.initState === 'pending') {
+			return {
+				ok: false,
+				loading: true,
+				hint: 'Loading Git...',
+				repositories: [],
+				active: emptyActive,
+			};
+		}
+
 		if (!this.api) {
-			if (this.initState === 'pending') {
-				return {
-					ok: false,
-					loading: true,
-					hint: 'Loading Git...',
-					repositories: [],
-					active: emptyActive,
-				};
-			}
 			return {
 				ok: false,
 				error: this.initError || 'VS Code Git extension is not available.',

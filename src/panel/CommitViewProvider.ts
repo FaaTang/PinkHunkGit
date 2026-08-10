@@ -717,6 +717,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private async onMessage(msg: WebviewToHost): Promise<void> {
 		// Lightweight messages: do not run a full git refresh (avoids UI freezes).
 		if (msg.type === 'loadCommitLog') {
+			await this.waitForGitInit();
 			await this.pushCommitLog(msg.repoRoot);
 			return;
 		}
@@ -961,11 +962,35 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		}
 		const promise = (async () => {
 			try {
+				if (!this.git.getActiveRepository()) {
+					// Clear webview "Loading…" without toasting a startup race as ERROR.
+					this.post({
+						type: 'commitLog',
+						payload: {
+							repoRoot: repoRoot || '',
+							repoName: '',
+							commits: [],
+						},
+					});
+					return;
+				}
 				const payload = await this.git.getCommitLog(repoRoot);
 				this.post({ type: 'commitLog', payload });
 			} catch (err) {
-				const message = await notifyGitError(err);
-				this.post({ type: 'error', message });
+				const message = err instanceof Error ? err.message : String(err);
+				if (/No Git repository selected/i.test(message)) {
+					this.post({
+						type: 'commitLog',
+						payload: {
+							repoRoot: repoRoot || '',
+							repoName: '',
+							commits: [],
+						},
+					});
+					return;
+				}
+				const detailed = await notifyGitError(err);
+				this.post({ type: 'error', message: detailed });
 			}
 		})().finally(() => {
 			if (this.commitLogInFlight?.promise === promise) {
