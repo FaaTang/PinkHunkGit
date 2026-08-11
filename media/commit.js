@@ -1314,12 +1314,17 @@
       if (!meta) {
         continue;
       }
-      const selectAll = wrap.querySelector(':scope > .dir-group-title > .group-select-all');
+      const title = wrap.querySelector(':scope > .dir-group-title');
+      const selectAll = title?.querySelector(':scope > .group-select-all');
       if (!selectAll) {
         continue;
       }
       const { selected, total } = countCheckedFromGroupMeta(meta);
       applyGroupSelectAllState(selectAll, selected, total);
+      const countEl = title.querySelector(':scope > .dir-group-count');
+      if (countEl) {
+        countEl.textContent = formatGroupCount(selected, total);
+      }
     }
 
     for (const wrap of fileList.querySelectorAll('.repo-subgroup')) {
@@ -1335,8 +1340,7 @@
       const { selected, total } = countCheckedFromGroupMeta(meta);
       applyGroupSelectAllState(selectAll, selected, total);
       const countEl = title.querySelector(':scope > .repo-subgroup-count');
-      const ignored = wrap.closest('.category-ignored');
-      if (countEl && !ignored && !meta.unversioned) {
+      if (countEl) {
         countEl.textContent = formatGroupCount(selected, total);
       }
     }
@@ -1354,8 +1358,7 @@
       const { selected, total } = countCheckedFromGroupMeta(meta);
       applyGroupSelectAllState(selectAll, selected, total);
       const countEl = title.querySelector(':scope > .group-title-count');
-      const ignored = wrap.classList.contains('category-ignored');
-      if (countEl && !ignored && !meta.unversioned) {
+      if (countEl) {
         countEl.textContent = formatGroupCount(selected, total);
       }
     }
@@ -1750,42 +1753,6 @@
 
   function getIgnored(active) {
     return [...(active.ignored ?? [])].sort((a, b) => a.path.localeCompare(b.path));
-  }
-
-  function formatDirsAndFiles(dirs, files) {
-    const parts = [];
-    if (dirs > 0) {
-      parts.push(`${dirs} ${dirs === 1 ? 'directory' : 'directories'}`);
-    }
-    if (files > 0) {
-      parts.push(`${files} ${files === 1 ? 'file' : 'files'}`);
-    }
-    return parts.join(' and ') || '0 files';
-  }
-
-  function summarizeIgnoredItems(items) {
-    let dirs = 0;
-    let files = 0;
-    for (const item of items) {
-      if (item.directory) {
-        dirs += 1;
-      } else {
-        files += 1;
-      }
-    }
-    return formatDirsAndFiles(dirs, files);
-  }
-
-  function countTreeSummary(node) {
-    let dirs = 0;
-    let files = node.files.length;
-    for (const child of node.dirs.values()) {
-      dirs += 1;
-      const sub = countTreeSummary(child);
-      dirs += sub.dirs;
-      files += sub.files;
-    }
-    return { dirs, files };
   }
 
   function splitPath(fullPath) {
@@ -2403,12 +2370,7 @@
 
     const count = document.createElement('span');
     count.className = 'group-title-count';
-    if (ignoredGroup) {
-      const allItems = entries.flatMap(({ items }) => items);
-      count.textContent = summarizeIgnoredItems(allItems);
-    } else {
-      count.textContent = unversionedGroup ? `${total} files` : formatGroupCount(selected, total);
-    }
+    count.textContent = formatGroupCount(selected, total);
 
     head.appendChild(selectAll);
     head.appendChild(chevron);
@@ -2541,13 +2503,7 @@
 
     const count = document.createElement('span');
     count.className = 'repo-subgroup-count';
-    if (ignoredGroup) {
-      count.textContent = summarizeIgnoredItems(items);
-    } else {
-      count.textContent = unversionedGroup
-        ? `${items.length} files`
-        : formatGroupCount(selectedCount, items.length);
-    }
+    count.textContent = formatGroupCount(selectedCount, items.length);
 
     head.appendChild(selectAll);
     head.appendChild(chevron);
@@ -2723,12 +2679,7 @@
 
       const count = document.createElement('span');
       count.className = 'dir-group-count';
-      if (groupContext.ignoredGroup) {
-        const summary = countTreeSummary(dirNode);
-        count.textContent = formatDirsAndFiles(summary.dirs, summary.files);
-      } else {
-        count.textContent = `${fileCount} ${fileCount === 1 ? 'file' : 'files'}`;
-      }
+      count.textContent = formatGroupCount(selectedCount, fileCount);
 
       head.appendChild(selectAll);
       head.appendChild(chevron);
