@@ -1298,32 +1298,32 @@ export class GitService implements vscode.Disposable {
 				continue;
 			}
 
-			const checkedSet = new Set(
-				checked
-					.filter((entry) => pathsEqual(entry.repoRoot, snap.rootPath))
-					.map((entry) => entry.path.toLowerCase())
+			const checkedEntries = checked.filter((entry) =>
+				pathsEqual(entry.repoRoot, snap.rootPath)
 			);
+			const checkedSet = new Set(checkedEntries.map((entry) => entry.path.toLowerCase()));
 			const repo = this.requireRepoByRoot(snap.rootPath);
 			const toStage: string[] = [];
 			const toUnstage: string[] = [];
-			const trackedUnstaged = snap.unstaged.filter((item) => item.status !== '?');
 			const seenStage = new Set<string>();
-			const seenUnstage = new Set<string>();
 
-			for (const item of trackedUnstaged) {
-				const key = item.path.toLowerCase();
-				if (!checkedSet.has(key) || seenStage.has(key)) {
+			// Always re-add checked files (save → add) so the index matches the working tree.
+			// Otherwise a file staged earlier (e.g. during Generate Message) can keep a stale
+			// index blob while later edits remain unstaged — first Commit only gets the old
+			// half and the user has to commit again.
+			for (const entry of checkedEntries) {
+				const key = entry.path.toLowerCase();
+				if (seenStage.has(key)) {
 					continue;
 				}
 				seenStage.add(key);
-				toStage.push(item.fsPath);
+				toStage.push(path.join(snap.rootPath, ...entry.path.replace(/\\/g, '/').split('/')));
 			}
 			for (const item of snap.staged) {
 				const key = item.path.toLowerCase();
-				if (checkedSet.has(key) || seenUnstage.has(key)) {
+				if (checkedSet.has(key)) {
 					continue;
 				}
-				seenUnstage.add(key);
 				toUnstage.push(item.fsPath);
 			}
 
@@ -1795,6 +1795,12 @@ export class GitService implements vscode.Disposable {
 		const trimmed = message.trim();
 		if (!trimmed) {
 			throw new Error('Commit message cannot be empty.');
+		}
+
+		// Re-read Git state after applyCommitSelection / add so we don't skip repos
+		// whose files were only staged moments ago (stale snapshot).
+		if (this.api?.repositories.length) {
+			await Promise.all(this.api.repositories.map((repo) => repo.status()));
 		}
 
 		const workspace = this.getWorkspaceSnapshot();
