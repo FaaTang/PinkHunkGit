@@ -29,7 +29,7 @@ import {
 	buildLocaleFallbackMessage,
 	formatCommitMessageStyle,
 	generateCommitMessageWithLanguageModel,
-	resolveCommitMessageLocale,
+	resolveEffectiveCommitMessageLocale,
 	rewriteCommitMessageForLocale,
 	withTemporaryCommitLanguageRule,
 } from '../commitMessage/generateCommitMessage';
@@ -1569,7 +1569,7 @@ export class GitService implements vscode.Disposable {
 				customPrompt
 			);
 			if (viaLm?.trim()) {
-				return this.ensureLocaleCommitMessage(viaLm.trim(), relativePaths);
+				return this.ensureLocaleCommitMessage(viaLm.trim(), relativePaths, customPrompt);
 			}
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
@@ -1586,7 +1586,7 @@ export class GitService implements vscode.Disposable {
 			() => this.generateCommitMessageViaScmCommand(repo, customPrompt),
 			customPrompt
 		);
-		return this.ensureLocaleCommitMessage(viaScm.trim(), relativePaths);
+		return this.ensureLocaleCommitMessage(viaScm.trim(), relativePaths, customPrompt);
 	}
 
 	private formatMultiRepoCommitMessage(items: Array<{ repo: Repository; message: string }>): string {
@@ -1602,11 +1602,15 @@ export class GitService implements vscode.Disposable {
 			.join('\n\n');
 	}
 
-	private ensureLocaleCommitMessage(message: string, relativePaths: string[]): string {
-		const locale = resolveCommitMessageLocale();
+	private ensureLocaleCommitMessage(
+		message: string,
+		relativePaths: string[],
+		customPrompt = ''
+	): string {
+		const locale = resolveEffectiveCommitMessageLocale(customPrompt);
 		let text = message.trim();
 		if (locale.wantsCjk && !/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u.test(text)) {
-			text = buildLocaleFallbackMessage(relativePaths, text) ?? text;
+			text = buildLocaleFallbackMessage(relativePaths, text, customPrompt) ?? text;
 		}
 		return formatCommitMessageStyle(text, relativePaths);
 	}

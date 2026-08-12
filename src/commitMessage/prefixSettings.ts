@@ -64,17 +64,21 @@ export class CommitMessagePrefixSettingsStore {
 
 	/**
 	 * Effective prefix: Workspace wins only when its Apply Prefix is checked; otherwise Global.
+	 * For prompt text: Workspace Force checked uses workspace prompt, but falls back to Global
+	 * prompt when workspace prompt is blank (so an empty WS field cannot wipe Global text).
 	 */
 	getEffective(): CommitMessagePrefixFlags {
 		const ws = this.getWorkspace();
 		const gl = this.getGlobal();
 		const prefixFromWs = !!(ws && ws.enabled);
 		const promptFromWs = !!(ws && ws.promptEnabled);
+		const wsPrompt = ((ws && ws.prompt) || '').trim();
+		const glPrompt = (gl.prompt || '').trim();
 		return {
 			enabled: prefixFromWs ? true : gl.enabled,
 			prefix: prefixFromWs ? ws!.prefix : gl.prefix,
 			promptEnabled: promptFromWs ? true : gl.promptEnabled,
-			prompt: promptFromWs ? ws!.prompt : gl.prompt,
+			prompt: promptFromWs ? wsPrompt || glPrompt : gl.prompt,
 		};
 	}
 

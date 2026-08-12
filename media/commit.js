@@ -3186,9 +3186,11 @@
           : '';
     const displayPrompt =
       ws.promptEnabled
-        ? typeof ws.prompt === 'string'
-          ? ws.prompt
-          : ''
+        ? (typeof ws.prompt === 'string' && ws.prompt.trim()
+            ? ws.prompt
+            : typeof gl.prompt === 'string'
+              ? gl.prompt
+              : '')
         : gl.promptEnabled
           ? typeof gl.prompt === 'string'
             ? gl.prompt

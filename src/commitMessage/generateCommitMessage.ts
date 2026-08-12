@@ -40,8 +40,8 @@ export async function generateCommitMessageWithLanguageModel(
 		throw new Error('No diffs found for the selected files.');
 	}
 
-	const locale = resolveCommitMessageLocale();
 	const userPrompt = (customPrompt || '').trim();
+	const locale = resolveEffectiveCommitMessageLocale(userPrompt);
 	const prompt = buildPrompt({
 		diffs,
 		recentCommits,
@@ -77,22 +77,24 @@ export async function withTemporaryCommitLanguageRule<T>(
 	fn: () => Promise<T>,
 	customPrompt?: string
 ): Promise<T> {
-	const locale = resolveCommitMessageLocale();
 	const rulesPath = path.join(repoRoot, '.cursorrules');
 	const userPrompt = (customPrompt || '').trim();
+	const locale = resolveEffectiveCommitMessageLocale(userPrompt);
+	// User prompt comes first and must override any locale / project language defaults.
 	const customBlock = userPrompt
 		? [
-				'',
 				'## Mandatory user commit-message instruction',
 				'The following instruction is MANDATORY and MUST be followed when generating the Git commit message.',
-				'It overrides conflicting style preferences, except Conventional Commit type/scope must stay English ASCII.',
+				'It OVERRIDES conflicting language and style preferences below (editor locale, system locale, recent commits).',
+				'Exception: Conventional Commit type/scope must stay English ASCII.',
 				userPrompt,
+				'',
 			].join('\n')
 		: '';
 	const snippet = [
 		RULE_MARKER_START,
-		locale.cursorRulesBlock,
 		customBlock,
+		locale.cursorRulesBlock,
 		RULE_MARKER_END,
 		'',
 	].join('\n');
@@ -135,7 +137,8 @@ export async function rewriteCommitMessageForLocale(
 	message: string,
 	customPrompt?: string
 ): Promise<string | undefined> {
-	const locale = resolveCommitMessageLocale();
+	const userPrompt = (customPrompt || '').trim();
+	const locale = resolveEffectiveCommitMessageLocale(userPrompt);
 	if (!locale.wantsCjk || CJK_RE.test(message)) {
 		return undefined;
 	}
@@ -148,7 +151,7 @@ export async function rewriteCommitMessageForLocale(
 	}
 	const rewritten = await requestCommitMessage(
 		model,
-		buildRewritePrompt(message, locale, (customPrompt || '').trim())
+		buildRewritePrompt(message, locale, userPrompt)
 	);
 	if (rewritten && CJK_RE.test(rewritten)) {
 		return rewritten;
@@ -159,9 +162,10 @@ export async function rewriteCommitMessageForLocale(
 /** Last-resort Chinese message from selected paths when AI stays English. */
 export function buildLocaleFallbackMessage(
 	relativePaths: string[],
-	englishMessage?: string
+	englishMessage?: string,
+	customPrompt?: string
 ): string | undefined {
-	const locale = resolveCommitMessageLocale();
+	const locale = resolveEffectiveCommitMessageLocale(customPrompt);
 	if (!locale.wantsCjk) {
 		return undefined;
 	}
@@ -366,17 +370,52 @@ function stripLeadingVerb(line: string): string {
 	);
 }
 
-export function resolveCommitMessageLocale(): {
+export type CommitMessageLocale = {
 	id: string;
 	label: string;
 	wantsCjk: boolean;
 	instruction: string;
 	cursorRulesBlock: string;
-} {
-	const editor = (vscode.env.language || '').trim();
-	const system = detectSystemLocale();
-	const id = pickPreferredLocale(editor, system);
-	const lower = id.toLowerCase();
+};
+
+/**
+ * Infer an explicit language override from the user's mandatory generation prompt.
+ * Returns a locale id when the prompt clearly requests a language; otherwise undefined.
+ */
+export function inferLanguageOverrideFromPrompt(customPrompt?: string): string | undefined {
+	const prompt = (customPrompt || '').trim();
+	if (!prompt) {
+		return undefined;
+	}
+	const lower = prompt.toLowerCase();
+
+	if (
+		/中文|汉语|漢語|简体|簡體|繁体|繁體|国语|國語/.test(prompt) ||
+		/\b(simplified|traditional)\s+chinese\b/i.test(prompt) ||
+		/\bchinese\b/i.test(prompt) ||
+		/\bzh[-_]?cn\b/i.test(prompt) ||
+		/\bzh[-_]?tw\b/i.test(prompt) ||
+		/\bzh[-_]?hk\b/i.test(prompt)
+	) {
+		if (/繁体|繁體|traditional/.test(lower) || /\bzh[-_]?tw\b/i.test(prompt)) {
+			return 'zh-tw';
+		}
+		return 'zh-cn';
+	}
+	if (/日本語|日文|\bjapanese\b/i.test(prompt) || /\bja([-_]jp)?\b/i.test(prompt)) {
+		return 'ja';
+	}
+	if (/한국어|韩语|韓語|\bkorean\b/i.test(prompt) || /\bko([-_]kr)?\b/i.test(prompt)) {
+		return 'ko';
+	}
+	if (/英文|英语|英語|\benglish\b/i.test(prompt) || /\ben([-_](us|gb))?\b/i.test(prompt)) {
+		return 'en';
+	}
+	return undefined;
+}
+
+function localeFromId(id: string): CommitMessageLocale {
+	const lower = (id || '').toLowerCase();
 
 	if (lower.startsWith('zh')) {
 		const instruction = [
@@ -443,6 +482,26 @@ export function resolveCommitMessageLocale(): {
 		instruction: `Write the entire commit message in the language for locale "${id}".`,
 		cursorRulesBlock: `When generating Git commit messages, write them in the language for locale "${id}".`,
 	};
+}
+
+/** Locale from editor / system language only (no user prompt override). */
+export function resolveCommitMessageLocale(): CommitMessageLocale {
+	const editor = (vscode.env.language || '').trim();
+	const system = detectSystemLocale();
+	const id = pickPreferredLocale(editor, system);
+	return localeFromId(id || 'en');
+}
+
+/**
+ * Effective locale for generation: mandatory user prompt language override wins over
+ * editor/system locale when the prompt clearly requests a language.
+ */
+export function resolveEffectiveCommitMessageLocale(customPrompt?: string): CommitMessageLocale {
+	const overrideId = inferLanguageOverrideFromPrompt(customPrompt);
+	if (overrideId) {
+		return localeFromId(overrideId);
+	}
+	return resolveCommitMessageLocale();
 }
 
 function inferChineseSubject(
@@ -539,7 +598,7 @@ function buildPrompt(input: {
 	diffs: string;
 	recentCommits: string[];
 	projectRules: string;
-	locale: ReturnType<typeof resolveCommitMessageLocale>;
+	locale: CommitMessageLocale;
 	customPrompt?: string;
 }): string {
 	const recent =
@@ -550,9 +609,11 @@ function buildPrompt(input: {
 	const custom = (input.customPrompt || '').trim();
 	const customSection = custom
 		? [
-				'',
-				'MANDATORY USER INSTRUCTION (must follow; overrides conflicting style preferences except Conventional Commit type/scope English ASCII):',
+				'MANDATORY USER INSTRUCTION (highest priority — must follow):',
+				'This instruction OVERRIDES Target language, editor/system locale, project rules, and recent commit language when they conflict.',
+				'Exception: Conventional Commit type/scope must stay English ASCII.',
 				custom,
+				'',
 			]
 		: [];
 
@@ -560,14 +621,14 @@ function buildPrompt(input: {
 		'You are generating a Git commit message for the staged changes below.',
 		'Return ONLY the commit message text. No markdown fences, no quotes, no preamble.',
 		'',
+		...customSection,
 		`Target language: ${input.locale.label} (locale=${input.locale.id})`,
 		input.locale.instruction,
-		...customSection,
 		'',
-		'Follow project rules related to commits and style when present:',
+		'Follow project rules related to commits and style when present (unless they conflict with MANDATORY USER INSTRUCTION):',
 		rules,
 		'',
-		'Recent commit messages (structure/style reference ONLY; do NOT copy their language if it conflicts with Target language):',
+		'Recent commit messages (structure/style reference ONLY; do NOT copy their language if it conflicts with MANDATORY USER INSTRUCTION or Target language):',
 		recent,
 		'',
 		'Staged diffs:',
@@ -577,15 +638,17 @@ function buildPrompt(input: {
 
 function buildRewritePrompt(
 	englishMessage: string,
-	locale: ReturnType<typeof resolveCommitMessageLocale>,
+	locale: CommitMessageLocale,
 	customPrompt?: string
 ): string {
 	const custom = (customPrompt || '').trim();
 	const customSection = custom
 		? [
-				'',
-				'MANDATORY USER INSTRUCTION (must follow while rewriting):',
+				'MANDATORY USER INSTRUCTION (highest priority — must follow while rewriting):',
+				'This instruction OVERRIDES Target language and any other conflicting preferences.',
+				'Exception: Conventional Commit type/scope must stay English ASCII.',
 				custom,
+				'',
 			]
 		: [];
 	return [
@@ -594,9 +657,9 @@ function buildRewritePrompt(
 		'type(scope) must use English ASCII only, e.g. feat(commit): — never Chinese inside parentheses.',
 		'Return ONLY the rewritten commit message. No markdown fences, no quotes, no preamble.',
 		'',
+		...customSection,
 		`Target language: ${locale.label} (locale=${locale.id})`,
 		locale.instruction,
-		...customSection,
 		'',
 		'Original message:',
 		englishMessage,
