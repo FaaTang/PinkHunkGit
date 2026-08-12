@@ -2,7 +2,7 @@
   "name": "pink-hunk-git",
   "displayName": "Pink Hunk Git",
   "description": "IDEA-like Git commit panel for VS Code",
-  "version": "2.0.16",
+  "version": "2.0.19",
   "publisher": "FaaTang",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -128,20 +128,17 @@
         {
           "command": "copyIdeaGitUi.openClone",
           "when": "view == copyIdeaGitUi.commitView",
-          "group": "navigation@0",
-          "title": "Clone Repository"
+          "group": "navigation@0"
         },
         {
           "command": "copyIdeaGitUi.updateAllRepositories",
           "when": "view == copyIdeaGitUi.commitView",
-          "group": "navigation@1",
-          "title": "Update All Git Repositories"
+          "group": "navigation@1"
         },
         {
           "command": "copyIdeaGitUi.openExplorer",
           "when": "view == copyIdeaGitUi.commitView",
-          "group": "navigation@2",
-          "title": "Explorer"
+          "group": "navigation@2"
         }
       ]
     },

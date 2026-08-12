@@ -216,7 +216,9 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		} else {
 			await vscode.commands.executeCommand(`${CommitViewProvider.viewType}.focus`);
 		}
-		await this.refreshAndPush({ ignored: false });
+		// Soft first paint, then full status in background (Ctrl+K should feel instant).
+		await this.softRefreshAndPush();
+		void this.refreshAndPush({ ignored: false });
 		if (expandChanges) {
 			this.expandChangesGroups();
 		}
@@ -766,14 +768,17 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	/**
-	 * Fast path for panel open / visibility: show current snapshot immediately,
-	 * then schedule a non-blocking status catch-up (no await on discovery).
+	 * Fast path for panel open / visibility: show current snapshot immediately.
+	 * Avoids full-workspace status (that races startup discovery and duplicates
+	 * work vscode.git already did). Status only the active repo when discovery
+	 * is idle; newly opened roots are handled in GitService background init.
 	 */
 	private async softRefreshAndPush(): Promise<void> {
 		await this.waitForGitInit();
 		await this.pushSnapshot();
-		// Debounced full status; discovery already runs in GitService background init.
-		this.git.scheduleRefresh();
+		if (!this.git.isDiscovering()) {
+			this.git.scheduleActiveRepoStatus();
+		}
 		this.scheduleIgnoredRefresh();
 	}
 

@@ -117,22 +117,24 @@ export class GitService implements vscode.Disposable {
 	private pendingIgnoredAll = false;
 	private refreshInFlight: Promise<void> | undefined;
 	private refreshQueued = false;
-	private discoverReposInFlight: Promise<void> | undefined;
+	private discoverReposInFlight: Promise<string[]> | undefined;
 
 	/**
-	 * Ready as soon as vscode.git API is initialized so the panel can paint from
+	 * Ready as soon as vscode.git API is usable so the panel can paint from
 	 * already-open repositories. Nested-root discovery and heavy file watchers run
 	 * in the background and must not block first paint.
 	 */
 	async init(): Promise<{ ok: true } | { ok: false; error: string }> {
 		const t0 = Date.now();
-		const mark = (label: string) =>
-			logExtension(`Git init: ${label} (+${Date.now() - t0}ms)`);
+		let last = t0;
+		const mark = (label: string) => {
+			const now = Date.now();
+			logExtension(
+				`Git init: ${label} | this step: ${now - last}ms | since start: ${now - t0}ms`
+			);
+			last = now;
+		};
 
-		this.gitExecutable = await this.resolveGitExecutable();
-		mark('resolved git executable');
-		this.configuredGitProxy = await this.readConfiguredGitProxy();
-		mark('read git proxy');
 		const extension = vscode.extensions.getExtension<GitExtension>('vscode.git');
 		if (!extension) {
 			this.initState = 'failed';
@@ -141,10 +143,19 @@ export class GitService implements vscode.Disposable {
 			return { ok: false, error: this.initError };
 		}
 
-		if (!extension.isActive) {
-			await extension.activate();
-		}
-		mark('vscode.git activated');
+		// Start vscode.git activate ASAP; resolve executable in parallel.
+		// Proxy is deferred — only needed for clone/push, not the Commit panel.
+		const activateP = (async () => {
+			if (!extension.isActive) {
+				await extension.activate();
+			}
+		})();
+		const [exe] = await Promise.all([this.resolveGitExecutable(), activateP]);
+		this.gitExecutable = exe;
+		mark('git exe + vscode.git activate');
+		void this.readConfiguredGitProxy().then((proxy) => {
+			this.configuredGitProxy = proxy;
+		});
 
 		const gitExtension = extension.exports;
 		if (!gitExtension.enabled) {
@@ -170,8 +181,8 @@ export class GitService implements vscode.Disposable {
 			})
 		);
 
-		await this.waitForGitApiInitialized();
-		mark(`API initialized (${this.api.repositories.length} repos)`);
+		await this.waitForGitApiReady();
+		mark(`API ready (${this.api.repositories.length} repos, state=${this.api.state})`);
 
 		this.bindRepositoryEvents();
 		this.setupEditorListeners();
@@ -184,14 +195,15 @@ export class GitService implements vscode.Disposable {
 		return { ok: true };
 	}
 
-	/** Discover missing roots, catch up status, then attach heavy recursive file watchers. */
+	/** Discover missing roots; status only newly opened repos (skip redundant full status). */
 	private async completeInitInBackground(t0: number): Promise<void> {
 		this.discovering = true;
 		this._onDidChange.fire();
+		let openedRoots: string[] = [];
 		try {
-			await this.ensureWorkspaceRepositoriesDiscovered();
+			openedRoots = await this.ensureWorkspaceRepositoriesDiscovered();
 			logExtension(
-				`Git init: discovery done (${this.api?.repositories.length ?? 0} repos, +${Date.now() - t0}ms)`
+				`Git init: discovery done (${this.api?.repositories.length ?? 0} repos, opened ${openedRoots.length}) | since start: ${Date.now() - t0}ms`
 			);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
@@ -200,11 +212,20 @@ export class GitService implements vscode.Disposable {
 			this.discovering = false;
 			this._onDidChange.fire();
 		}
-		// Soft catch-up: vscode.git usually already has status; this fills gaps without
-		// blocking the panel that already rendered from in-memory repo.state.
-		this.scheduleRefresh();
+		// openRepository already ran status internally — only re-status what we just opened.
+		// If vscode.git already had every root, skip startup status entirely.
+		if (openedRoots.length) {
+			logExtension(
+				`Git init: status ${openedRoots.length} newly opened repo(s) only | since start: ${Date.now() - t0}ms`
+			);
+			this.scheduleRootsStatus(openedRoots);
+		} else {
+			logExtension(
+				`Git init: skip startup status (repos already open in vscode.git) | since start: ${Date.now() - t0}ms`
+			);
+		}
 		this.scheduleFileWatchers(3_000);
-		logExtension(`Git init: background warmup scheduled (+${Date.now() - t0}ms)`);
+		logExtension(`Git init: background warmup scheduled | since start: ${Date.now() - t0}ms`);
 	}
 
 	private async resolveGitExecutable(): Promise<string> {
@@ -313,8 +334,11 @@ export class GitService implements vscode.Disposable {
 				}
 			}),
 			vscode.workspace.onDidChangeWorkspaceFolders(() => {
-				void this.ensureWorkspaceRepositoriesDiscovered().then(() => {
+				void this.ensureWorkspaceRepositoriesDiscovered().then((openedRoots) => {
 					this.bindRepositoryEvents();
+					if (openedRoots.length) {
+						this.scheduleRootsStatus(openedRoots);
+					}
 					this._onDidChange.fire();
 				});
 			})
@@ -358,32 +382,32 @@ export class GitService implements vscode.Disposable {
 	/**
 	 * IDEA lists every VCS root (including clean 0/0 modules). vscode.git may miss
 	 * nested repos depending on scan depth / detection mode — open them ourselves.
+	 * @returns Roots that were newly opened in this pass (empty if all already open).
 	 */
-	private async ensureWorkspaceRepositoriesDiscovered(): Promise<void> {
+	private async ensureWorkspaceRepositoriesDiscovered(): Promise<string[]> {
 		if (!this.api?.openRepository) {
-			return;
+			return [];
 		}
 		if (this.discoverReposInFlight) {
-			await this.discoverReposInFlight;
-			return;
+			return this.discoverReposInFlight;
 		}
 
 		this.discoverReposInFlight = this.discoverWorkspaceRepositories();
 		try {
-			await this.discoverReposInFlight;
+			return await this.discoverReposInFlight;
 		} finally {
 			this.discoverReposInFlight = undefined;
 		}
 	}
 
-	private async discoverWorkspaceRepositories(): Promise<void> {
+	private async discoverWorkspaceRepositories(): Promise<string[]> {
 		if (!this.api?.openRepository) {
-			return;
+			return [];
 		}
 
 		const folders = vscode.workspace.workspaceFolders ?? [];
 		if (!folders.length) {
-			return;
+			return [];
 		}
 
 		const configuredDepth = vscode.workspace
@@ -416,35 +440,37 @@ export class GitService implements vscode.Disposable {
 			})
 		);
 		logExtension(
-			`Git discover: scanned ${folders.length} folders -> ${roots.size} roots (+${Date.now() - t0}ms)`
+			`Git discover: scanned ${folders.length} folders -> ${roots.size} roots | this step: ${Date.now() - t0}ms`
 		);
 
 		const toOpen = [...roots].filter((root) => !this.api!.getRepository(vscode.Uri.file(root)));
 		if (!toOpen.length) {
-			return;
+			logExtension('Git discover: nothing to open (all roots already in vscode.git)');
+			return [];
 		}
 
 		const openStart = Date.now();
-		let opened = 0;
+		const openedRoots: string[] = [];
 		// Cap concurrency: openRepository triggers git status internally; unbounded
 		// parallelism thrashes disks, serial open adds up to multi-second stalls.
 		await this.mapPool(toOpen, 4, async (root) => {
 			try {
 				const repo = await this.api!.openRepository!(vscode.Uri.file(root));
 				if (repo) {
-					opened += 1;
+					openedRoots.push(path.normalize(repo.rootUri.fsPath));
 				}
 			} catch {
 				// Not a usable git root (or Git extension rejected it).
 			}
 		});
 		logExtension(
-			`Git discover: opened ${opened}/${toOpen.length} repos (+${Date.now() - openStart}ms)`
+			`Git discover: opened ${openedRoots.length}/${toOpen.length} repos | this step: ${Date.now() - openStart}ms`
 		);
 
-		if (opened > 0) {
+		if (openedRoots.length > 0) {
 			this.bindRepositoryEvents();
 		}
+		return openedRoots;
 	}
 
 	/** Run async work over items with a fixed concurrency limit. */
@@ -528,52 +554,51 @@ export class GitService implements vscode.Disposable {
 	}
 
 	/**
-	 * Wait until the built-in Git API is ready.
-	 * Must re-check state after subscribe to avoid a hang if `initialized`
-	 * fired between the initial check and the listener attachment.
+	 * Wait until the built-in Git API is usable for first paint.
+	 * Prefer returning as soon as repositories appear — full `initialized` can lag
+	 * behind the first open repos by a second or more on multi-root workspaces.
 	 */
-	private async waitForGitApiInitialized(timeoutMs = 15_000): Promise<void> {
-		if (!this.api || this.api.state === 'initialized') {
+	private async waitForGitApiReady(timeoutMs = 15_000): Promise<void> {
+		if (!this.api) {
+			return;
+		}
+		if (this.api.state === 'initialized' || this.api.repositories.length > 0) {
 			return;
 		}
 
-		await new Promise<void>((resolve, reject) => {
+		await new Promise<void>((resolve) => {
 			const api = this.api!;
 			let settled = false;
 
-			const finish = (err?: Error) => {
+			const finish = () => {
 				if (settled) {
 					return;
 				}
 				settled = true;
 				clearTimeout(timer);
-				sub.dispose();
-				if (err) {
-					reject(err);
-				} else {
-					resolve();
+				subState.dispose();
+				subOpen.dispose();
+				resolve();
+			};
+
+			const tryFinish = () => {
+				if (api.state === 'initialized' || api.repositories.length > 0) {
+					finish();
 				}
 			};
 
-			const sub = api.onDidChangeState((state) => {
-				if (state === 'initialized') {
-					finish();
-				}
-			});
+			const subState = api.onDidChangeState(() => tryFinish());
+			const subOpen = api.onDidOpenRepository(() => tryFinish());
 
 			const timer = setTimeout(() => {
-				// Continue with best-effort Git API access; blocking init leaves the
-				// Commit webview blank because the extension never finishes activating.
 				console.warn(
-					'Pink Hunk Git: timed out waiting for Git API initialization; continuing anyway.'
+					'Pink Hunk Git: timed out waiting for Git API; continuing anyway.'
 				);
 				finish();
 			}, timeoutMs);
 
-			// Race: state may have flipped to initialized before the listener ran.
-			if (api.state === 'initialized') {
-				finish();
-			}
+			// Race: state/repos may have changed before listeners attached.
+			tryFinish();
 		});
 	}
 
@@ -1282,6 +1307,39 @@ export class GitService implements vscode.Disposable {
 			}
 		}
 
+		this.armRefreshTimer();
+	}
+
+	/**
+	 * Debounced status for specific repo roots only (no full-workspace status).
+	 * Used after we openRepository ourselves — those roots need a UI catch-up without
+	 * re-statusing every other repo vscode.git already loaded.
+	 */
+	scheduleRootsStatus(roots: string[]): void {
+		if (this.refreshSuspended > 0 || !roots.length) {
+			return;
+		}
+		for (const root of roots) {
+			if (root.trim()) {
+				this.pendingStatusRoots.add(root);
+			}
+		}
+		if (!this.pendingStatusAll && !this.pendingStatusRoots.size) {
+			return;
+		}
+		this.armRefreshTimer();
+	}
+
+	/** Debounced status for the focused repository only (panel soft reopen). */
+	scheduleActiveRepoStatus(): void {
+		const active = this.getActiveRepository();
+		if (!active) {
+			return;
+		}
+		this.scheduleRootsStatus([active.rootUri.fsPath]);
+	}
+
+	private armRefreshTimer(): void {
 		if (this.refreshTimer) {
 			clearTimeout(this.refreshTimer);
 		}

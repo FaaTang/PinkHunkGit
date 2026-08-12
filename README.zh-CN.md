@@ -19,8 +19,8 @@
 git push origin main
 
 # 打 tag 并推送（示例）
-git tag v2.0.16
-git push origin v2.0.16
+git tag v2.0.19
+git push origin v2.0.19
 ```
 
 可选：仓库 Settings → Variables → Actions 设置 `RELEASE_BRANCH`（默认 `main`）。仅当 tag 指向的提交在该分支历史上时才会发布。

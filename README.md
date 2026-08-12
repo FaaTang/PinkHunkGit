@@ -19,8 +19,8 @@ Pushing a `v*` tag triggers GitHub Actions to package a `.vsix` and create a Rel
 git push origin main
 
 # Tag and push (example)
-git tag v2.0.16
-git push origin v2.0.16
+git tag v2.0.19
+git push origin v2.0.19
 ```
 
 Optional: set `RELEASE_BRANCH` under Settings → Variables → Actions (default `main`). A release runs only when the tagged commit is on that branch history.
