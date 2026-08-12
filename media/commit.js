@@ -75,6 +75,11 @@
   const rollbackSummary = document.getElementById('rollbackSummary');
   const rollbackCancelBtn = document.getElementById('rollbackCancel');
   const rollbackConfirmBtn = document.getElementById('rollbackConfirm');
+  const expandCollapseAllModal = document.getElementById('expandCollapseAllModal');
+  const expandCollapseAllTitle = document.getElementById('expandCollapseAllTitle');
+  const expandCollapseAllSummary = document.getElementById('expandCollapseAllSummary');
+  const expandCollapseAllCancel = document.getElementById('expandCollapseAllCancel');
+  const expandCollapseAllConfirm = document.getElementById('expandCollapseAllConfirm');
   const keysModal = document.getElementById('keysModal');
   const keysCancel = document.getElementById('keysCancel');
   const keysConfirm = document.getElementById('keysConfirm');
@@ -90,6 +95,9 @@
   const commitLogRepo = document.getElementById('commitLogRepo');
   const commitLogRefresh = document.getElementById('commitLogRefresh');
   const commitLogList = document.getElementById('commitLogList');
+  const commitLogTip = document.getElementById('commitLogTip');
+  const commitLogTipBody = document.getElementById('commitLogTipBody');
+  const commitLogTipCopy = document.getElementById('commitLogTipCopy');
 
   const webviewState = vscode.getState() || {};
   let generatingMessage = false;
@@ -111,6 +119,13 @@
   let commitLogLoading = false;
   /** Repo root currently being fetched for commit log (dedupe in-flight requests). */
   let commitLogPendingRoot = '';
+  /** Full messages keyed by commit hash (dataset cannot reliably hold multiline text). */
+  const commitLogMessageByHash = new Map();
+  let commitLogTipHideTimer = undefined;
+  let commitLogTipMessage = '';
+  let commitLogTipHash = '';
+  let commitLogTipRepoRoot = '';
+  let commitLogTipPinned = false;
   let commitFormExpanded = webviewState.commitFormExpanded === true;
   let groupByDirectory = webviewState.groupByDirectory === true;
   // IDEA-style: show every Git repo header, including empty 0/0 modules.
@@ -124,6 +139,14 @@
     busy: false,
   };
   const collapsedGroups = new Set(webviewState.collapsedGroups || []);
+  /**
+   * Repo/folder keys we have already applied a default for.
+   * New keys (e.g. after enabling Module / Directory / Ignored) start collapsed.
+   */
+  const seenStructureKeys = new Set(webviewState.seenStructureKeys || []);
+  /** Repo-dimension defaults applied (categories stay expanded). */
+  let repoCollapseDefaultsSeeded = webviewState.repoCollapseDefaultsSeeded === true;
+  let pendingExpandCollapseAction = null;
   /**
    * IDEA-style repo color palette.
    * Prefer hash → index; collisions among currently visible repos are resolved
@@ -158,8 +181,10 @@
   let selectedFiles = [];
   /** Anchor for Shift+click range selection within one group. */
   let selectionAnchor = null;
-  /** Selected Changes / Unversioned group header. */
+  /** Selected Changes / Unversioned group header (or repo module header). */
   let selectedGroup = null;
+  /** Selected directory folder when Group by Directory is on. */
+  let selectedDir = null;
   let lastActiveRepoRoot = '';
   let pendingRollback = null;
 
@@ -338,7 +363,270 @@
   }
 
   function saveCollapsedGroups() {
-    saveWebviewState({ collapsedGroups: Array.from(collapsedGroups) });
+    saveWebviewState({
+      collapsedGroups: Array.from(collapsedGroups),
+      seenStructureKeys: Array.from(seenStructureKeys),
+      repoCollapseDefaultsSeeded,
+    });
+  }
+
+  function categoryGroupIds() {
+    return showIgnoredFiles ? ['changes', 'unversioned', 'ignored'] : ['changes', 'unversioned'];
+  }
+
+  function itemsForCollapseKey(repo, groupId) {
+    if (groupId === 'unversioned') {
+      return getUnversioned(repo);
+    }
+    if (groupId === 'ignored') {
+      return getIgnored(repo);
+    }
+    return getMergedChanges(repo);
+  }
+
+  /** Repo + folder keys only (not Changes / Unversioned category headers). */
+  function collectRepoDimensionCollapseKeys() {
+    const keys = [];
+    for (const groupId of categoryGroupIds()) {
+      for (const repo of allRepos()) {
+        if (groupByModule) {
+          keys.push(repoCollapseKey(groupId, repo.rootPath));
+        }
+        if (!groupByDirectory) {
+          continue;
+        }
+        const items = itemsForCollapseKey(repo, groupId);
+        if (!items.length) {
+          continue;
+        }
+        const tree = buildDirTree(items);
+        compactDirTree(tree);
+        for (const dirPath of walkDirPaths(tree)) {
+          keys.push(dirCollapseKey(groupId, repo.rootPath, dirPath));
+        }
+      }
+    }
+    return keys;
+  }
+
+  /**
+   * Default collapse is per repository / folder.
+   * Categories stay expanded so module rows remain visible.
+   * Newly appeared repo/folder keys (View Options) are collapsed once.
+   */
+  function syncRepoDimensionCollapseDefaults() {
+    if (!allRepos().length) {
+      return;
+    }
+    let changed = false;
+    if (!repoCollapseDefaultsSeeded) {
+      for (const key of [...collapsedGroups]) {
+        if (key.startsWith('category:')) {
+          collapsedGroups.delete(key);
+          changed = true;
+        }
+      }
+      for (const key of collectRepoDimensionCollapseKeys()) {
+        seenStructureKeys.add(key);
+        if (!collapsedGroups.has(key)) {
+          collapsedGroups.add(key);
+          changed = true;
+        }
+      }
+      repoCollapseDefaultsSeeded = true;
+      changed = true;
+    } else {
+      for (const key of collectRepoDimensionCollapseKeys()) {
+        if (seenStructureKeys.has(key)) {
+          continue;
+        }
+        seenStructureKeys.add(key);
+        if (!collapsedGroups.has(key)) {
+          collapsedGroups.add(key);
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      saveCollapsedGroups();
+    }
+  }
+
+  function parentDirPaths(dirPath) {
+    const parts = String(dirPath || '')
+      .replace(/\\/g, '/')
+      .split('/')
+      .filter(Boolean);
+    const out = [];
+    for (let i = 1; i < parts.length; i += 1) {
+      out.push(parts.slice(0, i).join('/'));
+    }
+    return out;
+  }
+
+  function collectDirCollapseKeys(groupId, repoRoot, rootDirPath) {
+    const keys = [];
+    const repo = findRepo(repoRoot);
+    if (!repo) {
+      keys.push(dirCollapseKey(groupId, repoRoot, rootDirPath));
+      return keys;
+    }
+    const items = itemsForCollapseKey(repo, groupId);
+    if (!items.length) {
+      keys.push(dirCollapseKey(groupId, repoRoot, rootDirPath));
+      return keys;
+    }
+    const tree = buildDirTree(items);
+    compactDirTree(tree);
+    const prefix = String(rootDirPath || '').replace(/\\/g, '/');
+    for (const dirPath of walkDirPaths(tree)) {
+      if (dirPath === prefix || dirPath.startsWith(`${prefix}/`)) {
+        keys.push(dirCollapseKey(groupId, repoRoot, dirPath));
+      }
+    }
+    if (!keys.length) {
+      keys.push(dirCollapseKey(groupId, repoRoot, rootDirPath));
+    }
+    return keys;
+  }
+
+  function collectCollapseKeysForScope(scope) {
+    if (!scope || scope.type === 'all') {
+      return collectExpandableCollapseKeys();
+    }
+    if (scope.type === 'category') {
+      const keys = [categoryCollapseKey(scope.groupId)];
+      for (const repo of allRepos()) {
+        if (groupByModule) {
+          keys.push(repoCollapseKey(scope.groupId, repo.rootPath));
+        }
+        if (groupByDirectory) {
+          const items = itemsForCollapseKey(repo, scope.groupId);
+          if (!items.length) {
+            continue;
+          }
+          const tree = buildDirTree(items);
+          compactDirTree(tree);
+          for (const dirPath of walkDirPaths(tree)) {
+            keys.push(dirCollapseKey(scope.groupId, repo.rootPath, dirPath));
+          }
+        }
+      }
+      return keys;
+    }
+    if (scope.type === 'repo') {
+      const keys = [repoCollapseKey(scope.groupId, scope.repoRoot)];
+      if (groupByDirectory) {
+        const repo = findRepo(scope.repoRoot);
+        if (repo) {
+          const items = itemsForCollapseKey(repo, scope.groupId);
+          if (items.length) {
+            const tree = buildDirTree(items);
+            compactDirTree(tree);
+            for (const dirPath of walkDirPaths(tree)) {
+              keys.push(dirCollapseKey(scope.groupId, scope.repoRoot, dirPath));
+            }
+          }
+        }
+      }
+      return keys;
+    }
+    if (scope.type === 'dir') {
+      return collectDirCollapseKeys(scope.groupId, scope.repoRoot, scope.dirPath);
+    }
+    return collectExpandableCollapseKeys();
+  }
+
+  function expandAncestorKeysForScope(scope) {
+    if (!scope || scope.type === 'all' || scope.type === 'category') {
+      return;
+    }
+    if (scope.type === 'repo' || scope.type === 'dir') {
+      collapsedGroups.delete(categoryCollapseKey(scope.groupId));
+    }
+    if (scope.type === 'dir') {
+      if (groupByModule) {
+        collapsedGroups.delete(repoCollapseKey(scope.groupId, scope.repoRoot));
+      }
+      for (const parent of parentDirPaths(scope.dirPath)) {
+        collapsedGroups.delete(dirCollapseKey(scope.groupId, scope.repoRoot, parent));
+      }
+    }
+  }
+
+  function resolveExpandCollapseScope() {
+    if (selectedGroup?.category) {
+      return { type: 'category', groupId: selectedGroup.groupId };
+    }
+    if (selectedGroup && !selectedGroup.category && selectedGroup.repoRoot) {
+      return {
+        type: 'repo',
+        groupId: selectedGroup.groupId,
+        repoRoot: selectedGroup.repoRoot,
+      };
+    }
+    if (selectedDir?.repoRoot && selectedDir.dirPath) {
+      return {
+        type: 'dir',
+        groupId: selectedDir.groupId,
+        repoRoot: selectedDir.repoRoot,
+        dirPath: selectedDir.dirPath,
+      };
+    }
+    return { type: 'all' };
+  }
+
+  function applyExpandCollapse(action, scope) {
+    const keys = collectCollapseKeysForScope(scope);
+    let changed = false;
+    if (action === 'expand') {
+      expandAncestorKeysForScope(scope);
+      for (const key of keys) {
+        if (collapsedGroups.has(key)) {
+          collapsedGroups.delete(key);
+          changed = true;
+        }
+      }
+    } else {
+      for (const key of keys) {
+        if (!collapsedGroups.has(key)) {
+          collapsedGroups.add(key);
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      saveCollapsedGroups();
+    }
+    renderFiles();
+  }
+
+  function hideExpandCollapseAllModal() {
+    pendingExpandCollapseAction = null;
+    expandCollapseAllModal?.classList.add('hidden');
+  }
+
+  function showExpandCollapseAllModal(action) {
+    pendingExpandCollapseAction = action;
+    if (expandCollapseAllTitle) {
+      expandCollapseAllTitle.textContent = action === 'expand' ? 'Expand All' : 'Collapse All';
+    }
+    if (expandCollapseAllSummary) {
+      expandCollapseAllSummary.textContent =
+        action === 'expand'
+          ? 'No group, repository, or folder is selected. Expanding will apply to all files in the Commit panel. Continue?'
+          : 'No group, repository, or folder is selected. Collapsing will apply to all files in the Commit panel. Continue?';
+    }
+    expandCollapseAllModal?.classList.remove('hidden');
+  }
+
+  function requestExpandCollapse(action) {
+    const scope = resolveExpandCollapseScope();
+    if (scope.type === 'all') {
+      showExpandCollapseAllModal(action);
+      return;
+    }
+    applyExpandCollapse(action, scope);
   }
 
   function unversionedCheckKey(repoRoot, path) {
@@ -695,6 +983,9 @@
     commitLogToggle.textContent = commitLogExpanded ? '▾' : '▸';
     commitLogToggle.setAttribute('aria-expanded', commitLogExpanded ? 'true' : 'false');
     saveWebviewState({ commitLogExpanded });
+    if (!commitLogExpanded) {
+      hideCommitLogTip(true);
+    }
     if (commitLogExpanded) {
       const root = commitLogRepoRoot || activeRepoRoot();
       if (root) {
@@ -738,6 +1029,7 @@
       groupByDirectoryChk.checked = groupByDirectory;
     }
     saveWebviewState({ groupByDirectory });
+    // New folder rows start collapsed (via syncRepoDimensionCollapseDefaults in renderFiles).
     renderFiles();
   }
 
@@ -747,10 +1039,10 @@
       groupByModuleChk.checked = groupByModule;
     }
     saveWebviewState({ groupByModule });
-    // When enabling Module, expand categories so empty module rows are actually visible.
+    // Keep categories expanded so repository headers are visible; repos themselves start collapsed.
     if (groupByModule) {
       let changed = false;
-      for (const groupId of ['changes', 'unversioned']) {
+      for (const groupId of categoryGroupIds()) {
         if (collapsedGroups.has(categoryCollapseKey(groupId))) {
           collapsedGroups.delete(categoryCollapseKey(groupId));
           changed = true;
@@ -769,6 +1061,11 @@
       showIgnoredFilesChk.checked = showIgnoredFiles;
     }
     saveWebviewState({ showIgnoredFiles });
+    // Newly visible Ignored category stays expanded; its repos/folders start collapsed.
+    if (showIgnoredFiles && collapsedGroups.has(categoryCollapseKey('ignored'))) {
+      collapsedGroups.delete(categoryCollapseKey('ignored'));
+      saveCollapsedGroups();
+    }
     renderFiles();
   }
 
@@ -814,10 +1111,7 @@
 
   function collectExpandableCollapseKeys() {
     const keys = [];
-    const groupIds = showIgnoredFiles
-      ? ['changes', 'unversioned', 'ignored']
-      : ['changes', 'unversioned'];
-    for (const groupId of groupIds) {
+    for (const groupId of categoryGroupIds()) {
       keys.push(categoryCollapseKey(groupId));
       for (const repo of allRepos()) {
         if (groupByModule) {
@@ -826,12 +1120,7 @@
         if (!groupByDirectory) {
           continue;
         }
-        const items =
-          groupId === 'unversioned'
-            ? getUnversioned(repo)
-            : groupId === 'ignored'
-              ? getIgnored(repo)
-              : getMergedChanges(repo);
+        const items = itemsForCollapseKey(repo, groupId);
         if (!items.length) {
           continue;
         }
@@ -846,45 +1135,11 @@
   }
 
   function expandAllGroups() {
-    let changed = false;
-    for (const key of [...collapsedGroups]) {
-      if (key.startsWith('dir:') || key.startsWith('repo:') || key.startsWith('category:')) {
-        collapsedGroups.delete(key);
-        changed = true;
-      }
-    }
-    if (changed) {
-      saveCollapsedGroups();
-    }
-    // Always re-render so Module + Directory trees refresh even if state was already expanded.
-    renderFiles();
+    applyExpandCollapse('expand', { type: 'all' });
   }
 
   function collapseAllGroups() {
-    let changed = false;
-    // Keep top-level category headers expanded so tree roots stay visible (IDEA-like).
-    const groupIds = showIgnoredFiles
-      ? ['changes', 'unversioned', 'ignored']
-      : ['changes', 'unversioned'];
-    for (const groupId of groupIds) {
-      if (collapsedGroups.has(categoryCollapseKey(groupId))) {
-        collapsedGroups.delete(categoryCollapseKey(groupId));
-        changed = true;
-      }
-    }
-    for (const key of collectExpandableCollapseKeys()) {
-      if (key.startsWith('category:')) {
-        continue;
-      }
-      if (!collapsedGroups.has(key)) {
-        collapsedGroups.add(key);
-        changed = true;
-      }
-    }
-    if (changed) {
-      saveCollapsedGroups();
-    }
-    renderFiles();
+    applyExpandCollapse('collapse', { type: 'all' });
   }
 
   /** Include / exclude every tracked change for the next commit (IDEA-style checkboxes). */
@@ -956,7 +1211,9 @@
     }
     commitLogLoading = false;
     commitLogPendingRoot = '';
+    hideCommitLogTip(true);
     commitLogList.innerHTML = '';
+    commitLogMessageByHash.clear();
     commitLogList.dataset.loadedRoot = payload.repoRoot || '';
     commitLogList.dataset.fingerprint = commitLogRepoFingerprint(payload.repoRoot || '');
     if (payload.repoRoot) {
@@ -981,7 +1238,10 @@
       row.dataset.hash = commit.hash || '';
       row.dataset.shortHash = commit.shortHash || '';
       row.dataset.subject = commit.subject || '';
-      row.title = `${commit.subject}\n${commit.shortHash} · ${commit.author} · ${commit.date}`;
+      const fullMessage = String(commit.message || commit.subject || '').replace(/\s+$/u, '');
+      if (commit.hash && fullMessage) {
+        commitLogMessageByHash.set(commit.hash, fullMessage);
+      }
 
       const dot = document.createElement('span');
       dot.className = 'commit-log-dot';
@@ -1012,6 +1272,126 @@
       fragment.appendChild(row);
     }
     commitLogList.appendChild(fragment);
+  }
+
+  function clearCommitLogTipHideTimer() {
+    if (commitLogTipHideTimer) {
+      clearTimeout(commitLogTipHideTimer);
+      commitLogTipHideTimer = undefined;
+    }
+  }
+
+  function hideCommitLogTip(immediate) {
+    clearCommitLogTipHideTimer();
+    const hide = () => {
+      if (commitLogTip) {
+        commitLogTip.classList.add('hidden');
+        commitLogTip.setAttribute('aria-hidden', 'true');
+      }
+      if (commitLogTipCopy) {
+        commitLogTipCopy.classList.add('hidden');
+        commitLogTipCopy.textContent = 'Copy';
+      }
+      commitLogTipPinned = false;
+      commitLogTipMessage = '';
+      commitLogTipHash = '';
+      commitLogTipRepoRoot = '';
+    };
+    if (immediate) {
+      hide();
+      return;
+    }
+    commitLogTipHideTimer = setTimeout(hide, 160);
+  }
+
+  function positionCommitLogTip(clientX, clientY, row) {
+    const margin = 8;
+    const rowRect = row?.getBoundingClientRect?.();
+
+    // Copy sits just above the cursor so it stays over the hovered row (clickable
+    // without crossing the pass-through tip into another row).
+    if (commitLogTipCopy && !commitLogTipCopy.classList.contains('hidden')) {
+      const copyRect = commitLogTipCopy.getBoundingClientRect();
+      const copyW = copyRect.width || 48;
+      const copyH = copyRect.height || 22;
+      let copyLeft = clientX + 10;
+      let copyTop = clientY - copyH - 8;
+      if (rowRect) {
+        // Clamp onto the hovered row so leaving for Copy doesn't fire list mouseleave.
+        copyTop = Math.min(Math.max(copyTop, rowRect.top + 2), Math.max(rowRect.top + 2, rowRect.bottom - copyH - 2));
+        copyLeft = Math.min(Math.max(copyLeft, rowRect.left + 8), Math.max(rowRect.left + 8, rowRect.right - copyW - 4));
+      }
+      copyLeft = Math.max(margin, Math.min(copyLeft, window.innerWidth - copyW - margin));
+      copyTop = Math.max(margin, Math.min(copyTop, window.innerHeight - copyH - margin));
+      commitLogTipCopy.style.left = `${copyLeft}px`;
+      commitLogTipCopy.style.top = `${copyTop}px`;
+    }
+
+    if (!commitLogTip || commitLogTip.classList.contains('hidden')) {
+      return;
+    }
+    const tipRect = commitLogTip.getBoundingClientRect();
+    let left = clientX + 12;
+    if (left + tipRect.width > window.innerWidth - margin) {
+      left = clientX - tipRect.width - 12;
+    }
+    // Prefer below the row; tip is pointer-events:none so it won't block hover.
+    const anchorBottom = rowRect ? rowRect.bottom : clientY;
+    const anchorTop = rowRect ? rowRect.top : clientY;
+    let top = anchorBottom + 4;
+    if (top + tipRect.height > window.innerHeight - margin) {
+      top = anchorTop - tipRect.height - 4;
+    }
+    left = Math.max(margin, Math.min(left, window.innerWidth - tipRect.width - margin));
+    top = Math.max(margin, Math.min(top, window.innerHeight - tipRect.height - margin));
+    commitLogTip.style.left = `${left}px`;
+    commitLogTip.style.top = `${top}px`;
+  }
+
+  function showCommitLogTip(row, clientX, clientY) {
+    if (!commitLogTip || !commitLogTipBody || !row) {
+      return;
+    }
+    const hash = row.dataset.hash || '';
+    const subject = row.dataset.subject || '';
+    const message = commitLogMessageByHash.get(hash) || subject;
+    if (!message) {
+      hideCommitLogTip(true);
+      return;
+    }
+    clearCommitLogTipHideTimer();
+    commitLogTipPinned = false;
+    commitLogTipHash = hash;
+    commitLogTipRepoRoot = commitLogRepoRoot || activeRepoRoot() || '';
+    commitLogTipMessage = message;
+    commitLogTipBody.textContent = message;
+    commitLogTip.classList.remove('hidden');
+    commitLogTip.setAttribute('aria-hidden', 'false');
+    if (commitLogTipCopy) {
+      commitLogTipCopy.textContent = 'Copy';
+      commitLogTipCopy.classList.remove('hidden');
+    }
+    positionCommitLogTip(clientX, clientY, row);
+  }
+
+  function copyCommitLogTipMessage() {
+    if (!commitLogTipMessage) {
+      return;
+    }
+    post({
+      type: 'copyCommitMessage',
+      repoRoot: commitLogTipRepoRoot || commitLogRepoRoot || activeRepoRoot() || '',
+      hash: commitLogTipHash || '',
+      text: commitLogTipMessage,
+    });
+    if (commitLogTipCopy) {
+      commitLogTipCopy.textContent = 'Copied';
+      setTimeout(() => {
+        if (commitLogTipCopy && commitLogTipCopy.textContent === 'Copied') {
+          commitLogTipCopy.textContent = 'Copy';
+        }
+      }, 1200);
+    }
   }
 
   function showCommitLogContextMenu(x, y, commit) {
@@ -1047,10 +1427,12 @@
     copyMessage.textContent = 'Copy Commit Message';
     copyMessage.addEventListener('click', () => {
       hideContextMenu();
+      const text = commitLogMessageByHash.get(commit.hash) || commit.subject || '';
       post({
         type: 'copyCommitMessage',
         repoRoot: commit.repoRoot,
         hash: commit.hash,
+        text: text || undefined,
       });
     });
     contextMenu.appendChild(copyMessage);
@@ -1066,10 +1448,42 @@
   function clearFileSelection() {
     selectedFiles = [];
     selectionAnchor = null;
+    selectedDir = null;
   }
 
   function clearGroupSelection() {
     selectedGroup = null;
+    selectedDir = null;
+  }
+
+  function selectDir(repoRoot, groupId, dirPath, actionableItems, indexByPath) {
+    clearGroupSelection();
+    selectedDir = { repoRoot, groupId, dirPath };
+    selectedFiles = actionableItems.map((item) => ({
+      repoRoot,
+      path: item.path,
+      staged: item.staged ?? false,
+    }));
+    if (actionableItems.length) {
+      const first = actionableItems[0];
+      selectionAnchor = {
+        repoRoot,
+        groupId,
+        index: indexByPath?.get(first.path) ?? 0,
+      };
+    } else {
+      selectionAnchor = null;
+    }
+    syncSelectionToHost();
+  }
+
+  function isDirSelected(repoRoot, groupId, dirPath) {
+    return (
+      !!selectedDir &&
+      selectedDir.groupId === groupId &&
+      selectedDir.dirPath === dirPath &&
+      repoKey(selectedDir.repoRoot) === repoKey(repoRoot)
+    );
   }
 
   function mergeSelectionEntries(entries) {
@@ -1136,13 +1550,14 @@
 
   function selectGroup(repoRoot, groupId, unversionedGroup, category = false) {
     clearFileSelection();
+    selectedDir = null;
     selectedGroup = { repoRoot, groupId, unversionedGroup, category: !!category };
     syncSelectionToHost();
   }
 
   /** Update row/group highlight without rebuilding the file list (keeps double-click working). */
   function applyFileListSelectionVisuals() {
-    document.querySelectorAll('.group-title.selected, .repo-subgroup-title.selected').forEach((el) =>
+    document.querySelectorAll('.group-title.selected, .repo-subgroup-title.selected, .dir-group-title.selected').forEach((el) =>
       el.classList.remove('selected')
     );
     if (selectedGroup) {
@@ -1159,6 +1574,18 @@
             wrap.querySelector('.repo-subgroup-title')?.classList.add('selected');
             break;
           }
+        }
+      }
+    }
+    if (selectedDir) {
+      for (const wrap of document.querySelectorAll('.dir-group[data-dir-path]')) {
+        if (
+          wrap.dataset.dirPath === selectedDir.dirPath &&
+          wrap.dataset.groupId === selectedDir.groupId &&
+          repoKey(wrap.dataset.repoRoot || '') === repoKey(selectedDir.repoRoot)
+        ) {
+          wrap.querySelector('.dir-group-title')?.classList.add('selected');
+          break;
         }
       }
     }
@@ -2160,6 +2587,7 @@
   }
 
   function renderFiles() {
+    syncRepoDimensionCollapseDefaults();
     fileList.innerHTML = '';
 
     if (workspace.loading) {
@@ -2601,6 +3029,8 @@
       const wrap = document.createElement('div');
       wrap.className = 'dir-group';
       wrap.dataset.dirPath = dirNode.path;
+      wrap.dataset.repoRoot = repoRoot;
+      wrap.dataset.groupId = groupId;
 
       const descendantFiles = collectTreeFiles(dirNode);
       const selfDirItem =
@@ -2624,6 +3054,9 @@
       head.className = 'dir-group-title collapsible';
       head.style.setProperty('--tree-depth', String(depth));
       head.title = dirNode.path;
+      if (isDirSelected(repoRoot, groupId, dirNode.path)) {
+        head.classList.add('selected');
+      }
 
       const selectAll = document.createElement('input');
       selectAll.type = 'checkbox';
@@ -2715,20 +3148,7 @@
           return;
         }
         clearGroupSelection();
-        selectedFiles = actionableItems.map((item) => ({
-          repoRoot,
-          path: item.path,
-          staged: item.staged ?? false,
-        }));
-        if (actionableItems.length) {
-          const first = actionableItems[0];
-          selectionAnchor = {
-            repoRoot,
-            groupId,
-            index: indexByPath.get(first.path) ?? 0,
-          };
-        }
-        syncSelectionToHost();
+        selectDir(repoRoot, groupId, dirNode.path, actionableItems, indexByPath);
         hideContextMenu();
         applyFileListSelectionVisuals();
         if (repoRoot) {
@@ -2757,21 +3177,7 @@
           return;
         }
         e.preventDefault();
-        clearGroupSelection();
-        selectedFiles = actionableItems.map((item) => ({
-          repoRoot,
-          path: item.path,
-          staged: item.staged ?? false,
-        }));
-        if (actionableItems.length) {
-          const first = actionableItems[0];
-          selectionAnchor = {
-            repoRoot,
-            groupId,
-            index: indexByPath.get(first.path) ?? 0,
-          };
-        }
-        syncSelectionToHost();
+        selectDir(repoRoot, groupId, dirNode.path, actionableItems, indexByPath);
         applyFileListSelectionVisuals();
         if (!actionableItems.length) {
           return;
@@ -3540,12 +3946,30 @@
 
     expandAllBtn?.addEventListener('click', () => {
       closeViewOptionsMenu();
-      expandAllGroups();
+      requestExpandCollapse('expand');
     });
 
     collapseAllBtn?.addEventListener('click', () => {
       closeViewOptionsMenu();
-      collapseAllGroups();
+      requestExpandCollapse('collapse');
+    });
+
+    expandCollapseAllCancel?.addEventListener('click', () => {
+      hideExpandCollapseAllModal();
+    });
+
+    expandCollapseAllConfirm?.addEventListener('click', () => {
+      const action = pendingExpandCollapseAction;
+      hideExpandCollapseAllModal();
+      if (action === 'expand' || action === 'collapse') {
+        applyExpandCollapse(action, { type: 'all' });
+      }
+    });
+
+    expandCollapseAllModal?.addEventListener('click', (e) => {
+      if (e.target === expandCollapseAllModal) {
+        hideExpandCollapseAllModal();
+      }
     });
 
     viewOptionsBtn?.addEventListener('click', (e) => {
@@ -3597,6 +4021,60 @@
       selectCommitLogRow(row);
     });
 
+    commitLogList?.addEventListener('mouseover', (e) => {
+      const row = e.target?.closest?.('.commit-log-row');
+      if (!row || !commitLogList.contains(row)) {
+        return;
+      }
+      if (e.relatedTarget && row.contains(e.relatedTarget)) {
+        return;
+      }
+      showCommitLogTip(row, e.clientX, e.clientY);
+    });
+
+    commitLogList?.addEventListener('mousemove', (e) => {
+      const row = e.target?.closest?.('.commit-log-row');
+      if (!row || !commitLogList.contains(row) || commitLogTipPinned) {
+        return;
+      }
+      if (!commitLogTip || commitLogTip.classList.contains('hidden')) {
+        showCommitLogTip(row, e.clientX, e.clientY);
+        return;
+      }
+      // Switch tip when entering another row; keep Copy still so it stays clickable.
+      if ((row.dataset.hash || '') !== commitLogTipHash) {
+        showCommitLogTip(row, e.clientX, e.clientY);
+      }
+    });
+
+    commitLogList?.addEventListener('mouseleave', (e) => {
+      const next = e.relatedTarget;
+      if (next && (next === commitLogTipCopy || commitLogTipCopy?.contains(next))) {
+        return;
+      }
+      hideCommitLogTip(false);
+    });
+
+    commitLogTipCopy?.addEventListener('mouseenter', () => {
+      clearCommitLogTipHideTimer();
+      commitLogTipPinned = true;
+    });
+
+    commitLogTipCopy?.addEventListener('mouseleave', (e) => {
+      const next = e.relatedTarget;
+      if (next && commitLogList?.contains(next)) {
+        commitLogTipPinned = false;
+        return;
+      }
+      hideCommitLogTip(false);
+    });
+
+    commitLogTipCopy?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      copyCommitLogTipMessage();
+    });
+
     commitLogList?.addEventListener('dblclick', (e) => {
       const row = e.target?.closest?.('.commit-log-row');
       if (!row || !commitLogList.contains(row)) {
@@ -3608,6 +4086,7 @@
       if (!repoRoot || !hash) {
         return;
       }
+      hideCommitLogTip(true);
       post({ type: 'openCommitChanges', repoRoot, hash });
     });
 
@@ -3618,6 +4097,7 @@
       }
       e.preventDefault();
       e.stopPropagation();
+      hideCommitLogTip(true);
       selectCommitLogRow(row);
       showCommitLogContextMenu(e.clientX, e.clientY, {
         repoRoot: commitLogRepoRoot || activeRepoRoot(),
@@ -3891,6 +4371,11 @@
   });
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && expandCollapseAllModal && !expandCollapseAllModal.classList.contains('hidden')) {
+      e.preventDefault();
+      hideExpandCollapseAllModal();
+      return;
+    }
     if (e.key === 'Escape' && fastPushConfirmModal && !fastPushConfirmModal.classList.contains('hidden')) {
       e.preventDefault();
       closeFastPushConfirmModal(false);
@@ -3961,7 +4446,8 @@
 
         const active = workspace.active || {};
         if (workspace.loading) {
-          showBanner(workspace.hint || 'Loading Git...', 'info');
+          // Global Working overlay covers first paint; skip the thin top banner.
+          showBanner('');
         } else if (workspace.error) {
           showBanner(workspace.error, 'error');
         } else if (active.hint) {
@@ -3970,7 +4456,10 @@
           showBanner('');
         }
 
-        setBusy(!!workspace.busy);
+        setBusy(
+          !!workspace.busy || !!workspace.loading,
+          workspace.loading ? workspace.hint || 'Loading Git…' : undefined
+        );
         renderRepoSelector();
         pruneCheckedUnversioned();
         pruneChangeIncludeState();

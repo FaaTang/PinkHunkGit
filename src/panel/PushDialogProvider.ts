@@ -12,6 +12,10 @@ export class PushDialogProvider implements vscode.Disposable {
 	private panel?: vscode.WebviewPanel;
 	private busy = false;
 	private pendingPushRoots?: string[];
+	/** Checkmarks frozen for the confirm list (do not shrink as pushes succeed). */
+	private selectionRepoRoots?: string[];
+	/** One-shot flag: next sendState should re-apply selection checkmarks in the webview. */
+	private applyPendingSelection = false;
 	private pendingPushTags = false;
 	/** When true, remaining roots after conflict resolution resume via pushWithAutoMerge. */
 	private resumeAutoMerge = false;
@@ -37,6 +41,12 @@ export class PushDialogProvider implements vscode.Disposable {
 
 	async show(options?: { pendingPushRoots?: string[]; openNewTag?: boolean }): Promise<void> {
 		this.pendingPushRoots = options?.pendingPushRoots;
+		if (options?.pendingPushRoots !== undefined) {
+			this.selectionRepoRoots = options.pendingPushRoots.length
+				? [...options.pendingPushRoots]
+				: undefined;
+			this.applyPendingSelection = true;
+		}
 		this.pendingOpenNewTag = !!options?.openNewTag;
 		this.resumeAutoMerge = false;
 		this.dialogPhase = 'confirm';
@@ -70,6 +80,8 @@ export class PushDialogProvider implements vscode.Disposable {
 			this.panel.onDidDispose(() => {
 				this.panel = undefined;
 				this.pendingPushRoots = undefined;
+				this.selectionRepoRoots = undefined;
+				this.applyPendingSelection = false;
 				this.pendingPushTags = false;
 				this.resumeAutoMerge = false;
 				this.pendingOpenNewTag = false;
@@ -92,10 +104,12 @@ export class PushDialogProvider implements vscode.Disposable {
 		this.pendingPushTags = pushTags;
 		this.resumeAutoMerge = true;
 		const roots = repoRoots.length ? repoRoots : [undefined];
+		this.lockSelectionRoots(roots);
 
 		for (let i = 0; i < roots.length; i++) {
 			const root = roots[i];
 			const remaining = this.remainingRoots(roots, i + 1);
+			// Resume queue only — do not shrink UI checkmarks.
 			this.pendingPushRoots = remaining.length ? remaining : undefined;
 
 			const workspace = this.git.getWorkspaceSnapshot();
@@ -156,6 +170,7 @@ export class PushDialogProvider implements vscode.Disposable {
 
 		this.resumeAutoMerge = false;
 		this.pendingPushRoots = undefined;
+		this.selectionRepoRoots = undefined;
 		if (this.panel) {
 			this.close();
 		}
@@ -175,9 +190,13 @@ export class PushDialogProvider implements vscode.Disposable {
 		const resumeAutoMerge = this.resumeAutoMerge;
 		const pendingPushTags = this.pendingPushTags;
 		const pending = this.pendingPushRoots;
+		const selection = this.selectionRepoRoots;
 		await this.show({ pendingPushRoots: options?.pendingPushRoots ?? pending });
 		this.resumeAutoMerge = resumeAutoMerge;
 		this.pendingPushTags = pendingPushTags;
+		if (selection?.length) {
+			this.selectionRepoRoots = selection;
+		}
 		await this.waitUntilReady();
 	}
 
@@ -220,6 +239,8 @@ export class PushDialogProvider implements vscode.Disposable {
 		this.panel?.dispose();
 		this.panel = undefined;
 		this.pendingPushRoots = undefined;
+		this.selectionRepoRoots = undefined;
+		this.applyPendingSelection = false;
 		this.pendingPushTags = false;
 		this.resumeAutoMerge = false;
 		this.pendingOpenNewTag = false;
@@ -228,6 +249,11 @@ export class PushDialogProvider implements vscode.Disposable {
 
 	private scheduleRefreshIfOpen(): void {
 		if (!this.panel) {
+			return;
+		}
+		// Pushing already shows a busy overlay; re-posting state mid-push flashes the list
+		// and shrinks checkmarks as pendingPushRoots updates.
+		if (this.busy) {
 			return;
 		}
 		if (this.refreshTimer) {
@@ -243,7 +269,7 @@ export class PushDialogProvider implements vscode.Disposable {
 	}
 
 	private async refreshIfOpen(): Promise<void> {
-		if (!this.panel) {
+		if (!this.panel || this.busy) {
 			return;
 		}
 		if (this.dialogPhase === 'confirm') {
@@ -255,16 +281,27 @@ export class PushDialogProvider implements vscode.Disposable {
 		}
 	}
 
+	private lockSelectionRoots(roots: Array<string | undefined>): void {
+		const locked = roots.filter((root): root is string => typeof root === 'string' && root.length > 0);
+		if (locked.length) {
+			this.selectionRepoRoots = locked;
+		}
+	}
+
 	private async sendState(options?: { skipRefresh?: boolean }): Promise<void> {
 		const workspace = this.git.getWorkspaceSnapshot();
 		const targets = await this.git.getPushTargets({
 			activeRepoRoot: workspace.activeRepoRoot ?? workspace.active.rootPath,
 			skipRefresh: options?.skipRefresh,
 		});
+		const applyPendingSelection = this.applyPendingSelection;
+		this.applyPendingSelection = false;
 		const payload: PushDialogPayload = {
 			targets,
 			activeRepoRoot: workspace.activeRepoRoot ?? workspace.active.rootPath,
 			pendingRepoRoots: this.pendingPushRoots,
+			selectionRepoRoots: this.selectionRepoRoots,
+			applyPendingSelection: applyPendingSelection || undefined,
 			busy: this.busy,
 		};
 		this.post({ type: 'state', payload });
@@ -328,6 +365,7 @@ export class PushDialogProvider implements vscode.Disposable {
 					}
 					break;
 				case 'push':
+					this.lockSelectionRoots(msg.repoRoots);
 					await this.withBusy(async () => {
 						await this.runPushMany(msg.repoRoots, !!msg.pushTags);
 					}, 'Pushing…');
@@ -423,10 +461,12 @@ export class PushDialogProvider implements vscode.Disposable {
 					: [undefined];
 		this.pendingPushTags = pushTags;
 		this.resumeAutoMerge = false;
+		this.lockSelectionRoots(roots);
 
 		for (let i = 0; i < roots.length; i++) {
 			const remaining = this.remainingRoots(roots, i + 1);
 			// Preserve siblings so reject → merge/conflict → Ask Push can resume them.
+			// Do not touch selectionRepoRoots — checkmarks stay as when Push was clicked.
 			this.pendingPushRoots = remaining.length ? remaining : undefined;
 
 			const pushed = await this.runPush(roots[i], pushTags);
@@ -436,6 +476,7 @@ export class PushDialogProvider implements vscode.Disposable {
 		}
 
 		this.pendingPushRoots = undefined;
+		this.selectionRepoRoots = undefined;
 		this.close();
 	}
 
@@ -752,6 +793,10 @@ export class PushDialogProvider implements vscode.Disposable {
 	}
 
 	private async withBusy(fn: () => Promise<void>, message?: string): Promise<void> {
+		if (this.refreshTimer) {
+			clearTimeout(this.refreshTimer);
+			this.refreshTimer = undefined;
+		}
 		this.busy = true;
 		this.post({ type: 'busy', busy: true, message });
 		try {

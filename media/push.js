@@ -555,6 +555,9 @@
   }
 
   function defaultCheckedRoots() {
+    if (payload.selectionRepoRoots?.length) {
+      return new Set(payload.selectionRepoRoots.map(normalizeRepoRoot));
+    }
     if (payload.pendingRepoRoots?.length) {
       return new Set(payload.pendingRepoRoots.map(normalizeRepoRoot));
     }
@@ -1161,9 +1164,16 @@
     const prevCommit = selectedCommitHash;
     payload = data;
     const targetKeys = new Set(data.targets.map((target) => normalizeRepoRoot(target.repoRoot)));
-    if (!targetSelectionInitialized || data.pendingRepoRoots?.length) {
+    // Only re-apply host selection when the dialog first opens or host asks explicitly.
+    // Never re-apply from shrinking pendingRepoRoots mid multi-push (that unchecks pushed repos).
+    if (!targetSelectionInitialized || data.applyPendingSelection) {
       checkedRoots = defaultCheckedRoots();
       targetSelectionInitialized = true;
+    } else if (data.busy && data.selectionRepoRoots?.length) {
+      // While Pushing… keep the click-time selection frozen if a state refresh sneaks through.
+      checkedRoots = new Set(
+        data.selectionRepoRoots.map(normalizeRepoRoot).filter((key) => targetKeys.has(key))
+      );
     } else {
       checkedRoots = new Set([...checkedRoots].filter((key) => targetKeys.has(key)));
     }
@@ -1204,6 +1214,9 @@
     applyPushTagsPreference();
     setTagsVisible(true);
     setFooterActions(['cancelBtn', 'pushBtn']);
+    if (data.busy) {
+      setBusy(true);
+    }
   }
 
   function showBannerAltView(title, message, state, footerIds, showTags, isError) {

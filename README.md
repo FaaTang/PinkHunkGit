@@ -43,7 +43,7 @@ npm run package
 ## Features
 
 - Dedicated Commit panel in the Activity Bar
-- Changes / Unversioned Files groups (IDEA-style)
+- Changes / Unversioned Files groups (IDEA-style); repositories collapsed by default (categories stay open); Expand All / Collapse All apply to the selected group, repository, or folder — with a confirm dialog when none is selected
 - Check files to include in commit; right-click for Diff / Rollback / Open File / Reveal in Explorer
 - Commit / Commit and Push; multi-repo switching
 - Fast Push (from Commit and Push ▾): optional AI commit message → commit → optional auto `v*` tag bump → optional push with auto-merge

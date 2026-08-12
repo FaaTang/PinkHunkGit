@@ -43,7 +43,15 @@ export type PushTarget = {
 export type PushDialogPayload = {
 	targets: PushTarget[];
 	activeRepoRoot?: string;
+	/** Remaining roots for conflict / multi-push resume (host queue). Not UI checkmarks. */
 	pendingRepoRoots?: string[];
+	/**
+	 * Roots that should stay checked in the confirm list.
+	 * Frozen when the dialog opens with a selection or when Push starts.
+	 */
+	selectionRepoRoots?: string[];
+	/** One-shot: re-apply selectionRepoRoots / pendingRepoRoots as checkmarks. */
+	applyPendingSelection?: boolean;
 	busy?: boolean;
 };
 

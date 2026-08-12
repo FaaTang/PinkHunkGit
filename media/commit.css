@@ -389,6 +389,70 @@ body.sidebar-mode .commit-log-pane:not(.collapsed) .commit-log-list {
   opacity: 1;
 }
 
+.commit-log-tip {
+  position: fixed;
+  z-index: 40;
+  display: block;
+  max-width: min(420px, calc(100vw - 16px));
+  max-height: min(280px, calc(100vh - 16px));
+  padding: 8px 10px;
+  /* Display-only overlay: never steal hover from the list underneath. */
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWidget-background, var(--bg)) 72%,
+    transparent
+  );
+  color: var(--vscode-editorWidget-foreground, var(--fg));
+  border: 1px solid color-mix(in srgb, var(--vscode-editorWidget-border, var(--border)) 70%, transparent);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.commit-log-tip.hidden {
+  display: none;
+}
+
+.commit-log-tip-copy {
+  position: fixed;
+  z-index: 41;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--vscode-button-secondaryBackground, var(--bg));
+  color: var(--vscode-button-secondaryForeground, var(--fg));
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.commit-log-tip-copy.hidden {
+  display: none;
+}
+
+.commit-log-tip-copy:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--list-hover));
+  filter: none;
+}
+
+.commit-log-tip-body {
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  max-height: min(264px, calc(100vh - 32px));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-family: var(--vscode-editor-font-family, inherit);
+  font-size: 12px;
+  line-height: 1.45;
+  user-select: text;
+  pointer-events: none;
+}
+
 .file-pane {
   display: flex;
   flex-direction: column;
@@ -636,6 +700,16 @@ body.sidebar-mode .file-list {
 
 .dir-group-title:hover {
   background: var(--list-hover);
+}
+
+.dir-group-title.selected {
+  background: var(--file-row-selected-bg);
+  color: var(--list-active-fg, var(--fg));
+  opacity: 1;
+}
+
+.dir-group-title.selected:hover {
+  background: var(--file-row-selected-bg);
 }
 
 .dir-group-title .group-select-all {

@@ -67,6 +67,8 @@ export type CommitLogItem = {
 	hash: string;
 	shortHash: string;
 	subject: string;
+	/** Full commit message (`%B`), including subject and body. */
+	message?: string;
 	author: string;
 	date: string;
 	refs?: string;
@@ -256,4 +258,4 @@ export type WebviewToHost =
 	| { type: 'loadCommitLog'; repoRoot: string }
 	| { type: 'openCommitChanges'; repoRoot: string; hash: string }
 	| { type: 'copyCommitHash'; hash: string }
-	| { type: 'copyCommitMessage'; repoRoot: string; hash: string };
+	| { type: 'copyCommitMessage'; repoRoot: string; hash: string; text?: string };

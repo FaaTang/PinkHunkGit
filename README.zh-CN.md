@@ -43,7 +43,7 @@ npm run package
 ## 功能
 
 - 左侧独立 Commit 面板（Activity Bar）
-- Changes / Unversioned Files 分组（仿 IDEA）
+- Changes / Unversioned Files 分组（仿 IDEA）；默认按仓库收起（分组展开）；全部展开 / 全部收起作用于当前选中的分组、仓库或文件夹，未选中时二次确认后作用于全部
 - 勾选纳入提交；右键 Diff / 回滚 / 打开文件 / 定位资源管理器
 - Commit / Commit and Push；多仓库切换
 - Fast Push（Commit and Push ▾ 下拉）：可选 AI 生成说明 → 提交 → 可选自动 `v*` tag 递增 → 可选推送并自动合并

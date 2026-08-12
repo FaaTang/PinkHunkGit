@@ -9,6 +9,7 @@ import { API, Change, GitErrorCodes, GitExtension, Repository, Status } from '..
 import {
 	formatGitError,
 	formatGitShellCommand,
+	logExtension,
 	logGitFail,
 	logGitOk,
 	logGitStart,
@@ -100,6 +101,9 @@ export class GitService implements vscode.Disposable {
 	private editorListenersSetup = false;
 	private initState: 'pending' | 'ready' | 'failed' = 'pending';
 	private initError = '';
+	/** True while background openRepository / nested root scan is still running. */
+	private discovering = false;
+	private fileWatcherTimer: ReturnType<typeof setTimeout> | undefined;
 	private pendingDiffAdvance: { repoRoot: string; path: string } | undefined;
 	private pendingDiffRetreat: { repoRoot: string; path: string } | undefined;
 	private diffNavDecorationType: vscode.TextEditorDecorationType | undefined;
@@ -115,9 +119,20 @@ export class GitService implements vscode.Disposable {
 	private refreshQueued = false;
 	private discoverReposInFlight: Promise<void> | undefined;
 
+	/**
+	 * Ready as soon as vscode.git API is initialized so the panel can paint from
+	 * already-open repositories. Nested-root discovery and heavy file watchers run
+	 * in the background and must not block first paint.
+	 */
 	async init(): Promise<{ ok: true } | { ok: false; error: string }> {
+		const t0 = Date.now();
+		const mark = (label: string) =>
+			logExtension(`Git init: ${label} (+${Date.now() - t0}ms)`);
+
 		this.gitExecutable = await this.resolveGitExecutable();
+		mark('resolved git executable');
 		this.configuredGitProxy = await this.readConfiguredGitProxy();
+		mark('read git proxy');
 		const extension = vscode.extensions.getExtension<GitExtension>('vscode.git');
 		if (!extension) {
 			this.initState = 'failed';
@@ -129,6 +144,7 @@ export class GitService implements vscode.Disposable {
 		if (!extension.isActive) {
 			await extension.activate();
 		}
+		mark('vscode.git activated');
 
 		const gitExtension = extension.exports;
 		if (!gitExtension.enabled) {
@@ -155,14 +171,40 @@ export class GitService implements vscode.Disposable {
 		);
 
 		await this.waitForGitApiInitialized();
+		mark(`API initialized (${this.api.repositories.length} repos)`);
 
 		this.bindRepositoryEvents();
-		this.setupWorkspaceWatchers();
-		await this.ensureWorkspaceRepositoriesDiscovered();
-
+		this.setupEditorListeners();
+		// Unblock the Commit panel immediately — do not wait for discovery/status.
 		this.initState = 'ready';
 		this._onDidChange.fire();
+		mark('first paint ready');
+
+		void this.completeInitInBackground(t0);
 		return { ok: true };
+	}
+
+	/** Discover missing roots, catch up status, then attach heavy recursive file watchers. */
+	private async completeInitInBackground(t0: number): Promise<void> {
+		this.discovering = true;
+		this._onDidChange.fire();
+		try {
+			await this.ensureWorkspaceRepositoriesDiscovered();
+			logExtension(
+				`Git init: discovery done (${this.api?.repositories.length ?? 0} repos, +${Date.now() - t0}ms)`
+			);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			logExtension(`Git init: discovery failed: ${message}`);
+		} finally {
+			this.discovering = false;
+			this._onDidChange.fire();
+		}
+		// Soft catch-up: vscode.git usually already has status; this fills gaps without
+		// blocking the panel that already rendered from in-memory repo.state.
+		this.scheduleRefresh();
+		this.scheduleFileWatchers(3_000);
+		logExtension(`Git init: background warmup scheduled (+${Date.now() - t0}ms)`);
 	}
 
 	private async resolveGitExecutable(): Promise<string> {
@@ -245,38 +287,52 @@ export class GitService implements vscode.Disposable {
 		this._onDidChange.fire();
 	}
 
-	private setupWorkspaceWatchers(): void {
-		if (!this.editorListenersSetup) {
-			this.editorListenersSetup = true;
-			this.disposables.push(
-				vscode.window.onDidChangeActiveTextEditor((editor) => {
-					if (editor?.document.uri.scheme === 'file') {
-						this.rememberFileUri(editor.document.uri);
-					}
-					// Repo/active file switch only needs a cheap UI snapshot push.
-					this.scheduleSnapshot();
-				}),
-				vscode.workspace.onDidChangeTextDocument((event) => {
-					if (event.document.uri.scheme === 'file') {
-						this.rememberFileUri(event.document.uri);
-						// Unsaved edits are merged via collectDirtyDocuments — no git status.
-						this.scheduleSnapshot();
-					}
-				}),
-				vscode.workspace.onDidSaveTextDocument((doc) => {
-					if (doc.uri.scheme === 'file') {
-						this.scheduleRefresh(doc.uri);
-					}
-				}),
-				vscode.workspace.onDidChangeWorkspaceFolders(() => {
-					void this.ensureWorkspaceRepositoriesDiscovered().then(() => {
-						this.bindRepositoryEvents();
-						this._onDidChange.fire();
-					});
-				})
-			);
+	private setupEditorListeners(): void {
+		if (this.editorListenersSetup) {
+			return;
 		}
+		this.editorListenersSetup = true;
+		this.disposables.push(
+			vscode.window.onDidChangeActiveTextEditor((editor) => {
+				if (editor?.document.uri.scheme === 'file') {
+					this.rememberFileUri(editor.document.uri);
+				}
+				// Repo/active file switch only needs a cheap UI snapshot push.
+				this.scheduleSnapshot();
+			}),
+			vscode.workspace.onDidChangeTextDocument((event) => {
+				if (event.document.uri.scheme === 'file') {
+					this.rememberFileUri(event.document.uri);
+					// Unsaved edits are merged via collectDirtyDocuments — no git status.
+					this.scheduleSnapshot();
+				}
+			}),
+			vscode.workspace.onDidSaveTextDocument((doc) => {
+				if (doc.uri.scheme === 'file') {
+					this.scheduleRefresh(doc.uri);
+				}
+			}),
+			vscode.workspace.onDidChangeWorkspaceFolders(() => {
+				void this.ensureWorkspaceRepositoriesDiscovered().then(() => {
+					this.bindRepositoryEvents();
+					this._onDidChange.fire();
+				});
+			})
+		);
+	}
 
+	/** Defer recursive file watchers — they are expensive on large multi-root Windows workspaces. */
+	private scheduleFileWatchers(delayMs: number): void {
+		if (this.fileWatchersSetup || this.fileWatcherTimer) {
+			return;
+		}
+		this.fileWatcherTimer = setTimeout(() => {
+			this.fileWatcherTimer = undefined;
+			this.setupFileWatchers();
+		}, delayMs);
+	}
+
+	private setupFileWatchers(): void {
 		if (this.fileWatchersSetup) {
 			return;
 		}
@@ -338,32 +394,80 @@ export class GitService implements vscode.Disposable {
 		const maxDepth =
 			configuredDepth < 0 ? 4 : Math.max(1, Math.min(configuredDepth || 1, 4));
 
+		const t0 = Date.now();
 		const roots = new Set<string>();
-		for (const folder of folders) {
-			for (const root of await this.findGitRoots(folder.uri.fsPath, maxDepth)) {
-				roots.add(path.normalize(root));
-			}
+		// Scan workspace folders in parallel — each root is independent.
+		await Promise.all(
+			folders.map(async (folder) => {
+				const folderPath = folder.uri.fsPath;
+				const existing = this.api?.getRepository(folder.uri);
+				if (existing) {
+					roots.add(path.normalize(existing.rootUri.fsPath));
+					return;
+				}
+				// Fast path: workspace folder is itself a git root (common multi-root case).
+				if (await this.hasGitMetadata(folderPath)) {
+					roots.add(path.normalize(folderPath));
+					return;
+				}
+				for (const root of await this.findGitRoots(folderPath, maxDepth)) {
+					roots.add(path.normalize(root));
+				}
+			})
+		);
+		logExtension(
+			`Git discover: scanned ${folders.length} folders -> ${roots.size} roots (+${Date.now() - t0}ms)`
+		);
+
+		const toOpen = [...roots].filter((root) => !this.api!.getRepository(vscode.Uri.file(root)));
+		if (!toOpen.length) {
+			return;
 		}
 
+		const openStart = Date.now();
 		let opened = 0;
-		for (const root of roots) {
-			const uri = vscode.Uri.file(root);
-			if (this.api.getRepository(uri)) {
-				continue;
-			}
+		// Cap concurrency: openRepository triggers git status internally; unbounded
+		// parallelism thrashes disks, serial open adds up to multi-second stalls.
+		await this.mapPool(toOpen, 4, async (root) => {
 			try {
-				const repo = await this.api.openRepository(uri);
+				const repo = await this.api!.openRepository!(vscode.Uri.file(root));
 				if (repo) {
 					opened += 1;
 				}
 			} catch {
 				// Not a usable git root (or Git extension rejected it).
 			}
-		}
+		});
+		logExtension(
+			`Git discover: opened ${opened}/${toOpen.length} repos (+${Date.now() - openStart}ms)`
+		);
 
 		if (opened > 0) {
 			this.bindRepositoryEvents();
 		}
+	}
+
+	/** Run async work over items with a fixed concurrency limit. */
+	private async mapPool<T>(
+		items: T[],
+		concurrency: number,
+		worker: (item: T) => Promise<void>
+	): Promise<void> {
+		if (!items.length) {
+			return;
+		}
+		let next = 0;
+		const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+			while (true) {
+				const index = next;
+				next += 1;
+				if (index >= items.length) {
+					return;
+				}
+				await worker(items[index]);
+			}
+		});
+		await Promise.all(runners);
 	}
 
 	/** Breadth-first find directories that contain a `.git` dir/file, up to maxDepth. */
@@ -388,7 +492,10 @@ export class GitService implements vscode.Disposable {
 			const { dir, depth } = queue.shift()!;
 			if (await this.hasGitMetadata(dir)) {
 				found.push(dir);
-				// Still scan children: nested repos are common in multi-module trees.
+				// Do not descend into a found repo — huge module trees (target/, src/)
+				// dominate startup cost; nested VCS roots under an already-open repo
+				// are left to vscode.git submodule / auto-detect.
+				continue;
 			}
 			if (depth >= maxDepth) {
 				continue;
@@ -476,6 +583,10 @@ export class GitService implements vscode.Disposable {
 		}
 		if (this.snapshotTimer) {
 			clearTimeout(this.snapshotTimer);
+		}
+		if (this.fileWatcherTimer) {
+			clearTimeout(this.fileWatcherTimer);
+			this.fileWatcherTimer = undefined;
 		}
 		this.repoDisposables.forEach((d) => d.dispose());
 		this.disposables.forEach((d) => d.dispose());
@@ -761,9 +872,14 @@ export class GitService implements vscode.Disposable {
 		return this.api.repositories.find((r) => pathsEqual(r.rootUri.fsPath, this.activeRepoRoot!));
 	}
 
-	/** True until `init()` finishes (success or failure). */
+	/** True until `init()` reaches API-ready (success path) or fails. */
 	isInitPending(): boolean {
 		return this.initState === 'pending';
+	}
+
+	/** True while background repository discovery is still running. */
+	isDiscovering(): boolean {
+		return this.discovering;
 	}
 
 	getWorkspaceSnapshot(): WorkspaceSnapshot {
@@ -777,9 +893,9 @@ export class GitService implements vscode.Disposable {
 			ignored: [],
 		};
 
-		// Keep showing Loading while vscode.git is still activating / discovering roots.
-		// `api` may already be set mid-init; treating that as a hard error flashes
-		// "No Git repository selected" before repositories appear a few seconds later.
+		// Keep showing Loading while vscode.git is still activating.
+		// After API ready we paint from whatever repositories are already open;
+		// remaining roots stream in via onDidOpenRepository.
 		if (this.initState === 'pending') {
 			return {
 				ok: false,
@@ -801,6 +917,16 @@ export class GitService implements vscode.Disposable {
 
 		const repos = this.api.repositories;
 		if (!repos.length) {
+			// Still hunting for roots — avoid flashing "not a Git repository".
+			if (this.discovering) {
+				return {
+					ok: false,
+					loading: true,
+					hint: 'Loading Git...',
+					repositories: [],
+					active: emptyActive,
+				};
+			}
 			return {
 				ok: false,
 				error: 'Current folder is not a Git repository.',
@@ -1092,12 +1218,16 @@ export class GitService implements vscode.Disposable {
 	 * Full status refresh for all repositories (manual refresh / after git ops).
 	 * Ignored scan is included by default; pass `{ ignored: false }` for a faster first paint
 	 * (call `refreshIgnoredFiles` afterwards when ignored entries are needed).
+	 *
+	 * Pass `{ discover: false }` to skip waiting on background root discovery (first paint).
 	 */
-	async refresh(options?: { ignored?: boolean }): Promise<void> {
+	async refresh(options?: { ignored?: boolean; discover?: boolean }): Promise<void> {
 		if (this.refreshSuspended > 0) {
 			return;
 		}
-		await this.ensureWorkspaceRepositoriesDiscovered();
+		if (options?.discover !== false) {
+			await this.ensureWorkspaceRepositoriesDiscovered();
+		}
 		this.pendingStatusAll = true;
 		if (options?.ignored !== false) {
 			this.pendingIgnoredAll = true;
@@ -1363,11 +1493,12 @@ export class GitService implements vscode.Disposable {
 		const branch = repo.state.HEAD?.name;
 		const max = Math.max(1, Math.min(limit, 100));
 		try {
+			// %B = full message (subject + body). %x1e separates records so body newlines are safe.
 			const raw = await this.queryGit(root, [
 				'log',
 				'-n',
 				String(max),
-				'--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ad%x1f%D',
+				'--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ad%x1f%D%x1f%B%x1e',
 				'--date=short',
 			]);
 			return { repoRoot: root, repoName: name, branch, commits: parseCommitLog(raw) };
@@ -3547,18 +3678,29 @@ function parseCommitLog(raw: string): CommitLogItem[] {
 	if (!raw.trim()) {
 		return [];
 	}
-	return raw.split('\n').map((line) => {
-		const [hash = '', shortHash = '', subject = '', author = '', date = '', refs = ''] =
-			line.split('\x1f');
-		return {
-			hash,
-			shortHash,
-			subject,
-			author,
-			date,
-			refs: refs.trim() || undefined,
-		};
-	});
+	return raw
+		.split('\x1e')
+		.map((record) => record.replace(/^\r?\n/, '').replace(/\s+$/u, ''))
+		.filter((record) => record.trim())
+		.map((record) => {
+			const parts = record.split('\x1f');
+			const hash = parts[0] || '';
+			const shortHash = parts[1] || '';
+			const subject = parts[2] || '';
+			const author = parts[3] || '';
+			const date = parts[4] || '';
+			const refs = (parts[5] || '').trim();
+			const message = (parts.slice(6).join('\x1f') || subject).replace(/\s+$/u, '');
+			return {
+				hash,
+				shortHash,
+				subject,
+				message,
+				author,
+				date,
+				refs: refs || undefined,
+			};
+		});
 }
 
 function pathsEqual(a: string, b: string): boolean {

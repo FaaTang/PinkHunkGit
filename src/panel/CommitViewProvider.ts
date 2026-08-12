@@ -186,7 +186,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 						// keep existing html
 					}
 				}
-				void this.refreshAndPush({ ignored: false });
+				// Soft reopen: paint cached repo.state, catch up status in background.
+				void this.softRefreshAndPush();
 			})
 		);
 
@@ -195,13 +196,15 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			await this.pushSnapshot();
 			try {
 				await this.waitForGitInit();
-				if (webviewView.visible) {
-					await this.refreshAndPush({ ignored: false });
-				}
 			} finally {
 				this.panelLoading = false;
 			}
+			// First paint from vscode.git in-memory state — do not await full discovery/status.
+			// If discovery still has 0 repos, snapshot.loading keeps the Working overlay up.
 			await this.pushSnapshot();
+			if (webviewView.visible) {
+				void this.softRefreshAndPush();
+			}
 		})();
 	}
 
@@ -762,6 +765,18 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		await run;
 	}
 
+	/**
+	 * Fast path for panel open / visibility: show current snapshot immediately,
+	 * then schedule a non-blocking status catch-up (no await on discovery).
+	 */
+	private async softRefreshAndPush(): Promise<void> {
+		await this.waitForGitInit();
+		await this.pushSnapshot();
+		// Debounced full status; discovery already runs in GitService background init.
+		this.git.scheduleRefresh();
+		this.scheduleIgnoredRefresh();
+	}
+
 	private async runRefreshAndPush(options?: {
 		showLoading?: boolean;
 		ignored?: boolean;
@@ -831,7 +846,10 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		}
 		if (msg.type === 'copyCommitMessage') {
 			try {
-				const text = await this.git.getCommitMessageText(msg.repoRoot, msg.hash);
+				const text =
+					typeof msg.text === 'string' && msg.text.trim()
+						? msg.text.replace(/\s+$/u, '')
+						: await this.git.getCommitMessageText(msg.repoRoot, msg.hash);
 				await vscode.env.clipboard.writeText(text);
 				vscode.window.setStatusBarMessage('Commit message copied', 2000);
 			} catch (err) {
@@ -1119,7 +1137,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				busy: this.busy,
 				loading,
 				hint: loading
-					? snapshot.hint || (this.panelLoading ? 'Loading Git status...' : 'Loading Git...')
+					? snapshot.hint || 'Loading Git…'
 					: snapshot.hint,
 			},
 		});
@@ -1198,12 +1216,12 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
             </label>
           </div>
         </div>
-        <button id="expandAllBtn" type="button" title="Expand All" aria-label="Expand All">
+        <button id="expandAllBtn" type="button" title="Expand All (uses selected group / repository / folder when selected)" aria-label="Expand All">
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
             <path fill="currentColor" d="M2 2.5h12v1H2v-1zm0 10h12v1H2v-1zM8 4l3.25 3.25H9.1V10H6.9V7.25H4.75L8 4zm0 8 3.25-3.25H9.1V8.5H6.9v.25H4.75L8 12z"/>
           </svg>
         </button>
-        <button id="collapseAllBtn" type="button" title="Collapse All" aria-label="Collapse All">
+        <button id="collapseAllBtn" type="button" title="Collapse All (uses selected group / repository / folder when selected)" aria-label="Collapse All">
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
             <path fill="currentColor" d="M2 2.5h12v1H2v-1zm0 10h12v1H2v-1zM8 7.25 4.75 4h2.15v2.75h2.2V4h2.15L8 7.25zm0 1.5 3.25 3.25H9.1V9.25H6.9v2.75H4.75L8 8.75z"/>
           </svg>
@@ -1273,6 +1291,10 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
   </div>
 
   <div id="contextMenu" class="context-menu hidden"></div>
+  <div id="commitLogTip" class="commit-log-tip hidden" role="tooltip" aria-hidden="true">
+    <pre id="commitLogTipBody" class="commit-log-tip-body"></pre>
+  </div>
+  <button id="commitLogTipCopy" class="commit-log-tip-copy hidden" type="button" title="Copy commit message" aria-label="Copy commit message">Copy</button>
 
   <div id="rollbackModal" class="modal hidden">
     <div class="modal-card">
@@ -1281,6 +1303,17 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
       <div class="modal-actions">
         <button id="rollbackCancel" type="button">Cancel</button>
         <button id="rollbackConfirm" class="danger" type="button">Rollback</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="expandCollapseAllModal" class="modal hidden">
+    <div class="modal-card">
+      <h2 id="expandCollapseAllTitle">Expand All</h2>
+      <p id="expandCollapseAllSummary">No group, repository, or folder is selected. This will apply to all files in the Commit panel. Continue?</p>
+      <div class="modal-actions">
+        <button id="expandCollapseAllCancel" type="button">Cancel</button>
+        <button id="expandCollapseAllConfirm" class="primary" type="button">Continue</button>
       </div>
     </div>
   </div>
