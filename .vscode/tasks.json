@@ -2,31 +2,25 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "npm: compile",
-      "type": "shell",
-      "command": "npm run compile",
-      "windows": {
-        "command": "npm.cmd run compile"
-      },
+      "type": "npm",
+      "script": "compile",
       "group": {
         "kind": "build",
         "isDefault": true
       },
       "problemMatcher": "$tsc",
+      "label": "npm: compile",
       "presentation": {
         "reveal": "silent",
         "panel": "shared"
       }
     },
     {
-      "label": "npm: watch",
-      "type": "shell",
-      "command": "npm run watch",
-      "windows": {
-        "command": "npm.cmd run watch"
-      },
+      "type": "npm",
+      "script": "watch",
       "isBackground": true,
       "problemMatcher": "$tsc-watch",
+      "label": "npm: watch",
       "presentation": {
         "reveal": "never"
       }
