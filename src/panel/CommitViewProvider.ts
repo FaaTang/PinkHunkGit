@@ -20,10 +20,19 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	private readonly disposables: vscode.Disposable[] = [];
 	private busy = false;
+	/**
+	 * First-paint / open refresh in flight — webview shows Loading instead of empty Changes.
+	 * Distinct from `busy` (operation overlay) so status wait does not look like a freeze.
+	 */
+	private panelLoading = false;
 	/** Skip mid-operation snapshot pushes so the UI updates once, like IDEA. */
 	private snapshotDeferredWhileBusy = false;
 	/** Coalesce rapid onDidChange → snapshot pushes (status + dirty edits). */
 	private snapshotTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Coalesce deferred ignored-file scans after a status-only first paint. */
+	private ignoredRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+	/** In-flight status-only panel refresh (open / visibility) — coalesce overlaps. */
+	private statusOnlyRefreshPromise?: Promise<void>;
 	/** Bust webview media cache only when commit.js/css actually change. */
 	private loadedMediaVersion = '';
 	private selected?: { repoRoot: string; path: string; staged: boolean };
@@ -67,6 +76,10 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		if (this.snapshotTimer) {
 			clearTimeout(this.snapshotTimer);
 			this.snapshotTimer = undefined;
+		}
+		if (this.ignoredRefreshTimer) {
+			clearTimeout(this.ignoredRefreshTimer);
+			this.ignoredRefreshTimer = undefined;
 		}
 		this.resolveUpdateAll(undefined);
 		this.resolveFastPushCommit(undefined);
@@ -173,17 +186,22 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 						// keep existing html
 					}
 				}
-				void this.refreshAndPush();
+				void this.refreshAndPush({ ignored: false });
 			})
 		);
 
 		void (async () => {
-			await this.waitForGitInit();
-			if (webviewView.visible) {
-				await this.refreshAndPush();
-			} else {
-				await this.pushSnapshot();
+			this.panelLoading = true;
+			await this.pushSnapshot();
+			try {
+				await this.waitForGitInit();
+				if (webviewView.visible) {
+					await this.refreshAndPush({ ignored: false });
+				}
+			} finally {
+				this.panelLoading = false;
 			}
+			await this.pushSnapshot();
 		})();
 	}
 
@@ -195,7 +213,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		} else {
 			await vscode.commands.executeCommand(`${CommitViewProvider.viewType}.focus`);
 		}
-		await this.refreshAndPush();
+		await this.refreshAndPush({ ignored: false });
 		if (expandChanges) {
 			this.expandChangesGroups();
 		}
@@ -718,10 +736,76 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		void vscode.commands.executeCommand('setContext', 'copyIdeaGitUi.hasSelection', true);
 	}
 
-	private async refreshAndPush(): Promise<void> {
+	/**
+	 * Refresh Git status and push a snapshot to the webview.
+	 * Pass `ignored: false` to skip the slow `--ignored` scan on first paint;
+	 * ignored entries are filled in shortly after via `scheduleIgnoredRefresh`.
+	 */
+	private async refreshAndPush(options?: {
+		showLoading?: boolean;
+		ignored?: boolean;
+	}): Promise<void> {
+		const includeIgnored = options?.ignored !== false;
+		if (!includeIgnored && this.statusOnlyRefreshPromise) {
+			await this.statusOnlyRefreshPromise;
+			return;
+		}
+
+		const run = this.runRefreshAndPush(options);
+		if (!includeIgnored) {
+			this.statusOnlyRefreshPromise = run.finally(() => {
+				if (this.statusOnlyRefreshPromise === run) {
+					this.statusOnlyRefreshPromise = undefined;
+				}
+			});
+		}
+		await run;
+	}
+
+	private async runRefreshAndPush(options?: {
+		showLoading?: boolean;
+		ignored?: boolean;
+	}): Promise<void> {
 		await this.waitForGitInit();
-		await this.git.refresh();
+		const includeIgnored = options?.ignored !== false;
+		const showLoading = !!options?.showLoading;
+		if (showLoading) {
+			this.panelLoading = true;
+			await this.pushSnapshot();
+		}
+		try {
+			await this.git.refresh({ ignored: includeIgnored });
+		} finally {
+			if (showLoading) {
+				this.panelLoading = false;
+			}
+		}
 		await this.pushSnapshot();
+		if (!includeIgnored) {
+			this.scheduleIgnoredRefresh();
+		}
+	}
+
+	/** Best-effort ignored scan after a status-only first paint (coalesced). */
+	private scheduleIgnoredRefresh(): void {
+		if (this.ignoredRefreshTimer) {
+			clearTimeout(this.ignoredRefreshTimer);
+		}
+		this.ignoredRefreshTimer = setTimeout(() => {
+			this.ignoredRefreshTimer = undefined;
+			void (async () => {
+				try {
+					await this.git.refreshIgnoredFiles();
+					if (!this.busy) {
+						await this.pushSnapshot();
+					} else {
+						this.snapshotDeferredWhileBusy = true;
+					}
+				} catch {
+					// Ignored listing is optional for the Changes list.
+				}
+			})();
+		}, 0);
 	}
 
 	private async onMessage(msg: WebviewToHost): Promise<void> {
@@ -774,7 +858,9 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		try {
 			switch (msg.type) {
 				case 'ready':
-					await this.refreshAndPush();
+					// Status refresh is owned by resolveWebviewView / visibility / reveal.
+					// Avoid a duplicate full status+ignored pass on every webview bootstrap.
+					await this.pushSnapshot();
 					await this.postFastPushSettings();
 					await this.postCommitMessagePrefixSettings();
 					if (this.pendingExpandChanges) {
@@ -919,7 +1005,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'refresh':
 					await this.withBusy(async () => {
-						await this.refreshAndPush();
+						await this.refreshAndPush({ ignored: true });
 					}, 'Refreshing…');
 					break;
 				case 'installKeybindings':
@@ -933,7 +1019,9 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			const message = await notifyGitError(err);
 			this.post({ type: 'error', message });
 		} finally {
-			await this.refreshAndPush();
+			if (shouldRefreshAfterMessage(msg.type)) {
+				await this.refreshAndPush();
+			}
 		}
 	}
 
@@ -1023,7 +1111,18 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 
 	private async pushSnapshot(): Promise<void> {
 		const snapshot = this.git.getWorkspaceSnapshot();
-		this.post({ type: 'snapshot', payload: { ...snapshot, busy: this.busy } });
+		const loading = !!snapshot.loading || this.panelLoading;
+		this.post({
+			type: 'snapshot',
+			payload: {
+				...snapshot,
+				busy: this.busy,
+				loading,
+				hint: loading
+					? snapshot.hint || (this.panelLoading ? 'Loading Git status...' : 'Loading Git...')
+					: snapshot.hint,
+			},
+		});
 	}
 
 	private toFsPath(repoRoot: string, relativePath: string): string {
@@ -1320,6 +1419,42 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
+	}
+}
+
+/**
+ * After mutating Git ops, refresh status so Changes stay in sync.
+ * Skip for messages that already refreshed, only read UI, or do not touch the index.
+ */
+function shouldRefreshAfterMessage(type: WebviewToHost['type']): boolean {
+	switch (type) {
+		case 'ready':
+		case 'refresh':
+		case 'openDiff':
+		case 'openFile':
+		case 'revealInExplorer':
+		case 'rollback':
+		case 'rollbackBatch':
+		case 'rollbackCancel':
+		case 'openPushDialog':
+		case 'fastPushCommitConfirm':
+		case 'fastPushCommitCancel':
+		case 'fastPushConfirmAck':
+		case 'fastPushConfirmCancel':
+		case 'getFastPushSettings':
+		case 'saveFastPushSettings':
+		case 'getCommitMessagePrefixSettings':
+		case 'saveCommitMessagePrefixSettings':
+		case 'clearCommitMessagePrefixGlobal':
+		case 'generateCommitMessage':
+		case 'updateAllConfirm':
+		case 'updateAllCancel':
+		case 'updateAllSelectionChanged':
+		case 'installKeybindings':
+		case 'openGitExtension':
+			return false;
+		default:
+			return true;
 	}
 }
 

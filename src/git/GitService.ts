@@ -1089,15 +1089,18 @@ export class GitService implements vscode.Disposable {
 
 	/**
 	 * Full status refresh for all repositories (manual refresh / after git ops).
-	 * Includes ignored scan once — not used on every keystroke or single-file save.
+	 * Ignored scan is included by default; pass `{ ignored: false }` for a faster first paint
+	 * (call `refreshIgnoredFiles` afterwards when ignored entries are needed).
 	 */
-	async refresh(): Promise<void> {
+	async refresh(options?: { ignored?: boolean }): Promise<void> {
 		if (this.refreshSuspended > 0) {
 			return;
 		}
 		await this.ensureWorkspaceRepositoriesDiscovered();
 		this.pendingStatusAll = true;
-		this.pendingIgnoredAll = true;
+		if (options?.ignored !== false) {
+			this.pendingIgnoredAll = true;
+		}
 		this.pendingStatusRoots.clear();
 		this.pendingIgnoredRoots.clear();
 		if (this.refreshTimer) {
