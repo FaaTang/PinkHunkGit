@@ -47,7 +47,7 @@ npm run package
 - 勾选纳入提交；右键 Diff / 回滚 / 打开文件 / 定位资源管理器
 - Commit / Commit and Push；多仓库切换
 - Fast Push（Commit and Push ▾ 下拉）：可选 AI 生成说明 → 提交 → 可选自动 `v*` tag 递增 → 可选推送并自动合并
-- AI 生成提交信息：按系统/提示词强制**简体中文**标题与 bullet；可配置可选前缀与强制生成提示词（Workspace / Global，支持 Clear Global）
+- AI 生成提交信息：按系统/提示词强制**简体中文**标题与 bullet；可配置可选前缀与强制生成提示词（Workspace / Global，支持 Clear Global）。勾选 Force generation prompt 后，提示词会注入生成流程，并在生成后由代码强制落实；`yyyyMMdd` / `YYYYMMDD` 按本机当天展开（如 `vyyyyMMdd#000` → `v20260812#000`）
 - Clone Repository 对话框（仿 IDEA）：粘贴 HTTPS/SSH URL、选择目录后执行 `git clone`
 - 一次拉取并更新当前工作区内的所有 Git 仓库
 - 快捷键安装按钮（写入用户 `keybindings.json`）

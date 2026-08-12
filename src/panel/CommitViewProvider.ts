@@ -7,6 +7,11 @@ import {
 	CommitMessagePrefixFlags,
 	CommitMessagePrefixSettingsStore,
 } from '../commitMessage/prefixSettings';
+import {
+	expandPrefixTemplate,
+	enforcePromptRequiredPrefix,
+	stripLeadingVersionDatePrefix,
+} from '../commitMessage/prefixTemplate';
 import { UpdateAllSelectionStore } from '../updateAll/selectionStore';
 import { notifyGitError } from '../git/gitOutput';
 import { showTimedInfoMessage } from '../ui/notify';
@@ -602,17 +607,38 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			return text;
 		}
 		const effective = this.commitPrefixSettings.getEffective();
+		const rawPrompt = effective.promptEnabled ? effective.prompt || '' : '';
+
+		// 1) Mandatory prompt requirements are enforced in code (not left to the model).
+		let next = this.enforcePromptOnWholeOrMultiRepo(text, rawPrompt);
+
+		// 2) Optional Prefix field still wins when enabled (after expanding date tokens).
 		if (!effective.enabled) {
-			return text;
+			return next;
 		}
-		const prefix = (effective.prefix || '').trim();
+		const prefix = expandPrefixTemplate((effective.prefix || '').trim());
 		if (!prefix) {
-			return text;
+			return next;
 		}
 
+		return this.mapMultiRepoBodies(next, (body) => this.applyPrefixToSingleMessage(body, prefix));
+	}
+
+	/** Apply prompt-required prefix to a single message or each multi-repo body. */
+	private enforcePromptOnWholeOrMultiRepo(message: string, rawPrompt: string): string {
+		if (!rawPrompt.trim()) {
+			return expandPrefixTemplate(message);
+		}
+		return this.mapMultiRepoBodies(message, (body) =>
+			enforcePromptRequiredPrefix(body, rawPrompt)
+		);
+	}
+
+	private mapMultiRepoBodies(message: string, mapBody: (body: string) => string): string {
+		const text = message.trim();
 		const multiRepoHeaderRe = /^###\s+\[[^\]]+]\s+\(.+\)\s*$/m;
 		if (!multiRepoHeaderRe.test(text)) {
-			return this.applyPrefixToSingleMessage(text, prefix);
+			return mapBody(text);
 		}
 
 		const lines = text.split('\n');
@@ -628,7 +654,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			out.push(currentHeader);
 			const bodyText = currentBody.join('\n').trim();
 			if (bodyText) {
-				out.push(this.applyPrefixToSingleMessage(bodyText, prefix));
+				out.push(mapBody(bodyText));
 			}
 			currentHeader = undefined;
 			currentBody = [];
@@ -646,13 +672,17 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			}
 		}
 		flush();
-		return out.length ? out.join('\n\n').trim() : this.applyPrefixToSingleMessage(text, prefix);
+		return out.length ? out.join('\n\n').trim() : mapBody(text);
 	}
 
 	private applyPrefixToSingleMessage(message: string, prefix: string): string {
-		const text = message.trim();
+		let text = expandPrefixTemplate(message.trim());
 		if (!text) {
 			return text;
+		}
+		// Drop model/prompt vYYYYMMDD#N so the configured Prefix field wins.
+		if (/^v\d{8}#\d+$/u.test(prefix)) {
+			text = stripLeadingVersionDatePrefix(text).trim();
 		}
 		if (text.startsWith(`${prefix} `) || text === prefix) {
 			return text;
@@ -1411,11 +1441,11 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
   <div id="commitMsgPrefixModal" class="modal hidden">
     <div class="modal-card modal-card-wide">
       <h2>Commit Message Generation Settings</h2>
-      <p class="fast-push-settings-hint">Configure an optional prefix and a mandatory generation prompt for auto-generated commit messages. Choose Workspace and/or Global for each. Workspace overrides Global in this folder.</p>
+      <p class="fast-push-settings-hint">Configure an optional prefix and a <strong>mandatory</strong> generation prompt for auto-generated commit messages. When Force generation prompt is on, the prompt is injected into generation and also enforced afterwards in code (e.g. <code>vyyyyMMdd#000</code> / Chinese). Workspace overrides Global. Tokens <code>yyyyMMdd</code> / <code>YYYYMMDD</code> expand to today's local date.</p>
       <label class="fast-push-commit-label" for="cmpPrefixInput">Prefix</label>
-      <input id="cmpPrefixInput" class="commit-prefix-single-input" type="text" placeholder="e.g. v20260729#000" />
+      <input id="cmpPrefixInput" class="commit-prefix-single-input" type="text" placeholder="e.g. vyyyyMMdd#000" />
       <label class="fast-push-commit-label" for="cmpPromptInput">Generation prompt</label>
-      <textarea id="cmpPromptInput" class="commit-prompt-input" rows="4" placeholder="e.g. Always write subject and bullets in Simplified Chinese. Keep type(scope) in English."></textarea>
+      <textarea id="cmpPromptInput" class="commit-prompt-input" rows="4" placeholder="e.g. 用中文生成提交信息。type(scope) 保持英文。"></textarea>
       <div class="fast-push-settings-table" role="table" aria-label="Commit message generation settings">
         <div class="fast-push-settings-row head" role="row">
           <span class="fast-push-settings-feature" role="columnheader">Apply</span>

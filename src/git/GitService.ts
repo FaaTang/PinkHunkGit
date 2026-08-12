@@ -35,6 +35,7 @@ import {
 	rewriteCommitMessageForLocale,
 	withTemporaryCommitLanguageRule,
 } from '../commitMessage/generateCommitMessage';
+import { peelLeadingVersionDatePrefix } from '../commitMessage/prefixTemplate';
 
 const MAX_DIFF_BYTES = 1_000_000;
 
@@ -1856,11 +1857,18 @@ export class GitService implements vscode.Disposable {
 		customPrompt = ''
 	): string {
 		const locale = resolveEffectiveCommitMessageLocale(customPrompt);
-		let text = message.trim();
+		// Peel vYYYYMMDD#N so style/locale checks run on the conventional subject line.
+		const peeled = peelLeadingVersionDatePrefix(message.trim());
+		let text = peeled.body || message.trim();
 		if (locale.wantsCjk && !isCommitMessageInTargetCjk(text)) {
 			text = buildLocaleFallbackMessage(relativePaths, text, customPrompt) ?? text;
 		}
-		return formatCommitMessageStyle(text, relativePaths);
+		text = formatCommitMessageStyle(text, relativePaths);
+		// Keep peeled prefix only as a hint; CommitViewProvider enforces prompt/prefix settings.
+		if (peeled.prefix && text && !/^v\d{8}#\d+\b/u.test(text)) {
+			return `${peeled.prefix} ${text}`;
+		}
+		return text;
 	}
 
 	private async generateCommitMessageViaScmCommand(

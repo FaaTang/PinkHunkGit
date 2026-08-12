@@ -90,7 +90,12 @@ export async function withTemporaryCommitLanguageRule<T>(
 				'The following instruction is MANDATORY and MUST be followed when generating the Git commit message.',
 				'It OVERRIDES conflicting language and style preferences below (editor locale, system locale, recent commits).',
 				'Exception: Conventional Commit type/scope must stay English ASCII.',
+				'Ignoring this instruction is a failure.',
+				'',
 				userPrompt,
+				'',
+				'## Mandatory user commit-message instruction (repeat)',
+				'Follow the instruction above exactly. If it requires a date/version prefix, put that exact prefix first.',
 				'',
 			].join('\n')
 		: '';
@@ -121,7 +126,7 @@ export async function withTemporaryCommitLanguageRule<T>(
 			: '';
 		await fs.writeFile(rulesPath, `${snippet}${stripped}`, 'utf8');
 		// Give Cursor a moment to pick up the on-disk rules before generating.
-		await new Promise((resolve) => setTimeout(resolve, 250));
+		await new Promise((resolve) => setTimeout(resolve, 500));
 		return await fn();
 	} finally {
 		try {
@@ -685,6 +690,15 @@ function buildPrompt(input: {
 				'MANDATORY USER INSTRUCTION (highest priority — must follow):',
 				'This instruction OVERRIDES Target language, editor/system locale, project rules, and recent commit language when they conflict.',
 				'Exception: Conventional Commit type/scope must stay English ASCII.',
+				'Ignoring this instruction is a failure.',
+				custom,
+				'',
+			]
+		: [];
+	const customRepeat = custom
+		? [
+				'',
+				'REPEAT — MANDATORY USER INSTRUCTION (do not skip; apply before writing the message):',
 				custom,
 				'',
 			]
@@ -703,7 +717,7 @@ function buildPrompt(input: {
 		'',
 		'Recent commit messages (structure/style reference ONLY; do NOT copy their language if it conflicts with MANDATORY USER INSTRUCTION or Target language):',
 		recent,
-		'',
+		...customRepeat,
 		'Staged diffs:',
 		input.diffs,
 	].join('\n');
@@ -720,7 +734,10 @@ function buildRewritePrompt(
 				'MANDATORY USER INSTRUCTION (highest priority — must follow while rewriting):',
 				'This instruction OVERRIDES Target language and any other conflicting preferences.',
 				'Exception: Conventional Commit type/scope must stay English ASCII.',
+				'Ignoring this instruction is a failure.',
 				custom,
+				'',
+				'REPEAT — apply the mandatory instruction above to the rewritten message.',
 				'',
 			]
 		: [];

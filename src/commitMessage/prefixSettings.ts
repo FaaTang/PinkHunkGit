@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { enrichCommitMessagePrompt } from './prefixTemplate';
 
 export type CommitMessagePrefixFlags = {
 	enabled: boolean;
@@ -82,13 +83,17 @@ export class CommitMessagePrefixSettingsStore {
 		};
 	}
 
-	/** Effective custom generation prompt text, or empty when disabled / blank. */
+	/**
+	 * Effective custom generation prompt text, or empty when disabled / blank.
+	 * Expands yyyyMMdd-style tokens and appends an explicit today-date context
+	 * so the model cannot invent a stale calendar date.
+	 */
 	getEffectivePrompt(): string {
 		const effective = this.getEffective();
 		if (!effective.promptEnabled) {
 			return '';
 		}
-		return (effective.prompt || '').trim();
+		return enrichCommitMessagePrompt((effective.prompt || '').trim());
 	}
 
 	getPayload(): CommitMessagePrefixSettingsPayload {
