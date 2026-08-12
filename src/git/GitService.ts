@@ -29,6 +29,7 @@ import {
 	buildLocaleFallbackMessage,
 	formatCommitMessageStyle,
 	generateCommitMessageWithLanguageModel,
+	isCommitMessageInTargetCjk,
 	resolveEffectiveCommitMessageLocale,
 	rewriteCommitMessageForLocale,
 	withTemporaryCommitLanguageRule,
@@ -1612,7 +1613,7 @@ export class GitService implements vscode.Disposable {
 	): string {
 		const locale = resolveEffectiveCommitMessageLocale(customPrompt);
 		let text = message.trim();
-		if (locale.wantsCjk && !/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u.test(text)) {
+		if (locale.wantsCjk && !isCommitMessageInTargetCjk(text)) {
 			text = buildLocaleFallbackMessage(relativePaths, text, customPrompt) ?? text;
 		}
 		return formatCommitMessageStyle(text, relativePaths);

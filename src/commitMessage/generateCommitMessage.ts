@@ -11,6 +11,9 @@ const MAX_DIFF_CHARS = 40_000;
 const MAX_RULES_CHARS = 12_000;
 const MAX_RECENT_COMMITS = 8;
 const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u;
+/** Chinese verb labels that models sometimes prefix onto English bullet bodies. */
+const CJK_VERB_PREFIX_RE =
+	/^(新增|更新|优化|優化|实现|實現|调整|調整|完善|修复|修復|改进|改進|重构|重構)[:：\s]*/u;
 
 const RULE_MARKER_START = '# BEGIN Pink Hunk Git — commit message language (temporary)';
 const RULE_MARKER_END = '# END Pink Hunk Git — commit message language (temporary)';
@@ -55,12 +58,12 @@ export async function generateCommitMessageWithLanguageModel(
 		throw new Error('The language model returned an empty commit message.');
 	}
 
-	if (locale.wantsCjk && !CJK_RE.test(cleaned)) {
+	if (locale.wantsCjk && !isCommitMessageInTargetCjk(cleaned)) {
 		const rewritten = await requestCommitMessage(
 			model,
 			buildRewritePrompt(cleaned, locale, userPrompt)
 		);
-		if (rewritten && CJK_RE.test(rewritten)) {
+		if (rewritten && isCommitMessageInTargetCjk(rewritten)) {
 			cleaned = rewritten;
 		}
 	}
@@ -139,7 +142,7 @@ export async function rewriteCommitMessageForLocale(
 ): Promise<string | undefined> {
 	const userPrompt = (customPrompt || '').trim();
 	const locale = resolveEffectiveCommitMessageLocale(userPrompt);
-	if (!locale.wantsCjk || CJK_RE.test(message)) {
+	if (!locale.wantsCjk || isCommitMessageInTargetCjk(message)) {
 		return undefined;
 	}
 	if (typeof vscode.lm?.selectChatModels !== 'function') {
@@ -153,13 +156,13 @@ export async function rewriteCommitMessageForLocale(
 		model,
 		buildRewritePrompt(message, locale, userPrompt)
 	);
-	if (rewritten && CJK_RE.test(rewritten)) {
+	if (rewritten && isCommitMessageInTargetCjk(rewritten)) {
 		return rewritten;
 	}
 	return undefined;
 }
 
-/** Last-resort Chinese message from selected paths when AI stays English. */
+/** Last-resort Chinese message from selected paths when AI stays English / mixed. */
 export function buildLocaleFallbackMessage(
 	relativePaths: string[],
 	englishMessage?: string,
@@ -169,7 +172,7 @@ export function buildLocaleFallbackMessage(
 	if (!locale.wantsCjk) {
 		return undefined;
 	}
-	if (englishMessage && CJK_RE.test(englishMessage)) {
+	if (englishMessage && isCommitMessageInTargetCjk(englishMessage)) {
 		return formatCommitMessageStyle(englishMessage, relativePaths);
 	}
 
@@ -178,6 +181,65 @@ export function buildLocaleFallbackMessage(
 	const subject = inferChineseSubject(unique, englishMessage, parsed);
 	const bullets = buildChineseBullets(englishMessage, unique);
 	return formatCommitMessageStyle(`${subject}\n\n${bullets.join('\n')}`, relativePaths);
+}
+
+/**
+ * True when subject description and bullet bodies are actually Chinese,
+ * not merely sprinkled with tokens like 「新增」/「更新」 before English prose.
+ */
+export function isCommitMessageInTargetCjk(message: string): boolean {
+	const text = message.replace(/\r\n/g, '\n').trim();
+	if (!text) {
+		return false;
+	}
+	const lines = text
+		.split('\n')
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	if (!lines.length) {
+		return false;
+	}
+
+	const subjectDesc = stripConventionalCommitPrefix(lines[0]);
+	if (!isMostlyCjkPhrase(subjectDesc)) {
+		return false;
+	}
+
+	const bullets = lines.slice(1).filter((line) => /^[-*]\s+/.test(line));
+	if (bullets.length === 0) {
+		return true;
+	}
+
+	for (const bullet of bullets) {
+		const body = bullet.replace(/^[-*]\s+/, '').trim();
+		const withoutVerb = body.replace(CJK_VERB_PREFIX_RE, '').trim();
+		const check = withoutVerb || body;
+		if (!isMostlyCjkPhrase(check) && /[A-Za-z]{4,}/.test(check)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function stripConventionalCommitPrefix(subjectLine: string): string {
+	const match = subjectLine.match(/^[a-zA-Z]+(?:\([^)]*\))?\s*:\s*(.+)$/);
+	return (match ? match[1] : subjectLine).trim();
+}
+
+function isMostlyCjkPhrase(text: string): boolean {
+	const t = text.trim();
+	if (!t) {
+		return false;
+	}
+	const cjkChars = (t.match(
+		/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/gu
+	) || []).length;
+	if (cjkChars < 2) {
+		return false;
+	}
+	const latinChars = (t.match(/[A-Za-z]/g) || []).length;
+	// Allow a little Latin (API / file names), but descriptive text must be CJK-heavy.
+	return cjkChars >= Math.max(2, Math.ceil(latinChars * 0.6));
 }
 
 /**
@@ -301,9 +363,10 @@ function splitChineseClauses(description: string): string[] {
 
 function buildChineseBullets(englishMessage: string | undefined, paths: string[]): string[] {
 	const fromEnglish = extractEnglishBullets(englishMessage)
-		.map((line) => `- ${localizeBullet(line)}`)
-		.filter(Boolean);
-	if (fromEnglish.length > 0) {
+		.map((line) => localizeBullet(line))
+		.filter((line) => isMostlyCjkPhrase(line))
+		.map((line) => `- ${line}`);
+	if (fromEnglish.length >= 2) {
 		return fromEnglish.slice(0, 12);
 	}
 	return paths.slice(0, 10).map((p) => `- 更新 ${p}`);
@@ -321,9 +384,15 @@ function extractEnglishBullets(englishMessage?: string): string[] {
 		.filter(Boolean);
 }
 
-/** Always return Chinese text for a bullet. */
+/** Always return Chinese text for a bullet — never paste English prose. */
 function localizeBullet(line: string): string {
 	const lower = line.toLowerCase();
+	if (lower.includes('tooltip')) {
+		return '优化单元格悬停提示的展示与样式';
+	}
+	if (lower.includes('excel') && (lower.includes('cell') || lower.includes('sheet'))) {
+		return '完善 Excel 单元格交互体验';
+	}
 	if (lower.includes('generate') && lower.includes('commit')) {
 		return '新增/完善 AI 生成提交信息能力';
 	}
@@ -336,8 +405,8 @@ function localizeBullet(line: string): string {
 	if (lower.includes('task') || lower.includes('vscode')) {
 		return '优化 VS Code / Cursor 任务与调试配置';
 	}
-	if (lower.includes('css') || lower.includes('ui') || lower.includes('layout')) {
-		return '优化提交面板界面布局';
+	if (lower.includes('css') || lower.includes('ui') || lower.includes('layout') || lower.includes('styling')) {
+		return '优化界面布局与样式';
 	}
 	if (lower.includes('language') || lower.includes('locale') || lower.includes('chinese')) {
 		return '按系统语言生成中文提交说明';
@@ -348,26 +417,22 @@ function localizeBullet(line: string): string {
 	if (lower.includes('error handling') || lower.includes('backend') || lower.includes('logic')) {
 		return '完善生成提交信息的后端逻辑与错误处理';
 	}
-	if (lower.includes('added') || lower.includes('introduce')) {
-		return `新增：${stripLeadingVerb(line)}`;
+	if (lower.includes('event') && lower.includes('mouse')) {
+		return '重构鼠标事件处理逻辑';
 	}
-	if (lower.includes('updated') || lower.includes('update')) {
-		return `更新：${stripLeadingVerb(line)}`;
+	if (lower.includes('added') || lower.includes('introduce') || lower.includes('implemented')) {
+		return '新增相关功能';
+	}
+	if (lower.includes('updated') || lower.includes('update') || lower.includes('refactor')) {
+		return '更新并整理相关实现';
 	}
 	if (lower.includes('enhanced') || lower.includes('improve')) {
-		return `优化：${stripLeadingVerb(line)}`;
+		return '优化相关能力与体验';
 	}
-	if (lower.includes('implemented') || lower.includes('implement')) {
-		return `实现：${stripLeadingVerb(line)}`;
+	if (isMostlyCjkPhrase(line.replace(CJK_VERB_PREFIX_RE, '').trim() || line)) {
+		return line.replace(/^[-*]\s*/, '').trim();
 	}
-	return `调整：${line}`;
-}
-
-function stripLeadingVerb(line: string): string {
-	return line.replace(
-		/^(Added|Add|Updated|Update|Enhanced|Improve|Improved|Implemented|Implement|Introduced|Introduce)\s+/i,
-		''
-	);
+	return '完善相关改动';
 }
 
 export type CommitMessageLocale = {
@@ -419,7 +484,8 @@ function localeFromId(id: string): CommitMessageLocale {
 
 	if (lower.startsWith('zh')) {
 		const instruction = [
-			'【硬性要求】提交说明的标题描述与正文细项必须使用简体中文。',
+			'【硬性要求】提交说明的标题描述与每一条 bullet 正文必须全部使用简体中文。',
+			'严禁中英混写：禁止「新增: Implemented ...」「更新: Refactored ...」这类只把动词写成中文、其余仍是英文的写法。',
 			'Conventional Commit 的 type 与 scope 必须用英文 ASCII，例如 feat(commit): / fix(ui):，括号内禁止中文。',
 			'格式必须类似 Cursor 原生：第一行短标题，空一行，然后多条以 "- " 开头的细项（至少 2 条，覆盖主要改动）。',
 			'不要把所有内容挤在一行；不要省略 bullet 细项。',
@@ -434,7 +500,8 @@ function localeFromId(id: string): CommitMessageLocale {
 				'When generating a Git commit message for this repository:',
 				'- Use Conventional Commits with ENGLISH type and ENGLISH scope only, e.g. feat(commit): or fix(ui):',
 				'- NEVER put Chinese inside the parentheses scope. Wrong: feat(提交信息生成):  ... Right: feat(commit): ...',
-				'- Write the subject description and ALL body bullets in Simplified Chinese.',
+				'- Write the subject description and ALL body bullet text in Simplified Chinese sentences.',
+				'- FORBIDDEN mixed style such as "- 新增: Implemented a tooltip..." — the whole bullet must be Chinese.',
 				'- Match Cursor native style: short subject line, blank line, then multiple "- " bullet details (2+ bullets).',
 				'- Do not collapse everything into one long sentence without bullets.',
 				'- Example:',
@@ -442,7 +509,7 @@ function localeFromId(id: string): CommitMessageLocale {
 				'',
 				'  - 为提交面板增加 AI 生成按钮',
 				'  - 优化输入框拖动手柄与样式',
-				'  - 按系统语言生成简体中文说明',
+				'  - 按提示词强制生成简体中文说明',
 			].join('\n'),
 		};
 	}
@@ -523,7 +590,13 @@ function inferChineseSubject(
 	if (joined.includes('commit') || eng.includes('commit message')) {
 		return `${type}(${scope}): 改进提交信息生成与面板交互`;
 	}
-	if (joined.includes('.css') || joined.includes('ui') || eng.includes('ui')) {
+	if (eng.includes('tooltip') || joined.includes('tooltip')) {
+		return `${type}(${scope}): 优化单元格悬停提示与样式`;
+	}
+	if (joined.includes('excel') || eng.includes('excel')) {
+		return `${type}(${scope}): 完善 Excel 视图交互体验`;
+	}
+	if (joined.includes('.css') || joined.includes('ui') || eng.includes('ui') || eng.includes('styling')) {
 		return `${type}(${scope}): 优化界面布局与交互`;
 	}
 	if (paths.length === 1) {
@@ -655,6 +728,7 @@ function buildRewritePrompt(
 		'Rewrite the following Git commit message into the required target language and format.',
 		'Keep the same meaning and keep a Cursor-native structure: short subject, blank line, then multiple "- " bullet details.',
 		'type(scope) must use English ASCII only, e.g. feat(commit): — never Chinese inside parentheses.',
+		'Subject description and EVERY bullet body must be fully in the target language — no mixed Chinese labels + English sentences.',
 		'Return ONLY the rewritten commit message. No markdown fences, no quotes, no preamble.',
 		'',
 		...customSection,
