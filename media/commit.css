@@ -620,9 +620,22 @@ body.sidebar-mode .file-list {
 
 .repo-subgroup-name {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.repo-subgroup-status-loading {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.2;
+  opacity: 0.7;
+  font-style: italic;
+  white-space: nowrap;
+  color: var(--vscode-descriptionForeground, var(--fg));
 }
 
 .repo-subgroup-count {

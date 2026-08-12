@@ -2,7 +2,7 @@
   "name": "pink-hunk-git",
   "displayName": "Pink Hunk Git",
   "description": "IDEA-like Git commit panel for VS Code",
-  "version": "2.0.19",
+  "version": "2.0.20",
   "publisher": "FaaTang",
   "icon": "media/icon.png",
   "license": "MIT",

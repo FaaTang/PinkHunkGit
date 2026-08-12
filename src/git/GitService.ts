@@ -118,6 +118,8 @@ export class GitService implements vscode.Disposable {
 	private refreshInFlight: Promise<void> | undefined;
 	private refreshQueued = false;
 	private discoverReposInFlight: Promise<string[]> | undefined;
+	/** Roots currently waiting on / running `repo.status()` (per-repo loading UI). */
+	private statusLoadingRoots = new Set<string>();
 
 	/**
 	 * Ready as soon as vscode.git API is usable so the panel can paint from
@@ -454,13 +456,17 @@ export class GitService implements vscode.Disposable {
 		// Cap concurrency: openRepository triggers git status internally; unbounded
 		// parallelism thrashes disks, serial open adds up to multi-second stalls.
 		await this.mapPool(toOpen, 4, async (root) => {
+			this.markStatusLoading([root]);
 			try {
 				const repo = await this.api!.openRepository!(vscode.Uri.file(root));
 				if (repo) {
 					openedRoots.push(path.normalize(repo.rootUri.fsPath));
+				} else {
+					this.clearStatusLoading([root]);
 				}
 			} catch {
 				// Not a usable git root (or Git extension rejected it).
+				this.clearStatusLoading([root]);
 			}
 		});
 		logExtension(
@@ -1113,7 +1119,41 @@ export class GitService implements vscode.Disposable {
 			ignored: this.ignoredByRoot.get(root) ?? [],
 			conflictFiles,
 			syncMode,
+			statusLoading: this.isRepoStatusLoading(root),
 		};
+	}
+
+	/** True while this repo root is queued for or running a status refresh. */
+	isRepoStatusLoading(rootPath: string): boolean {
+		return this.statusLoadingRoots.has(normalizePathKey(rootPath));
+	}
+
+	private markStatusLoading(roots: string[]): void {
+		let changed = false;
+		for (const root of roots) {
+			const key = normalizePathKey(root);
+			if (!key || this.statusLoadingRoots.has(key)) {
+				continue;
+			}
+			this.statusLoadingRoots.add(key);
+			changed = true;
+		}
+		if (changed) {
+			this.scheduleSnapshot();
+		}
+	}
+
+	private clearStatusLoading(roots: string[]): void {
+		let changed = false;
+		for (const root of roots) {
+			const key = normalizePathKey(root);
+			if (this.statusLoadingRoots.delete(key)) {
+				changed = true;
+			}
+		}
+		if (changed) {
+			this.scheduleSnapshot();
+		}
 	}
 
 	/** Refresh ignored-file cache (traditional mode: dirs as single entries). */
@@ -1259,6 +1299,8 @@ export class GitService implements vscode.Disposable {
 		}
 		this.pendingStatusRoots.clear();
 		this.pendingIgnoredRoots.clear();
+		const allRoots = (this.api?.repositories ?? []).map((r) => r.rootUri.fsPath);
+		this.markStatusLoading(allRoots);
 		if (this.refreshTimer) {
 			clearTimeout(this.refreshTimer);
 			this.refreshTimer = undefined;
@@ -1280,6 +1322,8 @@ export class GitService implements vscode.Disposable {
 			if (options?.ignored) {
 				this.pendingIgnoredAll = true;
 			}
+			const allRoots = (this.api?.repositories ?? []).map((r) => r.rootUri.fsPath);
+			this.markStatusLoading(allRoots);
 		} else {
 			const needsIgnored = options?.ignored || pathNeedsIgnoredRefresh(uri.fsPath);
 			// Ignore .git chatter (index, FETCH_HEAD, …) except exclude-style paths.
@@ -1293,6 +1337,7 @@ export class GitService implements vscode.Disposable {
 			const root = repo.rootUri.fsPath;
 			if (!isGitInternalPath(uri.fsPath)) {
 				this.pendingStatusRoots.add(root);
+				this.markStatusLoading([root]);
 			}
 			if (needsIgnored) {
 				this.pendingIgnoredRoots.add(root);
@@ -1319,14 +1364,17 @@ export class GitService implements vscode.Disposable {
 		if (this.refreshSuspended > 0 || !roots.length) {
 			return;
 		}
+		const queued: string[] = [];
 		for (const root of roots) {
 			if (root.trim()) {
 				this.pendingStatusRoots.add(root);
+				queued.push(root);
 			}
 		}
 		if (!this.pendingStatusAll && !this.pendingStatusRoots.size) {
 			return;
 		}
+		this.markStatusLoading(queued);
 		this.armRefreshTimer();
 	}
 
@@ -1386,6 +1434,7 @@ export class GitService implements vscode.Disposable {
 			if (!this.api?.repositories.length) {
 				this.bindRepositoryEvents();
 				this.ignoredByRoot.clear();
+				this.statusLoadingRoots.clear();
 				this._onDidChange.fire();
 				return;
 			}
@@ -1395,17 +1444,23 @@ export class GitService implements vscode.Disposable {
 				: this.api.repositories.filter((repo) =>
 						statusRoots.some((root) => pathsEqual(repo.rootUri.fsPath, root))
 					);
+			const loadingRoots = repos.map((repo) => repo.rootUri.fsPath);
+			this.markStatusLoading(loadingRoots);
 
 			// Note: do NOT call the built-in 'git.refresh' command here. Without a repository
 			// argument it opens a "Choose a repository" quick pick in multi-repo workspaces.
-			if (repos.length) {
-				await Promise.all(repos.map((repo) => repo.status().catch(() => undefined)));
-			}
+			try {
+				if (repos.length) {
+					await Promise.all(repos.map((repo) => repo.status().catch(() => undefined)));
+				}
 
-			if (ignoredAll) {
-				await this.refreshIgnoredFiles();
-			} else if (ignoredRoots.length) {
-				await this.refreshIgnoredFiles(ignoredRoots);
+				if (ignoredAll) {
+					await this.refreshIgnoredFiles();
+				} else if (ignoredRoots.length) {
+					await this.refreshIgnoredFiles(ignoredRoots);
+				}
+			} finally {
+				this.clearStatusLoading(loadingRoots);
 			}
 
 			this.bindRepositoryEvents();

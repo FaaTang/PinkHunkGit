@@ -2929,14 +2929,23 @@
     name.className = 'repo-subgroup-name';
     name.textContent = repo.name;
 
-    const count = document.createElement('span');
-    count.className = 'repo-subgroup-count';
-    count.textContent = formatGroupCount(selectedCount, items.length);
-
     head.appendChild(selectAll);
     head.appendChild(chevron);
     head.appendChild(colorDot);
     head.appendChild(name);
+
+    if (repo.statusLoading) {
+      const statusHint = document.createElement('span');
+      statusHint.className = 'repo-subgroup-status-loading';
+      statusHint.textContent = 'git status loading…';
+      statusHint.title = 'Running git status for this repository';
+      head.appendChild(statusHint);
+    }
+
+    const count = document.createElement('span');
+    count.className = 'repo-subgroup-count';
+    count.textContent = formatGroupCount(selectedCount, items.length);
+
     head.appendChild(count);
 
     if (repo.branch) {
