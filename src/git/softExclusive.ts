@@ -91,7 +91,7 @@ async function applySoftExclusive(
 	if (announce && context.workspaceState.get<boolean>(NOTIFIED_KEY) !== true) {
 		await context.workspaceState.update(NOTIFIED_KEY, true);
 		showTimedInfoMessage(
-			'Pink Hunk Git soft exclusive: disabled built-in Git autofetch/autorefresh. Your Commit panel still refreshes on file changes. Toggle via setting “Soft Exclusive Git”.'
+			'Pink Hunk Git soft exclusive: disabled built-in Git autofetch/autorefresh. Commit panel refreshes on file changes and polls the active repo while visible. Toggle via setting “Soft Exclusive Git”.'
 		);
 	}
 }

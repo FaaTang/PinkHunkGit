@@ -86,6 +86,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			clearTimeout(this.ignoredRefreshTimer);
 			this.ignoredRefreshTimer = undefined;
 		}
+		this.git.setCommitPanelVisible(false);
 		this.resolveUpdateAll(undefined);
 		this.resolveFastPushCommit(undefined);
 		this.fastPushConfirmOpen = false;
@@ -162,6 +163,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		_token: vscode.CancellationToken
 	): void {
 		this.view = webviewView;
+		this.git.setCommitPanelVisible(webviewView.visible);
 
 		webviewView.webview.options = {
 			enableScripts: true,
@@ -179,6 +181,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		this.disposables.push(
 			webviewView.webview.onDidReceiveMessage((msg: WebviewToHost) => this.onMessage(msg)),
 			webviewView.onDidChangeVisibility(() => {
+				this.git.setCommitPanelVisible(webviewView.visible);
 				if (!webviewView.visible) {
 					return;
 				}
@@ -218,6 +221,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		await vscode.commands.executeCommand(CommitViewProvider.activityBarId);
 		if (this.view) {
 			this.view.show(true);
+			this.git.setCommitPanelVisible(true);
 		} else {
 			await vscode.commands.executeCommand(`${CommitViewProvider.viewType}.focus`);
 		}

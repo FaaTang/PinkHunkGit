@@ -114,7 +114,7 @@
         "copyIdeaGitUi.softExclusiveGit": {
           "type": "boolean",
           "default": true,
-          "description": "When enabled, disables built-in Git autofetch and autorefresh in the current workspace so Pink Hunk Git is less likely to hit index.lock races. Keeps vscode.git enabled (required by this extension). The Commit panel still refreshes on file changes via its own watchers."
+          "description": "When enabled, disables built-in Git autofetch and autorefresh in the current workspace so Pink Hunk Git is less likely to hit index.lock races. Keeps vscode.git enabled (required by this extension). The Commit panel refreshes on file changes via its own watchers, and polls the active repo while the panel is visible."
         }
       }
     },

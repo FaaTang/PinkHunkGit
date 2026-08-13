@@ -16,6 +16,7 @@ import {
 	setUserGitLogging,
 } from './gitOutput';
 import { isLikelyCloneUrl, parseCloneUrl } from './cloneUrl';
+import { isSoftExclusiveEnabled, SOFT_EXCLUSIVE_SETTING } from './softExclusive';
 import {
 	ChangeItem,
 	CommitLogItem,
@@ -107,6 +108,11 @@ export class GitService implements vscode.Disposable {
 	/** True while background openRepository / nested root scan is still running. */
 	private discovering = false;
 	private fileWatcherTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Commit panel visible — soft-exclusive poll only runs while true. */
+	private commitPanelVisible = false;
+	/** Low-frequency status while soft exclusive replaces git.autorefresh. */
+	private softRefreshPollTimer: ReturnType<typeof setInterval> | undefined;
+	private static readonly SOFT_REFRESH_POLL_MS = 10_000;
 	private pendingDiffAdvance: { repoRoot: string; path: string } | undefined;
 	private pendingDiffRetreat: { repoRoot: string; path: string } | undefined;
 	private diffNavDecorationType: vscode.TextEditorDecorationType | undefined;
@@ -218,18 +224,26 @@ export class GitService implements vscode.Disposable {
 			this._onDidChange.fire();
 		}
 		// openRepository already ran status internally — only re-status what we just opened.
-		// If vscode.git already had every root, skip startup status entirely.
+		// Soft exclusive disables vscode.git autorefresh, so cached state may be stale:
+		// always catch up the active repo even when nothing was newly opened.
 		if (openedRoots.length) {
 			logExtension(
 				`Git init: status ${openedRoots.length} newly opened repo(s) only | since start: ${Date.now() - t0}ms`
 			);
 			this.scheduleRootsStatus(openedRoots);
+		} else if (isSoftExclusiveEnabled()) {
+			logExtension(
+				`Git init: soft exclusive catch-up status (active repo) | since start: ${Date.now() - t0}ms`
+			);
+			this.scheduleActiveRepoStatus();
 		} else {
 			logExtension(
 				`Git init: skip startup status (repos already open in vscode.git) | since start: ${Date.now() - t0}ms`
 			);
 		}
-		this.scheduleFileWatchers(3_000);
+		// Soft exclusive relies on our watchers — mount sooner than the deferred cold start.
+		this.scheduleFileWatchers(isSoftExclusiveEnabled() ? 500 : 3_000);
+		this.syncSoftRefreshPoll();
 		logExtension(`Git init: background warmup scheduled | since start: ${Date.now() - t0}ms`);
 	}
 
@@ -313,6 +327,35 @@ export class GitService implements vscode.Disposable {
 		this._onDidChange.fire();
 	}
 
+	/**
+	 * Soft exclusive replaces git.autorefresh: poll the active repo while the
+	 * Commit panel is visible so missed watcher events still surface untracked files.
+	 */
+	setCommitPanelVisible(visible: boolean): void {
+		this.commitPanelVisible = visible;
+		this.syncSoftRefreshPoll();
+	}
+
+	private syncSoftRefreshPoll(): void {
+		const want = this.commitPanelVisible && isSoftExclusiveEnabled();
+		if (want) {
+			if (this.softRefreshPollTimer) {
+				return;
+			}
+			this.softRefreshPollTimer = setInterval(() => {
+				if (this.refreshSuspended > 0 || this.initState !== 'ready') {
+					return;
+				}
+				this.scheduleActiveRepoStatus();
+			}, GitService.SOFT_REFRESH_POLL_MS);
+			return;
+		}
+		if (this.softRefreshPollTimer) {
+			clearInterval(this.softRefreshPollTimer);
+			this.softRefreshPollTimer = undefined;
+		}
+	}
+
 	private setupEditorListeners(): void {
 		if (this.editorListenersSetup) {
 			return;
@@ -338,6 +381,31 @@ export class GitService implements vscode.Disposable {
 					this.scheduleRefresh(doc.uri);
 				}
 			}),
+			// Explorer / VS Code FS API creates are more reliable than **/* watchers on Windows.
+			vscode.workspace.onDidCreateFiles((e) => {
+				for (const uri of e.files) {
+					if (uri.scheme === 'file') {
+						this.scheduleRefresh(uri, { ignored: true });
+					}
+				}
+			}),
+			vscode.workspace.onDidDeleteFiles((e) => {
+				for (const uri of e.files) {
+					if (uri.scheme === 'file') {
+						this.scheduleRefresh(uri, { ignored: true });
+					}
+				}
+			}),
+			vscode.workspace.onDidRenameFiles((e) => {
+				for (const file of e.files) {
+					if (file.oldUri.scheme === 'file') {
+						this.scheduleRefresh(file.oldUri, { ignored: true });
+					}
+					if (file.newUri.scheme === 'file') {
+						this.scheduleRefresh(file.newUri, { ignored: true });
+					}
+				}
+			}),
 			vscode.workspace.onDidChangeWorkspaceFolders(() => {
 				void this.ensureWorkspaceRepositoriesDiscovered().then((openedRoots) => {
 					this.bindRepositoryEvents();
@@ -346,6 +414,11 @@ export class GitService implements vscode.Disposable {
 					}
 					this._onDidChange.fire();
 				});
+			}),
+			vscode.workspace.onDidChangeConfiguration((e) => {
+				if (e.affectsConfiguration(SOFT_EXCLUSIVE_SETTING)) {
+					this.syncSoftRefreshPoll();
+				}
 			})
 		);
 	}
@@ -381,6 +454,10 @@ export class GitService implements vscode.Disposable {
 				watcher.onDidCreate((uri) => this.scheduleRefresh(uri, { ignored: true })),
 				watcher.onDidDelete((uri) => this.scheduleRefresh(uri, { ignored: true }))
 			);
+		}
+		// Catch files created during the deferred watcher gap (esp. soft exclusive).
+		if (isSoftExclusiveEnabled()) {
+			this.scheduleActiveRepoStatus();
 		}
 	}
 
@@ -621,6 +698,10 @@ export class GitService implements vscode.Disposable {
 		if (this.fileWatcherTimer) {
 			clearTimeout(this.fileWatcherTimer);
 			this.fileWatcherTimer = undefined;
+		}
+		if (this.softRefreshPollTimer) {
+			clearInterval(this.softRefreshPollTimer);
+			this.softRefreshPollTimer = undefined;
 		}
 		this.repoDisposables.forEach((d) => d.dispose());
 		this.disposables.forEach((d) => d.dispose());
@@ -1333,7 +1414,7 @@ export class GitService implements vscode.Disposable {
 			if (isGitInternalPath(uri.fsPath) && !needsIgnored) {
 				return;
 			}
-			const repo = this.api?.getRepository(uri);
+			const repo = this.resolveRepoForUri(uri);
 			if (!repo) {
 				return;
 			}
@@ -3494,6 +3575,35 @@ export class GitService implements vscode.Disposable {
 			return undefined;
 		}
 		return this.api.getRepository(uri) ?? undefined;
+	}
+
+	/**
+	 * Resolve repo for a path even when vscode.git has not mapped the URI yet
+	 * (common for brand-new untracked files before the first status).
+	 * Prefer the longest matching root so nested repos win over the parent.
+	 */
+	private resolveRepoForUri(uri: vscode.Uri): Repository | undefined {
+		const fromApi = this.repoForUri(uri);
+		if (fromApi) {
+			return fromApi;
+		}
+		if (!this.api) {
+			return undefined;
+		}
+		let best: Repository | undefined;
+		let bestLen = -1;
+		for (const repo of this.api.repositories) {
+			const root = repo.rootUri.fsPath;
+			if (!isPathInsideRoot(uri.fsPath, root)) {
+				continue;
+			}
+			const len = normalizePathKey(root).length;
+			if (len > bestLen) {
+				best = repo;
+				bestLen = len;
+			}
+		}
+		return best;
 	}
 
 	private requireActiveRepo(): Repository {
