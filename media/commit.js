@@ -2156,14 +2156,16 @@
 
   function getMergedChanges(active) {
     const map = new Map();
+    // Prefer working-tree entry when both exist (MM): checkbox commit re-adds from disk,
+    // so the list must keep representing the on-disk change the user sees as checked.
+    for (const item of active.staged) {
+      map.set(item.path, { ...item, staged: true });
+    }
     for (const item of active.unstaged) {
       if (item.status === '?') {
         continue;
       }
       map.set(item.path, { ...item, staged: false });
-    }
-    for (const item of active.staged) {
-      map.set(item.path, { ...item, staged: true });
     }
     return [...map.values()].sort((a, b) => a.path.localeCompare(b.path));
   }
@@ -3423,7 +3425,15 @@
     }
   });
 
+  function anyRepoStatusLoading() {
+    return allRepos().some((repo) => !!repo.statusLoading);
+  }
+
   function runCommit() {
+    if (anyRepoStatusLoading()) {
+      showFormError('Git status is still loading. Wait for it to finish, then commit so every checked file is included.');
+      return;
+    }
     const message = validateBeforeCommit();
     if (!message) {
       return;
@@ -3437,6 +3447,10 @@
 
   function runCommitAndPush() {
     closeCommitPushMenu();
+    if (anyRepoStatusLoading()) {
+      showFormError('Git status is still loading. Wait for it to finish, then commit so every checked file is included.');
+      return;
+    }
     if (!hasCommitCandidates()) {
       showFormError('');
       post({ type: 'openPushDialog' });
@@ -3700,6 +3714,10 @@
     if (generatingMessage || workspace.busy) {
       return;
     }
+    if (anyRepoStatusLoading()) {
+      showFormError('Git status is still loading. Wait for it to finish, then Fast Push so every checked file is included.');
+      return;
+    }
     if (!hasCommitCandidates()) {
       showFormError('');
       post({ type: 'openPushDialog' });
@@ -3935,6 +3953,10 @@
       return;
     }
     setCommitFormExpanded(true);
+    if (anyRepoStatusLoading()) {
+      showFormError('Git status is still loading. Wait for it to finish, then generate so every checked file is included.');
+      return;
+    }
     if (!totalIncludableCount()) {
       showFormError('Select files to include before generating a commit message.');
       return;

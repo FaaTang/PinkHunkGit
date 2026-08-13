@@ -1075,10 +1075,10 @@ export class GitService implements vscode.Disposable {
 		const trackedWorking = repo.state.workingTreeChanges.filter(
 			(c) => c.status !== Status.UNTRACKED
 		);
+		// Keep WT entries even when the same path is already staged (MM). Hiding them made the
+		// panel look "clean/staged" while disk still differed — Commit then missed later edits.
 		const unstaged = dedupeByPath(
-			[...trackedWorking, ...repo.state.mergeChanges]
-				.map((c) => this.toChangeItem(c, root, false))
-				.filter((item) => !staged.some((s) => pathsEqual(s.path, item.path)))
+			[...trackedWorking, ...repo.state.mergeChanges].map((c) => this.toChangeItem(c, root, false))
 		);
 
 		const knownPaths = new Set(
@@ -1532,14 +1532,22 @@ export class GitService implements vscode.Disposable {
 		);
 	}
 
-	/** Apply Commit-panel checkboxes to the Git index right before committing. */
+	/**
+	 * Apply Commit-panel checkboxes to the Git index (IDEA-style: WYSIWYG).
+	 * Always re-adds checked paths from disk so a stale index (e.g. after Generate Message
+	 * or mid-flight file writes) cannot leave working-tree edits out of the next commit.
+	 */
 	async applyCommitSelection(
-		checked: Array<{ repoRoot: string; path: string }>
+		checked: Array<{ repoRoot: string; path: string }>,
+		options?: { force?: boolean }
 	): Promise<void> {
 		const workspace = this.getWorkspaceSnapshot();
 		if (!workspace.ok) {
 			throw new Error(workspace.error ?? 'Repository unavailable');
 		}
+
+		const force = !!options?.force;
+		const rootsTouched = new Set<string>();
 
 		for (const snap of workspace.repositories) {
 			if (!snap.ok) {
@@ -1549,44 +1557,147 @@ export class GitService implements vscode.Disposable {
 			const checkedEntries = checked.filter((entry) =>
 				pathsEqual(entry.repoRoot, snap.rootPath)
 			);
-			const checkedSet = new Set(checkedEntries.map((entry) => entry.path.toLowerCase()));
+			const checkedSet = new Set(
+				checkedEntries.map((entry) => normalizePathKey(entry.path.replace(/\\/g, '/')))
+			);
 			const repo = this.requireRepoByRoot(snap.rootPath);
-			const toStage: string[] = [];
+			const relativeToStage: string[] = [];
 			const toUnstage: string[] = [];
 			const seenStage = new Set<string>();
 
-			// Always re-add checked files (save → add) so the index matches the working tree.
-			// Otherwise a file staged earlier (e.g. during Generate Message) can keep a stale
-			// index blob while later edits remain unstaged — first Commit only gets the old
-			// half and the user has to commit again.
 			for (const entry of checkedEntries) {
-				const key = entry.path.toLowerCase();
+				const rel = entry.path.replace(/\\/g, '/');
+				const key = normalizePathKey(rel);
 				if (seenStage.has(key)) {
 					continue;
 				}
 				seenStage.add(key);
-				toStage.push(path.join(snap.rootPath, ...entry.path.replace(/\\/g, '/').split('/')));
+				relativeToStage.push(rel);
 			}
 			for (const item of snap.staged) {
-				const key = item.path.toLowerCase();
+				const key = normalizePathKey(item.path);
 				if (checkedSet.has(key)) {
 					continue;
 				}
 				toUnstage.push(item.fsPath);
 			}
 
-			if (toStage.length) {
-				for (const fsPath of toStage) {
-					await this.ensureSaved(fsPath);
+			if (relativeToStage.length) {
+				for (const rel of relativeToStage) {
+					await this.ensureSaved(path.join(snap.rootPath, ...rel.split('/')));
 				}
-				await this.runGitApi(repo, 'add', this.formatPaths(toStage), () => repo.add(toStage));
+				// Prefer `git add --` with relative paths: vscode `repo.add` has dropped
+				// some paths in multi-root / binary refresh races, which breaks WYSIWYG.
+				const addArgs = force ? ['add', '-f', '--'] : ['add', '--'];
+				for (const args of chunkGitArgs(addArgs, relativeToStage)) {
+					await this.execGitWithIndexLockRetry(snap.rootPath, args);
+				}
+				rootsTouched.add(snap.rootPath);
 			}
 			if (toUnstage.length) {
 				await this.runGitApi(repo, 'revert (unstage)', this.formatPaths(toUnstage), () =>
 					repo.revert(toUnstage)
 				);
+				rootsTouched.add(snap.rootPath);
 			}
 		}
+
+		if (!rootsTouched.size) {
+			return;
+		}
+
+		await Promise.all(
+			[...rootsTouched].map(async (root) => {
+				const repo = this.requireRepoByRoot(root);
+				await this.runGitApi(repo, 'status', '', () => repo.status().catch(() => undefined));
+			})
+		);
+
+		const stillDirty = await this.findCheckedPathsStillUnstaged(checked);
+		if (!stillDirty.length) {
+			return;
+		}
+
+		// One retry covers index.lock / watcher races right after external writes (icons, etc.).
+		for (const group of this.groupSelectedPathsByRepo(stillDirty)) {
+			const root = group.repo.rootUri.fsPath;
+			for (const rel of group.relativePaths) {
+				await this.ensureSaved(path.join(root, ...rel.replace(/\\/g, '/').split('/')));
+			}
+			const addArgs = force ? ['add', '-f', '--'] : ['add', '--'];
+			for (const args of chunkGitArgs(addArgs, group.relativePaths.map((p) => p.replace(/\\/g, '/')))) {
+				await this.execGitWithIndexLockRetry(root, args);
+			}
+			await this.runGitApi(group.repo, 'status', '', () => group.repo.status().catch(() => undefined));
+		}
+
+		const stillDirtyAfterRetry = await this.findCheckedPathsStillUnstaged(checked);
+		if (stillDirtyAfterRetry.length) {
+			const sample = stillDirtyAfterRetry
+				.slice(0, 8)
+				.map((e) => e.path)
+				.join(', ');
+			const more =
+				stillDirtyAfterRetry.length > 8 ? ` (+${stillDirtyAfterRetry.length - 8} more)` : '';
+			throw new Error(
+				`Checked files were not fully staged (working tree still differs from index): ${sample}${more}. Retry Commit.`
+			);
+		}
+	}
+
+	/**
+	 * Stage checkbox selection, then commit. Always re-applies selection immediately before
+	 * commit so Fast Push / Generate Message cannot leave a stale index.
+	 */
+	async commitSelection(
+		message: string,
+		checkedChanges: Array<{ repoRoot: string; path: string }>,
+		unversionedPaths?: Array<{ repoRoot: string; path: string }>
+	): Promise<CommitRepoResult[]> {
+		const all = [...checkedChanges, ...(unversionedPaths ?? [])];
+		if (!all.length) {
+			throw new Error('No files selected for commit.');
+		}
+		// Include unversioned/ignored with -f in the same pass so we never unstage
+		// tracked checked files while adding unversioned ones.
+		await this.applyCommitSelection(all, { force: (unversionedPaths?.length ?? 0) > 0 });
+		return this.commitAllStaged(message);
+	}
+
+	/** Checked paths whose working tree still differs from the index (add did not stick). */
+	private async findCheckedPathsStillUnstaged(
+		checked: Array<{ repoRoot: string; path: string }>
+	): Promise<Array<{ repoRoot: string; path: string }>> {
+		const dirty: Array<{ repoRoot: string; path: string }> = [];
+		const grouped = this.groupSelectedPathsByRepo(checked);
+		for (const group of grouped) {
+			const root = group.repo.rootUri.fsPath;
+			for (const args of chunkGitArgs(['status', '--porcelain=v1', '--'], group.relativePaths)) {
+				const raw = await this.queryGit(root, args);
+				if (!raw) {
+					continue;
+				}
+				for (const line of raw.split(/\r?\n/)) {
+					if (line.length < 4) {
+						continue;
+					}
+					const wt = line.charAt(1);
+					if (wt === ' ' || wt === '!') {
+						continue;
+					}
+					let rel = unescapeGitPath(line.slice(3));
+					if (rel.includes(' -> ')) {
+						rel = rel.split(' -> ').pop() || rel;
+					}
+					rel = rel.replace(/\\/g, '/').replace(/\/+$/, '');
+					if (!rel) {
+						continue;
+					}
+					dirty.push({ repoRoot: root, path: rel });
+				}
+			}
+		}
+		return dirty;
 	}
 
 	/**
@@ -1979,14 +2090,15 @@ export class GitService implements vscode.Disposable {
 
 	private getTrackedChangeItems(snap: RepoSnapshot): ChangeItem[] {
 		const map = new Map<string, ChangeItem>();
+		for (const item of snap.staged) {
+			map.set(item.path.toLowerCase(), { ...item, staged: true });
+		}
+		// Prefer WT when both staged + unstaged exist (same as commit.js getMergedChanges).
 		for (const item of snap.unstaged) {
 			if (item.status === '?') {
 				continue;
 			}
 			map.set(item.path.toLowerCase(), { ...item, staged: false });
-		}
-		for (const item of snap.staged) {
-			map.set(item.path.toLowerCase(), { ...item, staged: true });
 		}
 		return [...map.values()];
 	}

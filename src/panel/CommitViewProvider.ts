@@ -355,7 +355,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 		const fsPaths = paths.map(({ repoRoot, path: rel }) => this.toFsPath(repoRoot, rel));
-		await this.git.stageMany(fsPaths);
+		await this.git.stageMany(fsPaths, { force: true });
 	}
 
 	private async generateCommitMessage(
@@ -490,7 +490,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		completeStep();
 
 		report('Committing…');
-		const committed = await this.git.commitAllStaged(message);
+		// Re-apply checkbox selection immediately before commit (files may change during AI / prompt).
+		const committed = await this.git.commitSelection(message, checkedChanges, unversionedPaths);
 		showTimedInfoMessage(formatCommittedMessage(committed));
 		this.post({ type: 'clearMessage' });
 		completeStep();
@@ -969,18 +970,22 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'commit':
 					await this.withBusy(async () => {
-						await this.git.applyCommitSelection(msg.checkedChanges ?? []);
-						await this.stageUnversionedPaths(msg.unversionedPaths);
-						const committed = await this.git.commitAllStaged(msg.message);
+						const committed = await this.git.commitSelection(
+							msg.message,
+							msg.checkedChanges ?? [],
+							msg.unversionedPaths
+						);
 						showTimedInfoMessage(formatCommittedMessage(committed));
 						this.post({ type: 'clearMessage' });
 					});
 					break;
 				case 'commitAndPush':
 					await this.withBusy(async () => {
-						await this.git.applyCommitSelection(msg.checkedChanges ?? []);
-						await this.stageUnversionedPaths(msg.unversionedPaths);
-						const committed = await this.git.commitAllStaged(msg.message);
+						const committed = await this.git.commitSelection(
+							msg.message,
+							msg.checkedChanges ?? [],
+							msg.unversionedPaths
+						);
 						showTimedInfoMessage(formatCommittedMessage(committed));
 						this.post({ type: 'clearMessage' });
 						await this.pushDialog.show({
