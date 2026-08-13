@@ -68,6 +68,13 @@ export async function generateCommitMessageWithLanguageModel(
 		}
 	}
 
+	if (isGenericFileCountMessage(cleaned)) {
+		return (
+			buildLocaleFallbackMessage(relativePaths, cleaned, userPrompt, diffs) ||
+			formatCommitMessageStyle(cleaned, relativePaths, diffs)
+		);
+	}
+
 	return cleaned;
 }
 
@@ -167,25 +174,49 @@ export async function rewriteCommitMessageForLocale(
 	return undefined;
 }
 
-/** Last-resort Chinese message from selected paths when AI stays English / mixed. */
+/** Last-resort Chinese message from selected paths / diffs when AI stays English / mixed. */
 export function buildLocaleFallbackMessage(
 	relativePaths: string[],
 	englishMessage?: string,
-	customPrompt?: string
+	customPrompt?: string,
+	diffs?: string
 ): string | undefined {
 	const locale = resolveEffectiveCommitMessageLocale(customPrompt);
 	if (!locale.wantsCjk) {
 		return undefined;
 	}
-	if (englishMessage && isCommitMessageInTargetCjk(englishMessage)) {
-		return formatCommitMessageStyle(englishMessage, relativePaths);
+	if (
+		englishMessage &&
+		isCommitMessageInTargetCjk(englishMessage) &&
+		!isGenericFileCountMessage(englishMessage)
+	) {
+		return formatCommitMessageStyle(englishMessage, relativePaths, diffs);
 	}
 
 	const unique = [...new Set(relativePaths.map((p) => p.replace(/\\/g, '/')))];
 	const parsed = parseConventionalCommit(englishMessage || '');
-	const subject = inferChineseSubject(unique, englishMessage, parsed);
-	const bullets = buildChineseBullets(englishMessage, unique);
-	return formatCommitMessageStyle(`${subject}\n\n${bullets.join('\n')}`, relativePaths);
+	const subject = inferChineseSubject(unique, englishMessage, parsed, diffs);
+	const bullets = buildChineseBullets(englishMessage, unique, diffs);
+	return formatCommitMessageStyle(`${subject}\n\n${bullets.join('\n')}`, relativePaths, diffs);
+}
+
+/** True when the message is a useless "updated N files" style summary. */
+export function isGenericFileCountMessage(message: string): boolean {
+	const text = message.replace(/\r\n/g, '\n').trim();
+	if (!text) {
+		return false;
+	}
+	const subject = stripConventionalCommitPrefix(text.split('\n')[0] || text);
+	if (/^(更新|修改|改动)\s*\d+\s*个文件/.test(subject)) {
+		return true;
+	}
+	if (/^(update[sd]?|change[sd]?|modify|modified)\s+\d+\s+files?\b/i.test(subject)) {
+		return true;
+	}
+	if (/^(更新|修改)\s*多个文件/.test(subject)) {
+		return true;
+	}
+	return false;
 }
 
 /**
@@ -252,10 +283,22 @@ function isMostlyCjkPhrase(text: string): boolean {
  * - Keep type(scope) in English ASCII, e.g. feat(commit):
  * - Prefer a short Chinese subject + bullet body (Cursor-native style)
  */
-export function formatCommitMessageStyle(message: string, relativePaths: string[] = []): string {
+export function formatCommitMessageStyle(
+	message: string,
+	relativePaths: string[] = [],
+	diffs?: string
+): string {
 	let text = message.replace(/\r\n/g, '\n').trim();
 	if (!text) {
 		return text;
+	}
+
+	if (isGenericFileCountMessage(text) && relativePaths.length > 0) {
+		const unique = [...new Set(relativePaths.map((p) => p.replace(/\\/g, '/')))];
+		const parsed = parseConventionalCommit(text.split('\n')[0] || '');
+		const subject = inferChineseSubject(unique, text, parsed, diffs);
+		const bullets = buildChineseBullets(text, unique, diffs);
+		text = `${subject}\n\n${bullets.join('\n')}`;
 	}
 
 	text = normalizeEnglishScope(text);
@@ -291,9 +334,12 @@ export function formatCommitMessageStyle(message: string, relativePaths: string[
 		return [subjectLine, '', existingBullets[0].replace(/^\*\s+/, '- ')].join('\n').trim();
 	}
 
-	// Still no details: synthesize bullets from paths so the body is not empty.
+	// Still no details: synthesize content-aware bullets (never "更新 path" only).
 	if (relativePaths.length > 0 && existingBullets.length === 0) {
-		const bullets = relativePaths.slice(0, 10).map((p) => `- 更新 ${p.replace(/\\/g, '/')}`);
+		const bullets = buildPathAwareBullets(
+			relativePaths.map((p) => p.replace(/\\/g, '/')),
+			diffs
+		);
 		return [subjectLine, '', ...bullets].join('\n').trim();
 	}
 
@@ -366,7 +412,11 @@ function splitChineseClauses(description: string): string[] {
 		.filter((part) => part.length >= 2);
 }
 
-function buildChineseBullets(englishMessage: string | undefined, paths: string[]): string[] {
+function buildChineseBullets(
+	englishMessage: string | undefined,
+	paths: string[],
+	diffs?: string
+): string[] {
 	const fromEnglish = extractEnglishBullets(englishMessage)
 		.map((line) => localizeBullet(line))
 		.filter((line) => isMostlyCjkPhrase(line))
@@ -374,7 +424,139 @@ function buildChineseBullets(englishMessage: string | undefined, paths: string[]
 	if (fromEnglish.length >= 2) {
 		return fromEnglish.slice(0, 12);
 	}
-	return paths.slice(0, 10).map((p) => `- 更新 ${p}`);
+	const fromDiff = extractDiffBullets(diffs);
+	if (fromDiff.length >= 2) {
+		return fromDiff.slice(0, 12);
+	}
+	if (fromDiff.length === 1 && fromEnglish.length === 1) {
+		return [...fromEnglish, ...fromDiff].slice(0, 12);
+	}
+	return buildPathAwareBullets(paths, diffs);
+}
+
+/** Build "- …" bullets from paths / diff hunks — never "更新 N 个文件" or bare "更新 path". */
+function buildPathAwareBullets(paths: string[], diffs?: string): string[] {
+	const fromDiff = extractDiffBullets(diffs);
+	if (fromDiff.length >= 2) {
+		return fromDiff.slice(0, 12);
+	}
+	const unique = [...new Set(paths.map((p) => p.replace(/\\/g, '/')))];
+	return unique.slice(0, 10).map((p) => `- ${describePathChange(p, diffs)}`);
+}
+
+function describePathChange(relativePath: string, diffs?: string): string {
+	const hint = extractDiffHintForFile(relativePath, diffs);
+	const base = path.basename(relativePath);
+	const stem = base.replace(/\.[^.]+$/, '') || base;
+	if (hint) {
+		return `完善 ${stem}：${hint}`;
+	}
+	const dir = path.posix.dirname(relativePath.replace(/\\/g, '/'));
+	if (dir && dir !== '.') {
+		const top = dir.split('/')[0];
+		return `调整 ${top} 中的 ${stem}`;
+	}
+	return `完善 ${stem} 相关实现`;
+}
+
+function extractDiffBullets(diffs?: string): string[] {
+	if (!diffs?.trim()) {
+		return [];
+	}
+	const blocks = splitDiffBlocks(diffs);
+	const bullets: string[] = [];
+	for (const block of blocks) {
+		if (bullets.length >= 12) {
+			break;
+		}
+		const hint = summarizeDiffBlock(block);
+		if (!hint) {
+			continue;
+		}
+		const stem = path.basename(block.path).replace(/\.[^.]+$/, '') || block.path;
+		bullets.push(`- 完善 ${stem}：${hint}`);
+	}
+	return bullets;
+}
+
+function extractDiffHintForFile(relativePath: string, diffs?: string): string | undefined {
+	if (!diffs?.trim()) {
+		return undefined;
+	}
+	const key = relativePath.replace(/\\/g, '/');
+	const block = splitDiffBlocks(diffs).find((b) => b.path === key || b.path.endsWith(`/${key}`));
+	return block ? summarizeDiffBlock(block) : undefined;
+}
+
+type DiffBlock = { path: string; body: string };
+
+function splitDiffBlocks(diffs: string): DiffBlock[] {
+	const parts = diffs.split(/\n(?=--- )/);
+	const out: DiffBlock[] = [];
+	for (const part of parts) {
+		const match = part.match(/^---\s+(.+?)\s+---\n([\s\S]*)$/);
+		if (!match) {
+			continue;
+		}
+		out.push({ path: match[1].trim().replace(/\\/g, '/'), body: match[2] });
+	}
+	return out;
+}
+
+/** Pull a short Chinese-friendly hint from unified diff (symbols / added lines). */
+function summarizeDiffBlock(block: DiffBlock): string | undefined {
+	const symbols: string[] = [];
+	const addedSnippets: string[] = [];
+	for (const line of block.body.split(/\r?\n/)) {
+		const hunk = line.match(/^@@ .+ @@\s*(.*)$/);
+		if (hunk?.[1]?.trim()) {
+			const sym = hunk[1].trim().replace(/[{};]+$/g, '').trim();
+			if (sym && symbols.length < 3) {
+				symbols.push(shortenSymbol(sym));
+			}
+			continue;
+		}
+		if (line.startsWith('+') && !line.startsWith('+++')) {
+			const content = line.slice(1).trim();
+			if (
+				content &&
+				!content.startsWith('//') &&
+				!content.startsWith('*') &&
+				!content.startsWith('#') &&
+				content.length > 8 &&
+				content.length < 120 &&
+				addedSnippets.length < 2
+			) {
+				addedSnippets.push(content.replace(/\s+/g, ' '));
+			}
+		}
+	}
+	if (symbols.length) {
+		return `涉及 ${symbols.slice(0, 2).join('、')}`;
+	}
+	if (addedSnippets.length) {
+		const first = addedSnippets[0];
+		if (CJK_RE.test(first)) {
+			return first.length > 36 ? `${first.slice(0, 36)}…` : first;
+		}
+		return `补充 ${shortenSymbol(first)}`;
+	}
+	return undefined;
+}
+
+function shortenSymbol(raw: string): string {
+	const cleaned = raw
+		.replace(/^(export\s+|async\s+|public\s+|private\s+|protected\s+|static\s+)/g, '')
+		.replace(/[{};=].*$/, '')
+		.trim();
+	const fn = cleaned.match(
+		/(?:function|class|interface|type|enum|const|let|var|def|fn)\s+([A-Za-z_][\w]*)/
+	);
+	if (fn?.[1]) {
+		return fn[1];
+	}
+	const ident = cleaned.match(/([A-Za-z_][\w]{2,})/);
+	return ident?.[1] || cleaned.slice(0, 40);
 }
 
 function extractEnglishBullets(englishMessage?: string): string[] {
@@ -491,6 +673,7 @@ function localeFromId(id: string): CommitMessageLocale {
 		const instruction = [
 			'【硬性要求】提交说明的标题描述与每一条 bullet 正文必须全部使用简体中文。',
 			'严禁中英混写：禁止「新增: Implemented ...」「更新: Refactored ...」这类只把动词写成中文、其余仍是英文的写法。',
+			'严禁空泛标题：禁止「更新 N 个文件」「更新多个文件」「Update N files」；必须根据 staged diffs 概括具体改动内容。',
 			'Conventional Commit 的 type 与 scope 必须用英文 ASCII，例如 feat(commit): / fix(ui):，括号内禁止中文。',
 			'格式必须类似 Cursor 原生：第一行短标题，空一行，然后多条以 "- " 开头的细项（至少 2 条，覆盖主要改动）。',
 			'不要把所有内容挤在一行；不要省略 bullet 细项。',
@@ -507,6 +690,7 @@ function localeFromId(id: string): CommitMessageLocale {
 				'- NEVER put Chinese inside the parentheses scope. Wrong: feat(提交信息生成):  ... Right: feat(commit): ...',
 				'- Write the subject description and ALL body bullet text in Simplified Chinese sentences.',
 				'- FORBIDDEN mixed style such as "- 新增: Implemented a tooltip..." — the whole bullet must be Chinese.',
+				'- FORBIDDEN vague subjects like "更新 8 个文件" / "Update N files" — summarize the actual diffs.',
 				'- Match Cursor native style: short subject line, blank line, then multiple "- " bullet details (2+ bullets).',
 				'- Do not collapse everything into one long sentence without bullets.',
 				'- Example:',
@@ -579,7 +763,8 @@ export function resolveEffectiveCommitMessageLocale(customPrompt?: string): Comm
 function inferChineseSubject(
 	paths: string[],
 	englishMessage?: string,
-	parsed?: { type: string; scope: string; description: string } | null
+	parsed?: { type: string; scope: string; description: string } | null,
+	diffs?: string
 ): string {
 	const joined = paths.join(' ').toLowerCase();
 	const eng = (englishMessage || '').toLowerCase();
@@ -591,7 +776,7 @@ function inferChineseSubject(
 				? 'commit'
 				: joined.includes('.css') || eng.includes('ui')
 					? 'ui'
-					: 'commit';
+					: inferScopeFromPaths(paths);
 	if (joined.includes('commit') || eng.includes('commit message')) {
 		return `${type}(${scope}): 改进提交信息生成与面板交互`;
 	}
@@ -604,10 +789,59 @@ function inferChineseSubject(
 	if (joined.includes('.css') || joined.includes('ui') || eng.includes('ui') || eng.includes('styling')) {
 		return `${type}(${scope}): 优化界面布局与交互`;
 	}
-	if (paths.length === 1) {
-		return `chore: 更新 ${paths[0]}`;
+
+	const fromDiff = summarizeSubjectFromDiffs(diffs);
+	if (fromDiff) {
+		return `${type}(${scope}): ${fromDiff}`;
 	}
-	return `chore: 更新 ${paths.length} 个文件`;
+
+	const labels = paths
+		.map((p) => path.basename(p).replace(/\.[^.]+$/, '') || path.basename(p))
+		.filter(Boolean);
+	const uniqueLabels = [...new Set(labels)];
+	if (uniqueLabels.length === 1) {
+		return `${type}(${scope}): 完善 ${uniqueLabels[0]} 相关改动`;
+	}
+	if (uniqueLabels.length === 2) {
+		return `${type}(${scope}): 完善 ${uniqueLabels[0]} 与 ${uniqueLabels[1]}`;
+	}
+	if (uniqueLabels.length >= 3) {
+		return `${type}(${scope}): 完善 ${uniqueLabels[0]}、${uniqueLabels[1]} 等改动`;
+	}
+	const topDir = paths[0]?.replace(/\\/g, '/').split('/')[0];
+	return `${type}(${scope}): 完善 ${topDir || '项目'} 相关改动`;
+}
+
+function inferScopeFromPaths(paths: string[]): string {
+	const joined = paths.join(' ').toLowerCase();
+	if (joined.includes('git') || joined.includes('commit')) {
+		return 'commit';
+	}
+	if (joined.includes('.css') || joined.includes('ui') || joined.includes('panel')) {
+		return 'ui';
+	}
+	if (joined.includes('test')) {
+		return 'test';
+	}
+	return 'commit';
+}
+
+function summarizeSubjectFromDiffs(diffs?: string): string | undefined {
+	if (!diffs?.trim()) {
+		return undefined;
+	}
+	const blocks = splitDiffBlocks(diffs);
+	const hints = blocks
+		.map((b) => summarizeDiffBlock(b))
+		.filter((h): h is string => !!h);
+	if (!hints.length) {
+		return undefined;
+	}
+	if (hints.length === 1) {
+		return hints[0].length > 40 ? `${hints[0].slice(0, 40)}…` : hints[0];
+	}
+	const first = hints[0].replace(/^涉及\s*/, '');
+	return `完善 ${first} 等改动`;
 }
 
 function pickPreferredLocale(editor: string, system: string): string {
@@ -712,6 +946,12 @@ function buildPrompt(input: {
 		`Target language: ${input.locale.label} (locale=${input.locale.id})`,
 		input.locale.instruction,
 		'',
+		'Content rules (mandatory):',
+		'- Base the subject and bullets on the ACTUAL staged diffs (what changed), not on file counts.',
+		'- FORBIDDEN subjects like "更新 8 个文件", "更新多个文件", "Update 8 files", "Update N files".',
+		'- Prefer concrete verbs: 修复 / 完善 / 优化 / 新增 / 调整, naming the feature or symbol when possible.',
+		'- If many files change, summarize the theme (e.g. "完善提交信息生成与软独占 Git") instead of counting files.',
+		'',
 		'Follow project rules related to commits and style when present (unless they conflict with MANDATORY USER INSTRUCTION):',
 		rules,
 		'',
@@ -786,6 +1026,17 @@ async function collectStagedDiffs(repo: Repository, relativePaths: string[]): Pr
 			unified = '';
 		}
 		if (!unified?.trim()) {
+			// Selection may still be unstaged in edge races — read working-tree vs HEAD.
+			try {
+				unified = await repo.diffWithHEAD(relativePath);
+			} catch {
+				unified = '';
+			}
+		}
+		if (!unified?.trim()) {
+			unified = await diffViaGitCli(repo.rootUri.fsPath, relativePath);
+		}
+		if (!unified?.trim()) {
 			continue;
 		}
 		const block = `--- ${relativePath} ---\n${unified.trim()}\n`;
@@ -797,6 +1048,34 @@ async function collectStagedDiffs(repo: Repository, relativePaths: string[]): Pr
 		total += block.length;
 	}
 	return chunks.join('\n');
+}
+
+async function diffViaGitCli(repoRoot: string, relativePath: string): Promise<string> {
+	try {
+		const { stdout: cached } = await execFile(
+			'git',
+			['diff', '--cached', '--', relativePath],
+			{ cwd: repoRoot, maxBuffer: 5 * 1024 * 1024 }
+		);
+		if (cached?.trim()) {
+			return cached;
+		}
+		const { stdout: wt } = await execFile('git', ['diff', 'HEAD', '--', relativePath], {
+			cwd: repoRoot,
+			maxBuffer: 5 * 1024 * 1024,
+		});
+		return wt || '';
+	} catch {
+		return '';
+	}
+}
+
+/** Collect staged/working diffs for fallback commit-message synthesis. */
+export async function collectDiffsForCommitMessage(
+	repo: Repository,
+	relativePaths: string[]
+): Promise<string> {
+	return collectStagedDiffs(repo, relativePaths);
 }
 
 async function listStagedPaths(repoRoot: string): Promise<string[]> {

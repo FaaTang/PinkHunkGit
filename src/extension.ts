@@ -8,6 +8,7 @@ import { CloneDialogProvider } from './panel/CloneDialogProvider';
 import { CommitViewProvider } from './panel/CommitViewProvider';
 import { PushDialogProvider } from './panel/PushDialogProvider';
 import { initGitOutput, logExtension } from './git/gitOutput';
+import { registerSoftExclusiveGit } from './git/softExclusive';
 import { showTimedInfoMessage } from './ui/notify';
 
 let gitService: GitService | undefined;
@@ -49,6 +50,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		);
 
 		context.subscriptions.push(gitService, pushDialogProvider, cloneDialogProvider, commitViewProvider);
+		context.subscriptions.push(registerSoftExclusiveGit(context));
 
 		void vscode.commands.executeCommand('setContext', 'copyIdeaGitUi.hasSelection', false);
 

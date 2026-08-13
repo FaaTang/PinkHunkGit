@@ -47,7 +47,8 @@ npm run package
 - 勾选纳入提交；右键 Diff / 回滚 / 打开文件 / 定位资源管理器
 - Commit / Commit and Push；多仓库切换
 - Fast Push（Commit and Push ▾ 下拉）：可选 AI 生成说明 → 提交 → 可选自动 `v*` tag 递增 → 可选推送并自动合并
-- AI 生成提交信息：按系统/提示词强制**简体中文**标题与 bullet；可配置可选前缀与强制生成提示词（Workspace / Global，支持 Clear Global）。勾选 Force generation prompt 后，提示词会注入生成流程，并在生成后由代码强制落实；`yyyyMMdd` / `YYYYMMDD` 按本机当天展开（如 `vyyyyMMdd#000` → `v20260812#000`）
+- AI 生成提交信息：按系统/提示词强制**简体中文**标题与 bullet；可配置可选前缀与强制生成提示词（Workspace / Global，支持 Clear Global）。勾选 Force generation prompt 后，提示词会注入生成流程，并在生成后由代码强制落实；`yyyyMMdd` / `YYYYMMDD` 按本机当天展开（如 `vyyyyMMdd#000` → `v20260812#000`）。会拒绝空泛的「更新 N 个文件」类标题，回退时按 staged diffs 概括具体改动
+- 软独占 Git（默认开）：在工作区关闭内置 `git.autofetch` / `git.autorefresh`，降低 `index.lock` 冲突，同时保持 `vscode.git` 启用以供本插件 API。可在设置 **Pink Hunk Git: Soft Exclusive Git** 或命令 **Toggle Soft Exclusive Git** 开关。Commit 面板仍会在文件变更后自行刷新状态
 - Clone Repository 对话框（仿 IDEA）：粘贴 HTTPS/SSH URL、选择目录后执行 `git clone`
 - 一次拉取并更新当前工作区内的所有 Git 仓库
 - 快捷键安装按钮（写入用户 `keybindings.json`）

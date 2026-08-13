@@ -101,8 +101,23 @@
         "command": "copyIdeaGitUi.installKeybindings",
         "title": "Install IDEA Keybindings",
         "category": "Pink Hunk Git"
+      },
+      {
+        "command": "copyIdeaGitUi.toggleSoftExclusiveGit",
+        "title": "Toggle Soft Exclusive Git",
+        "category": "Pink Hunk Git"
       }
     ],
+    "configuration": {
+      "title": "Pink Hunk Git",
+      "properties": {
+        "copyIdeaGitUi.softExclusiveGit": {
+          "type": "boolean",
+          "default": true,
+          "description": "When enabled, disables built-in Git autofetch and autorefresh in the current workspace so Pink Hunk Git is less likely to hit index.lock races. Keeps vscode.git enabled (required by this extension). The Commit panel still refreshes on file changes via its own watchers."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {

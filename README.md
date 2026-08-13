@@ -47,7 +47,8 @@ npm run package
 - Check files to include in commit; right-click for Diff / Rollback / Open File / Reveal in Explorer
 - Commit / Commit and Push; multi-repo switching
 - Fast Push (from Commit and Push ▾): optional AI commit message → commit → optional auto `v*` tag bump → optional push with auto-merge
-- AI commit messages: force **Simplified Chinese** subject + bullets from system/prompt; optional prefix and mandatory generation prompt (Workspace / Global, with Clear Global). Forced prompts are injected into generation and enforced afterwards in code; `yyyyMMdd` / `YYYYMMDD` expand to today's local date (e.g. `vyyyyMMdd#000` → `v20260812#000`)
+- AI commit messages: force **Simplified Chinese** subject + bullets from system/prompt; optional prefix and mandatory generation prompt (Workspace / Global, with Clear Global). Forced prompts are injected into generation and enforced afterwards in code; `yyyyMMdd` / `YYYYMMDD` expand to today's local date (e.g. `vyyyyMMdd#000` → `v20260812#000`). Vague “updated N files” subjects are rejected; fallbacks summarize staged diffs instead
+- Soft exclusive Git (default on): disables built-in `git.autofetch` / `git.autorefresh` in the workspace to reduce `index.lock` races, while keeping `vscode.git` enabled for this extension’s API. Toggle via setting **Pink Hunk Git: Soft Exclusive Git** or command **Toggle Soft Exclusive Git**. The Commit panel still refreshes on file changes
 - Clone Repository dialog (IDEA-style): paste HTTPS/SSH URL, pick directory, `git clone`
 - Pull and update all Git repositories in the workspace at once
 - Keybindings install button (writes to user `keybindings.json`)

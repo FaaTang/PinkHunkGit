@@ -28,9 +28,11 @@ import {
 import { PushCommitItem, PushCommitDetails, PushTarget } from '../panel/pushMessages';
 import {
 	buildLocaleFallbackMessage,
+	collectDiffsForCommitMessage,
 	formatCommitMessageStyle,
 	generateCommitMessageWithLanguageModel,
 	isCommitMessageInTargetCjk,
+	isGenericFileCountMessage,
 	resolveEffectiveCommitMessageLocale,
 	rewriteCommitMessageForLocale,
 	withTemporaryCommitLanguageRule,
@@ -1929,7 +1931,12 @@ export class GitService implements vscode.Disposable {
 				customPrompt
 			);
 			if (viaLm?.trim()) {
-				return this.ensureLocaleCommitMessage(viaLm.trim(), relativePaths, customPrompt);
+				return await this.ensureLocaleCommitMessage(
+					repo,
+					viaLm.trim(),
+					relativePaths,
+					customPrompt
+				);
 			}
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
@@ -1946,7 +1953,12 @@ export class GitService implements vscode.Disposable {
 			() => this.generateCommitMessageViaScmCommand(repo, customPrompt),
 			customPrompt
 		);
-		return this.ensureLocaleCommitMessage(viaScm.trim(), relativePaths, customPrompt);
+		return await this.ensureLocaleCommitMessage(
+			repo,
+			viaScm.trim(),
+			relativePaths,
+			customPrompt
+		);
 	}
 
 	private formatMultiRepoCommitMessage(items: Array<{ repo: Repository; message: string }>): string {
@@ -1962,19 +1974,26 @@ export class GitService implements vscode.Disposable {
 			.join('\n\n');
 	}
 
-	private ensureLocaleCommitMessage(
+	private async ensureLocaleCommitMessage(
+		repo: Repository,
 		message: string,
 		relativePaths: string[],
 		customPrompt = ''
-	): string {
+	): Promise<string> {
 		const locale = resolveEffectiveCommitMessageLocale(customPrompt);
 		// Peel vYYYYMMDD#N so style/locale checks run on the conventional subject line.
 		const peeled = peelLeadingVersionDatePrefix(message.trim());
 		let text = peeled.body || message.trim();
-		if (locale.wantsCjk && !isCommitMessageInTargetCjk(text)) {
-			text = buildLocaleFallbackMessage(relativePaths, text, customPrompt) ?? text;
+		const needsFallback =
+			(locale.wantsCjk && !isCommitMessageInTargetCjk(text)) || isGenericFileCountMessage(text);
+		let diffs = '';
+		if (needsFallback || locale.wantsCjk) {
+			diffs = await collectDiffsForCommitMessage(repo, relativePaths).catch(() => '');
 		}
-		text = formatCommitMessageStyle(text, relativePaths);
+		if (needsFallback) {
+			text = buildLocaleFallbackMessage(relativePaths, text, customPrompt, diffs) ?? text;
+		}
+		text = formatCommitMessageStyle(text, relativePaths, diffs);
 		// Keep peeled prefix only as a hint; CommitViewProvider enforces prompt/prefix settings.
 		if (peeled.prefix && text && !/^v\d{8}#\d+\b/u.test(text)) {
 			return `${peeled.prefix} ${text}`;
