@@ -814,7 +814,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		await this.waitForGitInit();
 		await this.pushSnapshot();
 		if (!this.git.isDiscovering()) {
-			this.git.scheduleActiveRepoStatus({ silent: true });
+			this.git.scheduleActiveRepoStatus();
 		}
 		this.scheduleIgnoredRefresh();
 	}
@@ -1610,7 +1610,6 @@ function fingerprintWorkspaceSnapshot(
 			branch: repo.branch,
 			ahead: repo.ahead,
 			behind: repo.behind,
-			statusLoading: !!repo.statusLoading,
 			hint: repo.hint,
 			syncMode: repo.syncMode,
 			staged: repo.staged.map(changeKey),

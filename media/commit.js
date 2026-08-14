@@ -3047,15 +3047,6 @@
     meta.appendChild(badge);
     meta.appendChild(renderRepoSyncSlot(repo, groupId));
 
-    if (repo.statusLoading) {
-      head.classList.add('is-status-loading');
-      const statusHint = document.createElement('span');
-      statusHint.className = 'repo-subgroup-status-loading';
-      statusHint.textContent = 'git status loading…';
-      statusHint.title = 'Running git status for this repository';
-      meta.appendChild(statusHint);
-    }
-
     head.appendChild(selectAll);
     head.appendChild(chevron);
     head.appendChild(colorDot);

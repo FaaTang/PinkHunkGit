@@ -33,11 +33,6 @@ export type RepoSnapshot = {
 	ignored?: ChangeItem[];
 	conflictFiles?: ChangeItem[];
 	syncMode?: SyncMode;
-	/**
-	 * True while this repo's git status is in flight (newly opened or queued refresh).
-	 * UI shows a per-repo spinner; not the same as empty/clean 0/0.
-	 */
-	statusLoading?: boolean;
 };
 
 export type RepoSummary = {

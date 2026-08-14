@@ -635,34 +635,6 @@ body.sidebar-mode .file-list {
   white-space: nowrap;
 }
 
-.repo-subgroup-status-loading {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  padding-right: 2px;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 1.2;
-  font-style: italic;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--vscode-descriptionForeground, var(--fg));
-  background: var(--bg);
-  pointer-events: none;
-}
-
-.repo-subgroup-title.collapsible:hover .repo-subgroup-status-loading {
-  background: var(--list-hover);
-}
-
-.repo-subgroup-title.selected .repo-subgroup-status-loading,
-.repo-subgroup-title.selected:hover .repo-subgroup-status-loading {
-  background: var(--file-row-selected-bg);
-}
-
 .repo-subgroup-count {
   box-sizing: border-box;
   min-width: 0;
