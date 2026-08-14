@@ -812,7 +812,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 		await this.waitForGitInit();
 		await this.pushSnapshot();
 		if (!this.git.isDiscovering()) {
-			this.git.scheduleActiveRepoStatus();
+			this.git.scheduleActiveRepoStatus({ silent: true });
 		}
 		this.scheduleIgnoredRefresh();
 	}
@@ -998,8 +998,38 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 					});
 					break;
 				case 'openPushDialog':
-					await this.pushDialog.show();
+					await this.pushDialog.show(
+						msg.repoRoot ? { pendingPushRoots: [msg.repoRoot] } : undefined
+					);
 					break;
+				case 'pullRepo': {
+					const root = (msg.repoRoot || '').trim();
+					if (!root) {
+						break;
+					}
+					const label =
+						this.git
+							.getWorkspaceSnapshot()
+							.repositories.find((r) =>
+								r.rootPath.replace(/\\/g, '/').toLowerCase() ===
+								root.replace(/\\/g, '/').toLowerCase()
+							)?.name ?? 'repository';
+					await this.withBusy(async () => {
+						const result = await this.git.pullAllRepositories(undefined, [root]);
+						if (!result.failed.length) {
+							showTimedInfoMessage(`Pulled ${result.succeeded[0] ?? label}.`);
+							return;
+						}
+						const details = result.failed
+							.map(({ repository, error }) => `${repository}: ${error}`)
+							.join('\n');
+						vscode.window.showWarningMessage(
+							`Pull failed for ${label}.\n${details}`,
+							{ modal: true }
+						);
+					}, `Pulling ${label}…`);
+					break;
+				}
 				case 'fastPush':
 					await this.withBusy(async () => {
 						await this.handleFastPush(
@@ -1514,6 +1544,7 @@ function shouldRefreshAfterMessage(type: WebviewToHost['type']): boolean {
 		case 'rollbackBatch':
 		case 'rollbackCancel':
 		case 'openPushDialog':
+		case 'pullRepo':
 		case 'fastPushCommitConfirm':
 		case 'fastPushCommitCancel':
 		case 'fastPushConfirmAck':

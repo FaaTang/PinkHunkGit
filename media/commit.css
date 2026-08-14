@@ -618,6 +618,15 @@ body.sidebar-mode .file-list {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
+.repo-subgroup-meta {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
 .repo-subgroup-name {
   flex: 1;
   min-width: 0;
@@ -627,15 +636,31 @@ body.sidebar-mode .file-list {
 }
 
 .repo-subgroup-status-loading {
-  flex: 0 0 auto;
-  margin-left: 6px;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  padding-right: 2px;
   font-size: 10px;
   font-weight: 500;
   line-height: 1.2;
-  opacity: 0.7;
   font-style: italic;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--vscode-descriptionForeground, var(--fg));
+  background: var(--bg);
+  pointer-events: none;
+}
+
+.repo-subgroup-title.collapsible:hover .repo-subgroup-status-loading {
+  background: var(--list-hover);
+}
+
+.repo-subgroup-title.selected .repo-subgroup-status-loading,
+.repo-subgroup-title.selected:hover .repo-subgroup-status-loading {
+  background: var(--file-row-selected-bg);
 }
 
 .repo-subgroup-count {
@@ -666,6 +691,70 @@ body.sidebar-mode .file-list {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.repo-sync {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+  width: calc(2 * 4.75ch + 2px);
+}
+
+.repo-sync-btn {
+  appearance: none;
+  box-sizing: content-box;
+  flex: 0 0 4.75ch;
+  width: 4.75ch;
+  min-width: 4.75ch;
+  margin: 0;
+  padding: 0 1px;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground, var(--fg));
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  opacity: 0.72;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.repo-sync-btn:hover:not(:disabled) {
+  opacity: 1;
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+
+.repo-sync-btn:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, var(--accent, #3794ff));
+  outline-offset: 1px;
+}
+
+.repo-sync-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.repo-sync-btn.has-count.repo-sync-pull {
+  color: var(--vscode-gitDecoration-incomingAddedResourceForeground, var(--vscode-charts-blue, #3794ff));
+  opacity: 1;
+}
+
+.repo-sync-btn.has-count.repo-sync-push {
+  color: var(--vscode-gitDecoration-outgoingAddedResourceForeground, var(--vscode-charts-orange, #e2c08d));
+  opacity: 1;
+}
+
+body.panel-busy .repo-sync-btn {
+  pointer-events: none;
+  opacity: 0.45;
 }
 
 .repo-subgroup.focused .repo-subgroup-name {

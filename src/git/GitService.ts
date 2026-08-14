@@ -235,7 +235,7 @@ export class GitService implements vscode.Disposable {
 			logExtension(
 				`Git init: soft exclusive catch-up status (active repo) | since start: ${Date.now() - t0}ms`
 			);
-			this.scheduleActiveRepoStatus();
+			this.scheduleActiveRepoStatus({ silent: true });
 		} else {
 			logExtension(
 				`Git init: skip startup status (repos already open in vscode.git) | since start: ${Date.now() - t0}ms`
@@ -346,7 +346,10 @@ export class GitService implements vscode.Disposable {
 				if (this.refreshSuspended > 0 || this.initState !== 'ready') {
 					return;
 				}
-				this.scheduleActiveRepoStatus();
+				if (this.refreshInFlight || this.refreshTimer || this.pendingStatusAll || this.pendingStatusRoots.size) {
+					return;
+				}
+				this.scheduleActiveRepoStatus({ silent: true });
 			}, GitService.SOFT_REFRESH_POLL_MS);
 			return;
 		}
@@ -457,7 +460,7 @@ export class GitService implements vscode.Disposable {
 		}
 		// Catch files created during the deferred watcher gap (esp. soft exclusive).
 		if (isSoftExclusiveEnabled()) {
-			this.scheduleActiveRepoStatus();
+			this.scheduleActiveRepoStatus({ silent: true });
 		}
 	}
 
@@ -1396,7 +1399,7 @@ export class GitService implements vscode.Disposable {
 	 * Debounced incremental refresh for a single changed file's repository.
 	 * Pass no uri for a full catch-up (e.g. after suspended batch ops).
 	 */
-	scheduleRefresh(uri?: vscode.Uri, options?: { ignored?: boolean }): void {
+	scheduleRefresh(uri?: vscode.Uri, options?: { ignored?: boolean; silent?: boolean }): void {
 		if (this.refreshSuspended > 0) {
 			return;
 		}
@@ -1407,7 +1410,9 @@ export class GitService implements vscode.Disposable {
 				this.pendingIgnoredAll = true;
 			}
 			const allRoots = (this.api?.repositories ?? []).map((r) => r.rootUri.fsPath);
-			this.markStatusLoading(allRoots);
+			if (options?.silent !== true) {
+				this.markStatusLoading(allRoots);
+			}
 		} else {
 			const needsIgnored = options?.ignored || pathNeedsIgnoredRefresh(uri.fsPath);
 			// Ignore .git chatter (index, FETCH_HEAD, …) except exclude-style paths.
@@ -1421,7 +1426,6 @@ export class GitService implements vscode.Disposable {
 			const root = repo.rootUri.fsPath;
 			if (!isGitInternalPath(uri.fsPath)) {
 				this.pendingStatusRoots.add(root);
-				this.markStatusLoading([root]);
 			}
 			if (needsIgnored) {
 				this.pendingIgnoredRoots.add(root);
@@ -1434,6 +1438,7 @@ export class GitService implements vscode.Disposable {
 			) {
 				return;
 			}
+			// Do not mark loading during the 250ms debounce — only once status actually runs.
 		}
 
 		this.armRefreshTimer();
@@ -1444,7 +1449,7 @@ export class GitService implements vscode.Disposable {
 	 * Used after we openRepository ourselves — those roots need a UI catch-up without
 	 * re-statusing every other repo vscode.git already loaded.
 	 */
-	scheduleRootsStatus(roots: string[]): void {
+	scheduleRootsStatus(roots: string[], options?: { silent?: boolean }): void {
 		if (this.refreshSuspended > 0 || !roots.length) {
 			return;
 		}
@@ -1458,17 +1463,19 @@ export class GitService implements vscode.Disposable {
 		if (!this.pendingStatusAll && !this.pendingStatusRoots.size) {
 			return;
 		}
-		this.markStatusLoading(queued);
+		if (options?.silent !== true) {
+			this.markStatusLoading(queued);
+		}
 		this.armRefreshTimer();
 	}
 
 	/** Debounced status for the focused repository only (panel soft reopen). */
-	scheduleActiveRepoStatus(): void {
+	scheduleActiveRepoStatus(options?: { silent?: boolean }): void {
 		const active = this.getActiveRepository();
 		if (!active) {
 			return;
 		}
-		this.scheduleRootsStatus([active.rootUri.fsPath]);
+		this.scheduleRootsStatus([active.rootUri.fsPath], options);
 	}
 
 	private armRefreshTimer(): void {

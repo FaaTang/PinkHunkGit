@@ -3,5 +3,7 @@
   "typescript.enablePromptUseWorkspaceTsdk": true,
   "typescript.tsserver.maxTsServerMemory": 4096,
   "npm.autoDetect": "off",
-  "task.autoDetect": "off"
+  "task.autoDetect": "off",
+  "git.autofetch": false,
+  "git.autorefresh": false
 }

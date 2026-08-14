@@ -238,7 +238,9 @@ export type WebviewToHost =
 	  }
 	| { type: 'clearCommitMessagePrefixGlobal' }
 	| { type: 'push'; repoRoot?: string; pushTags?: boolean }
-	| { type: 'openPushDialog' }
+	| { type: 'openPushDialog'; repoRoot?: string }
+	/** Pull a single repository (behind count click in Commit panel). */
+	| { type: 'pullRepo'; repoRoot: string }
 	| { type: 'pushSync'; mode: SyncMode; repoRoot?: string }
 	| { type: 'syncAbort'; repoRoot?: string }
 	| { type: 'syncContinue'; repoRoot?: string }
