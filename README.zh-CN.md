@@ -46,7 +46,6 @@ npm run package
 - Changes / Unversioned Files 分组（仿 IDEA）；默认按仓库收起（分组展开）；Unversioned / Ignored 在仓库无文件时不显示该仓库；全部展开 / 全部收起作用于当前选中的分组、仓库或文件夹，未选中时二次确认后作用于全部
 - 勾选纳入提交；右键 Diff / 回滚 / 打开文件 / 定位资源管理器
 - Commit / Commit and Push；多仓库切换
-- 仅在 Changes 分组中，仓库分支名后显示可拉取 / 可推送数量（`N↓` / `N↑`）；点击即可拉取该仓库或打开该仓库的 Push 对话框（支持多仓库）
 - Fast Push（Commit and Push ▾ 下拉）：可选 AI 生成说明 → 提交 → 可选自动 `v*` tag 递增 → 可选推送并自动合并
 - AI 生成提交信息：按系统/提示词强制**简体中文**标题与 bullet；可配置可选前缀与强制生成提示词（Workspace / Global，支持 Clear Global）。勾选 Force generation prompt 后，提示词会注入生成流程，并在生成后由代码强制落实；`yyyyMMdd` / `YYYYMMDD` 按本机当天展开（如 `vyyyyMMdd#000` → `v20260812#000`）。会拒绝空泛的「更新 N 个文件」类标题，回退时按 staged diffs 概括具体改动
 - 软独占 Git（默认开）：在工作区关闭内置 `git.autofetch` / `git.autorefresh`，降低 `index.lock` 冲突，同时保持 `vscode.git` 启用以供本插件 API。可在设置 **Pink Hunk Git: Soft Exclusive Git** 或命令 **Toggle Soft Exclusive Git** 开关。Commit 面板可见时，除文件监视外还会约每 1.5 秒刷新当前仓库状态，避免本地改动延迟出现
@@ -86,8 +85,6 @@ npm run package
 更新过程中会显示当前仓库和总体进度。某个仓库更新失败时，插件会继续更新其余仓库，
 最后汇总成功数量以及失败原因。仓库需要已配置上游分支；本地改动、合并冲突、认证失败等
 情况仍按 Git 的规则处理，不会自动丢弃或覆盖本地修改。
-
-在 Changes 列表中，每个仓库行的分支名后也会显示 ahead/behind（`N↓` / `N↑`）。点击 `↓` 仅拉取该仓库；点击 `↑` 打开 Push 对话框并预选该仓库。
 
 ### 快捷键（安装后）
  

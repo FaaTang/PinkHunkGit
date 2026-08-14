@@ -1479,12 +1479,14 @@ export class GitService implements vscode.Disposable {
 
 	/**
 	 * Debounced incremental refresh for a single changed file's repository.
-	 * Pass no uri for a full catch-up (e.g. after suspended batch ops).
+	 * File-watcher / save paths default to silent so they do not flash loading or
+	 * block Fast Push. Pass no uri for a full catch-up (e.g. after suspended batch ops).
 	 */
 	scheduleRefresh(uri?: vscode.Uri, options?: { ignored?: boolean; silent?: boolean }): void {
 		if (this.refreshSuspended > 0) {
 			return;
 		}
+		const silent = options?.silent ?? !!uri;
 
 		if (!uri) {
 			this.pendingStatusAll = true;
@@ -1492,7 +1494,7 @@ export class GitService implements vscode.Disposable {
 				this.pendingIgnoredAll = true;
 			}
 			const allRoots = (this.api?.repositories ?? []).map((r) => r.rootUri.fsPath);
-			if (options?.silent !== true) {
+			if (!silent) {
 				this.pendingRefreshSilent = false;
 				this.markStatusLoading(allRoots);
 			}
@@ -1521,7 +1523,7 @@ export class GitService implements vscode.Disposable {
 			) {
 				return;
 			}
-			if (options?.silent !== true) {
+			if (!silent) {
 				this.pendingRefreshSilent = false;
 			}
 			// Do not mark loading during the 250ms debounce — only once status actually runs.

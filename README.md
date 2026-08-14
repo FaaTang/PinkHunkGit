@@ -46,7 +46,6 @@ npm run package
 - Changes / Unversioned Files groups (IDEA-style); repositories collapsed by default (categories stay open); Unversioned / Ignored hide repositories with no files; Expand All / Collapse All apply to the selected group, repository, or folder — with a confirm dialog when none is selected
 - Check files to include in commit; right-click for Diff / Rollback / Open File / Reveal in Explorer
 - Commit / Commit and Push; multi-repo switching
-- In the Changes group, per-repository ahead/behind counts after the branch name (`N↓` / `N↑`); click to pull that repo or open Push for it (multi-root workspaces supported)
 - Fast Push (from Commit and Push ▾): optional AI commit message → commit → optional auto `v*` tag bump → optional push with auto-merge
 - AI commit messages: force **Simplified Chinese** subject + bullets from system/prompt; optional prefix and mandatory generation prompt (Workspace / Global, with Clear Global). Forced prompts are injected into generation and enforced afterwards in code; `yyyyMMdd` / `YYYYMMDD` expand to today's local date (e.g. `vyyyyMMdd#000` → `v20260812#000`). Vague “updated N files” subjects are rejected; fallbacks summarize staged diffs instead
 - Soft exclusive Git (default on): disables built-in `git.autofetch` / `git.autorefresh` in the workspace to reduce `index.lock` races, while keeping `vscode.git` enabled for this extension’s API. Toggle via setting **Pink Hunk Git: Soft Exclusive Git** or command **Toggle Soft Exclusive Git**. While the Commit panel is visible, the extension status-refreshes the active repository about every 1.5 seconds (in addition to file watchers) so local changes are not delayed
@@ -84,8 +83,6 @@ Run **Pink Hunk Git: Update All Git Repositories** (`Ctrl+T` / `Cmd+T`, or the s
 2. Press `Ctrl+T` / `Cmd+T` again, or click **Pull**, to pull the selected repositories
 
 Progress shows the current repository and overall status. If one repository fails, the extension continues with the rest and summarizes successes and failures. Repositories need an upstream branch configured; local changes, merge conflicts, auth failures, etc. follow normal Git rules and are not discarded automatically.
-
-In the Changes list, each repository row also shows ahead/behind after the branch name (`N↓` / `N↑`). Click `↓` to pull that repository only, or `↑` to open the Push dialog with that repository selected.
 
 ### Keybindings (after install)
 

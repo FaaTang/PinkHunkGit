@@ -2675,7 +2675,7 @@
     const { repoRoot, groupId, unversionedGroup, category, ignoredGroup } = groupContext;
 
     head.addEventListener('mousedown', (e) => {
-      if (e.button !== 0 || e.target.closest('input') || e.target.closest('.repo-sync-btn')) {
+      if (e.button !== 0 || e.target.closest('input')) {
         return;
       }
       if (e.target.closest('.group-title-chevron') || e.target.closest('.repo-subgroup-chevron') || e.target.closest('.dir-group-chevron')) {
@@ -2694,7 +2694,7 @@
         e.preventDefault();
         return;
       }
-      if (e.target.closest('input') || e.target.closest('.repo-sync-btn')) {
+      if (e.target.closest('input')) {
         return;
       }
       const onChevron =
@@ -2718,7 +2718,7 @@
         e.preventDefault();
         return;
       }
-      if (e.target.closest('input') || e.target.closest('.repo-sync-btn')) {
+      if (e.target.closest('input')) {
         return;
       }
       if (e.target.closest('.group-title-chevron') || e.target.closest('.repo-subgroup-chevron') || e.target.closest('.dir-group-chevron')) {
@@ -2872,85 +2872,6 @@
     return wrap;
   }
 
-  /**
-   * VS Code SCM–style ahead/behind after the branch badge.
-   * Shown only on Changes repository rows so Unversioned / Ignored stay uncluttered.
-   * Each repository row owns its own Pull / Push so multi-root workspaces stay independent.
-   */
-  function renderRepoSyncControls(repo) {
-    const hasUpstream = !!(repo && repo.upstream);
-    const behind =
-      typeof repo?.behind === 'number' && Number.isFinite(repo.behind) ? Math.max(0, repo.behind) : hasUpstream ? 0 : null;
-    const ahead =
-      typeof repo?.ahead === 'number' && Number.isFinite(repo.ahead) ? Math.max(0, repo.ahead) : hasUpstream ? 0 : null;
-    if (behind === null && ahead === null) {
-      return null;
-    }
-
-    const wrap = document.createElement('span');
-    wrap.className = 'repo-sync';
-    wrap.setAttribute('role', 'group');
-    wrap.setAttribute('aria-label', 'Pull / Push');
-
-    const pullBtn = document.createElement('button');
-    pullBtn.type = 'button';
-    pullBtn.className = 'repo-sync-btn repo-sync-pull';
-    const behindCount = behind ?? 0;
-    pullBtn.textContent = `${behindCount}\u2193`;
-    pullBtn.dataset.repoRoot = repo.rootPath;
-    if (behindCount > 0) {
-      pullBtn.classList.add('has-count');
-    }
-    if (!hasUpstream) {
-      pullBtn.disabled = true;
-      pullBtn.title = 'No upstream branch configured';
-    } else {
-      pullBtn.title =
-        behindCount === 1
-          ? `Pull 1 commit from ${repo.upstream}`
-          : `Pull ${behindCount} commits from ${repo.upstream}`;
-      pullBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (workspace.busy || generatingMessage || pullBtn.disabled) {
-          return;
-        }
-        post({ type: 'pullRepo', repoRoot: repo.rootPath });
-      });
-    }
-
-    const pushBtn = document.createElement('button');
-    pushBtn.type = 'button';
-    pushBtn.className = 'repo-sync-btn repo-sync-push';
-    const aheadCount = ahead ?? 0;
-    pushBtn.textContent = `${aheadCount}\u2191`;
-    pushBtn.dataset.repoRoot = repo.rootPath;
-    if (aheadCount > 0) {
-      pushBtn.classList.add('has-count');
-    }
-    if (!hasUpstream && aheadCount === 0) {
-      pushBtn.disabled = true;
-      pushBtn.title = 'No upstream branch configured';
-    } else {
-      pushBtn.title =
-        aheadCount === 1
-          ? `Push 1 commit${repo.upstream ? ` to ${repo.upstream}` : ''}`
-          : `Push ${aheadCount} commits${repo.upstream ? ` to ${repo.upstream}` : ''}`;
-      pushBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (workspace.busy || generatingMessage || pushBtn.disabled) {
-          return;
-        }
-        post({ type: 'openPushDialog', repoRoot: repo.rootPath });
-      });
-    }
-
-    wrap.appendChild(pullBtn);
-    wrap.appendChild(pushBtn);
-    return wrap;
-  }
-
   function renderRepoSubgroup(repo, items, groupId, unversionedGroup, focusedRoot, ignoredGroup = false) {
     const wrap = document.createElement('div');
     wrap.className = 'repo-subgroup';
@@ -3023,20 +2944,16 @@
     meta.appendChild(name);
     meta.appendChild(count);
 
+    const badge = document.createElement('span');
+    badge.className = 'repo-branch-badge';
     if (repo.branch) {
-      const badge = document.createElement('span');
-      badge.className = 'repo-branch-badge';
       badge.textContent = repo.branch;
       badge.title = repo.branch;
-      meta.appendChild(badge);
+    } else {
+      badge.classList.add('is-empty');
+      badge.title = '';
     }
-
-    if (groupId === 'changes') {
-      const syncEl = renderRepoSyncControls(repo);
-      if (syncEl) {
-        meta.appendChild(syncEl);
-      }
-    }
+    meta.appendChild(badge);
 
     if (repo.statusLoading) {
       head.classList.add('is-status-loading');
@@ -3519,15 +3436,7 @@
     }
   });
 
-  function anyRepoStatusLoading() {
-    return allRepos().some((repo) => !!repo.statusLoading);
-  }
-
   function runCommit() {
-    if (anyRepoStatusLoading()) {
-      showFormError('Git status is still loading. Wait for it to finish, then commit so every checked file is included.');
-      return;
-    }
     const message = validateBeforeCommit();
     if (!message) {
       return;
@@ -3541,10 +3450,6 @@
 
   function runCommitAndPush() {
     closeCommitPushMenu();
-    if (anyRepoStatusLoading()) {
-      showFormError('Git status is still loading. Wait for it to finish, then commit so every checked file is included.');
-      return;
-    }
     if (!hasCommitCandidates()) {
       showFormError('');
       post({ type: 'openPushDialog' });
@@ -3808,10 +3713,6 @@
     if (generatingMessage || workspace.busy) {
       return;
     }
-    if (anyRepoStatusLoading()) {
-      showFormError('Git status is still loading. Wait for it to finish, then Fast Push so every checked file is included.');
-      return;
-    }
     if (!hasCommitCandidates()) {
       showFormError('');
       post({ type: 'openPushDialog' });
@@ -4047,10 +3948,6 @@
       return;
     }
     setCommitFormExpanded(true);
-    if (anyRepoStatusLoading()) {
-      showFormError('Git status is still loading. Wait for it to finish, then generate so every checked file is included.');
-      return;
-    }
     if (!totalIncludableCount()) {
       showFormError('Select files to include before generating a commit message.');
       return;
