@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import { existsSync } from 'fs';
 import { execFile as execFileCb, spawn } from 'child_process';
 import { promisify } from 'util';
 
@@ -1167,8 +1168,13 @@ export class GitService implements vscode.Disposable {
 			[...trackedWorking, ...repo.state.mergeChanges].map((c) => this.toChangeItem(c, root, false))
 		);
 
+		const { staged: stagedVisible, unstaged: unstagedVisible } = this.omitPhantomAddedFiles(
+			staged,
+			unstaged
+		);
+
 		const knownPaths = new Set(
-			[...staged, ...unstaged, ...unversioned].map((item) => item.path.toLowerCase())
+			[...stagedVisible, ...unstagedVisible, ...unversioned].map((item) => item.path.toLowerCase())
 		);
 		const untrackedPaths = new Set(
 			untrackedFromGit.map((c) =>
@@ -1180,7 +1186,7 @@ export class GitService implements vscode.Disposable {
 		const dirtyUnversioned = dirtyItems.filter((item) => item.status === '?');
 		unversioned = dedupeByPath([...unversioned, ...dirtyUnversioned]);
 
-		const allUnstaged = [...unstaged, ...dirtyUnstaged];
+		const allUnstaged = [...unstagedVisible, ...dirtyUnstaged];
 
 		let hint: string | undefined;
 		if (dirtyItems.some((item) => item.unsaved)) {
@@ -1200,7 +1206,7 @@ export class GitService implements vscode.Disposable {
 			behind: head?.behind,
 			upstream: head?.upstream ? `${head.upstream.remote}/${head.upstream.name}` : undefined,
 			remotes,
-			staged,
+			staged: stagedVisible,
 			unstaged: allUnstaged,
 			unversioned,
 			ignored: this.ignoredByRoot.get(root) ?? [],
@@ -1208,6 +1214,71 @@ export class GitService implements vscode.Disposable {
 			syncMode,
 			statusLoading: this.isRepoStatusLoading(root),
 		};
+	}
+
+	/**
+	 * New-to-index files that were deleted before ever reaching HEAD (`git add` then
+	 * delete) are a no-op vs HEAD. Hide them immediately; `dropPhantomIndexAdds`
+	 * unstages them so a later commit cannot pick up the leftover index blob.
+	 */
+	private omitPhantomAddedFiles(
+		staged: ChangeItem[],
+		unstaged: ChangeItem[]
+	): { staged: ChangeItem[]; unstaged: ChangeItem[] } {
+		const phantom = new Set<string>();
+		for (const item of staged) {
+			if (item.status === 'A' && !existsSync(item.fsPath)) {
+				phantom.add(normalizePathKey(item.path));
+			}
+		}
+		for (const item of unstaged) {
+			if (item.status !== 'D') {
+				continue;
+			}
+			const added = staged.some(
+				(s) => s.status === 'A' && pathsEqual(s.path, item.path)
+			);
+			if (added && !existsSync(item.fsPath)) {
+				phantom.add(normalizePathKey(item.path));
+			}
+		}
+		if (!phantom.size) {
+			return { staged, unstaged };
+		}
+		return {
+			staged: staged.filter((item) => !phantom.has(normalizePathKey(item.path))),
+			unstaged: unstaged.filter((item) => !phantom.has(normalizePathKey(item.path))),
+		};
+	}
+
+	/**
+	 * Unstage INDEX_ADDED / intent-to-add paths whose working tree file is gone.
+	 * @returns true when the index was changed and status should run again.
+	 */
+	private async dropPhantomIndexAdds(repo: Repository): Promise<boolean> {
+		const phantoms: string[] = [];
+		for (const change of repo.state.indexChanges) {
+			if (change.status !== Status.INDEX_ADDED && change.status !== Status.INTENT_TO_ADD) {
+				continue;
+			}
+			if (await fileExists(change.uri.fsPath)) {
+				continue;
+			}
+			phantoms.push(change.uri.fsPath);
+		}
+		if (!phantoms.length) {
+			return false;
+		}
+		try {
+			await this.runGitApi(repo, 'revert (drop phantom add)', this.formatPaths(phantoms), () =>
+				repo.revert(phantoms)
+			);
+			return true;
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			logExtension(`dropPhantomIndexAdds failed: ${message}`);
+			return false;
+		}
 	}
 
 	/** True while this repo root is queued for or running a status refresh. */
@@ -1543,6 +1614,11 @@ export class GitService implements vscode.Disposable {
 			try {
 				if (repos.length) {
 					await Promise.all(repos.map((repo) => repo.status().catch(() => undefined)));
+					const dropped = await Promise.all(repos.map((repo) => this.dropPhantomIndexAdds(repo)));
+					const again = repos.filter((_, i) => dropped[i]);
+					if (again.length) {
+						await Promise.all(again.map((repo) => repo.status().catch(() => undefined)));
+					}
 				}
 
 				if (ignoredAll) {
