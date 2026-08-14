@@ -687,7 +687,6 @@ body.sidebar-mode .file-list {
   line-height: 16px;
   text-align: center;
   opacity: 0.75;
-  background: color-mix(in srgb, var(--fg) 10%, transparent);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
