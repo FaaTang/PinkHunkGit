@@ -111,9 +111,15 @@ export class GitService implements vscode.Disposable {
 	private fileWatcherTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Commit panel visible — soft-exclusive poll only runs while true. */
 	private commitPanelVisible = false;
-	/** Low-frequency status while soft exclusive replaces git.autorefresh. */
+	/** Replaces git.autorefresh: status the active repo while the Commit panel is visible. */
 	private softRefreshPollTimer: ReturnType<typeof setInterval> | undefined;
-	private static readonly SOFT_REFRESH_POLL_MS = 10_000;
+	/** ~1.5s matches built-in autorefresh feel without dual-client lock races. */
+	private static readonly SOFT_REFRESH_POLL_MS = 1_500;
+	/**
+	 * True when every queued refresh since the last flush was silent (poll / catch-up).
+	 * A non-silent schedule flips this off so the UI can show per-repo loading.
+	 */
+	private pendingRefreshSilent = true;
 	private pendingDiffAdvance: { repoRoot: string; path: string } | undefined;
 	private pendingDiffRetreat: { repoRoot: string; path: string } | undefined;
 	private diffNavDecorationType: vscode.TextEditorDecorationType | undefined;
@@ -344,13 +350,7 @@ export class GitService implements vscode.Disposable {
 				return;
 			}
 			this.softRefreshPollTimer = setInterval(() => {
-				if (this.refreshSuspended > 0 || this.initState !== 'ready') {
-					return;
-				}
-				if (this.refreshInFlight || this.refreshTimer || this.pendingStatusAll || this.pendingStatusRoots.size) {
-					return;
-				}
-				this.scheduleActiveRepoStatus({ silent: true });
+				this.pollActiveRepoStatus();
 			}, GitService.SOFT_REFRESH_POLL_MS);
 			return;
 		}
@@ -358,6 +358,17 @@ export class GitService implements vscode.Disposable {
 			clearInterval(this.softRefreshPollTimer);
 			this.softRefreshPollTimer = undefined;
 		}
+	}
+
+	/** Silent git status for the focused repo — skip if a write or refresh is already in flight. */
+	private pollActiveRepoStatus(): void {
+		if (this.refreshSuspended > 0 || this.initState !== 'ready') {
+			return;
+		}
+		if (this.refreshInFlight || this.refreshTimer || this.pendingStatusAll || this.pendingStatusRoots.size) {
+			return;
+		}
+		this.scheduleActiveRepoStatus({ silent: true });
 	}
 
 	private setupEditorListeners(): void {
@@ -1482,6 +1493,7 @@ export class GitService implements vscode.Disposable {
 			}
 			const allRoots = (this.api?.repositories ?? []).map((r) => r.rootUri.fsPath);
 			if (options?.silent !== true) {
+				this.pendingRefreshSilent = false;
 				this.markStatusLoading(allRoots);
 			}
 		} else {
@@ -1509,6 +1521,9 @@ export class GitService implements vscode.Disposable {
 			) {
 				return;
 			}
+			if (options?.silent !== true) {
+				this.pendingRefreshSilent = false;
+			}
 			// Do not mark loading during the 250ms debounce — only once status actually runs.
 		}
 
@@ -1535,6 +1550,7 @@ export class GitService implements vscode.Disposable {
 			return;
 		}
 		if (options?.silent !== true) {
+			this.pendingRefreshSilent = false;
 			this.markStatusLoading(queued);
 		}
 		this.armRefreshTimer();
@@ -1587,10 +1603,12 @@ export class GitService implements vscode.Disposable {
 		const statusRoots = [...this.pendingStatusRoots];
 		const ignoredAll = this.pendingIgnoredAll;
 		const ignoredRoots = [...this.pendingIgnoredRoots];
+		const silent = this.pendingRefreshSilent;
 		this.pendingStatusAll = false;
 		this.pendingStatusRoots.clear();
 		this.pendingIgnoredAll = false;
 		this.pendingIgnoredRoots.clear();
+		this.pendingRefreshSilent = true;
 
 		const run = (async () => {
 			if (!this.api?.repositories.length) {
@@ -1607,7 +1625,9 @@ export class GitService implements vscode.Disposable {
 						statusRoots.some((root) => pathsEqual(repo.rootUri.fsPath, root))
 					);
 			const loadingRoots = repos.map((repo) => repo.rootUri.fsPath);
-			this.markStatusLoading(loadingRoots);
+			if (!silent) {
+				this.markStatusLoading(loadingRoots);
+			}
 
 			// Note: do NOT call the built-in 'git.refresh' command here. Without a repository
 			// argument it opens a "Choose a repository" quick pick in multi-repo workspaces.
@@ -1627,7 +1647,9 @@ export class GitService implements vscode.Disposable {
 					await this.refreshIgnoredFiles(ignoredRoots);
 				}
 			} finally {
-				this.clearStatusLoading(loadingRoots);
+				if (!silent) {
+					this.clearStatusLoading(loadingRoots);
+				}
 			}
 
 			this.bindRepositoryEvents();
@@ -2601,7 +2623,7 @@ export class GitService implements vscode.Disposable {
 			const { stdout, stderr } = await execFile(this.gitExecutable, runArgs, {
 				cwd,
 				maxBuffer: 10 * 1024 * 1024,
-				env: process.env,
+				env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
 			});
 			const output = combineGitOutput(stdout, stderr);
 			logGitOk(Date.now() - started, output);

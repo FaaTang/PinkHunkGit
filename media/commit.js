@@ -2828,14 +2828,17 @@
       return wrap;
     }
 
-    // Module grouping: always list every repository under this category,
-    // including modules with 0 files (IDEA-style). Do this before any
-    // empty-list early return so a clean tree still shows module headers.
+    // Changes: list every repository, including empty 0/0 modules (IDEA-style).
+    // Unversioned / Ignored: only show repositories that have files.
     if (groupByModule) {
       if (!entries.length) {
         return wrap;
       }
+      const hideEmptyRepos = groupId === 'unversioned' || groupId === 'ignored';
       for (const { repo, items } of entries) {
+        if (hideEmptyRepos && items.length === 0) {
+          continue;
+        }
         wrap.appendChild(
           renderRepoSubgroup(repo, items, groupId, unversionedGroup, focusedRoot, ignoredGroup)
         );
@@ -2871,6 +2874,7 @@
 
   /**
    * VS Code SCM–style ahead/behind after the branch badge.
+   * Shown only on Changes repository rows so Unversioned / Ignored stay uncluttered.
    * Each repository row owns its own Pull / Push so multi-root workspaces stay independent.
    */
   function renderRepoSyncControls(repo) {
@@ -3027,9 +3031,11 @@
       meta.appendChild(badge);
     }
 
-    const syncEl = renderRepoSyncControls(repo);
-    if (syncEl) {
-      meta.appendChild(syncEl);
+    if (groupId === 'changes') {
+      const syncEl = renderRepoSyncControls(repo);
+      if (syncEl) {
+        meta.appendChild(syncEl);
+      }
     }
 
     if (repo.statusLoading) {

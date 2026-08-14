@@ -15,7 +15,7 @@ import {
 import { UpdateAllSelectionStore } from '../updateAll/selectionStore';
 import { notifyGitError } from '../git/gitOutput';
 import { showTimedInfoMessage } from '../ui/notify';
-import { CommitRepoResult, HostToWebview, WebviewToHost } from './messages';
+import { CommitRepoResult, HostToWebview, WebviewToHost, WorkspaceSnapshot } from './messages';
 import { PushDialogProvider } from './PushDialogProvider';
 
 export class CommitViewProvider implements vscode.WebviewViewProvider {
@@ -34,6 +34,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private snapshotDeferredWhileBusy = false;
 	/** Coalesce rapid onDidChange → snapshot pushes (status + dirty edits). */
 	private snapshotTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Skip posting when a silent poll produced the same file list (avoids resetting scroll). */
+	private lastSnapshotFingerprint = '';
 	/** Coalesce deferred ignored-file scans after a status-only first paint. */
 	private ignoredRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 	/** In-flight status-only panel refresh (open / visibility) — coalesce overlaps. */
@@ -1204,16 +1206,22 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	private async pushSnapshot(): Promise<void> {
 		const snapshot = this.git.getWorkspaceSnapshot();
 		const loading = !!snapshot.loading || this.panelLoading;
+		const payload = {
+			...snapshot,
+			busy: this.busy,
+			loading,
+			hint: loading
+				? snapshot.hint || 'Loading Git…'
+				: snapshot.hint,
+		};
+		const fingerprint = fingerprintWorkspaceSnapshot(payload);
+		if (fingerprint === this.lastSnapshotFingerprint) {
+			return;
+		}
+		this.lastSnapshotFingerprint = fingerprint;
 		this.post({
 			type: 'snapshot',
-			payload: {
-				...snapshot,
-				busy: this.busy,
-				loading,
-				hint: loading
-					? snapshot.hint || 'Loading Git…'
-					: snapshot.hint,
-			},
+			payload,
 		});
 	}
 
@@ -1582,4 +1590,33 @@ function formatCommittedMessage(committed: CommitRepoResult[]): string {
 	}
 	const names = committed.map((r) => r.name).join(', ');
 	return `Committed to ${committed.length} repositories: ${names}.`;
+}
+
+function fingerprintWorkspaceSnapshot(
+	payload: WorkspaceSnapshot & { busy?: boolean; loading?: boolean }
+): string {
+	const changeKey = (item: { path: string; status: string; unsaved?: boolean }) =>
+		`${item.path}:${item.status}:${item.unsaved ? 1 : 0}`;
+	return JSON.stringify({
+		ok: payload.ok,
+		error: payload.error,
+		loading: !!payload.loading,
+		busy: !!payload.busy,
+		hint: payload.hint,
+		activeRepoRoot: payload.activeRepoRoot,
+		repos: (payload.repositories ?? []).map((repo) => ({
+			root: repo.rootPath,
+			ok: repo.ok,
+			branch: repo.branch,
+			ahead: repo.ahead,
+			behind: repo.behind,
+			statusLoading: !!repo.statusLoading,
+			hint: repo.hint,
+			syncMode: repo.syncMode,
+			staged: repo.staged.map(changeKey),
+			unstaged: repo.unstaged.map(changeKey),
+			unversioned: repo.unversioned.map(changeKey),
+			ignored: (repo.ignored ?? []).map(changeKey),
+		})),
+	});
 }
