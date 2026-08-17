@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync, statSync } from 'fs';
 import { execFile as execFileCb, spawn } from 'child_process';
 import { promisify } from 'util';
 
@@ -103,6 +103,8 @@ export class GitService implements vscode.Disposable {
 	/** Manual repo pick from the UI; cleared when the focused editor file maps to a repo. */
 	private pinnedRepoRoot: string | undefined;
 	private fileWatchersSetup = false;
+	/** Per-repo watchers for .git HEAD/index/refs so external clients (IDEA) update the panel. */
+	private gitMetaWatchers = new Map<string, vscode.Disposable>();
 	private editorListenersSetup = false;
 	private initState: 'pending' | 'ready' | 'failed' = 'pending';
 	private initError = '';
@@ -330,6 +332,7 @@ export class GitService implements vscode.Disposable {
 	/**
 	 * Soft exclusive replaces git.autorefresh: poll the active repo while the
 	 * Commit panel is visible so missed watcher events still surface untracked files.
+	 * External commits are primarily detected via .git HEAD/index/refs watchers.
 	 */
 	setCommitPanelVisible(visible: boolean): void {
 		this.commitPanelVisible = visible;
@@ -707,6 +710,7 @@ export class GitService implements vscode.Disposable {
 			clearInterval(this.softRefreshPollTimer);
 			this.softRefreshPollTimer = undefined;
 		}
+		this.disposeGitMetadataWatchers();
 		this.repoDisposables.forEach((d) => d.dispose());
 		this.disposables.forEach((d) => d.dispose());
 		this._onDidChange.dispose();
@@ -1446,8 +1450,10 @@ export class GitService implements vscode.Disposable {
 			}
 		} else {
 			const needsIgnored = options?.ignored || pathNeedsIgnoredRefresh(uri.fsPath);
-			// Ignore .git chatter (index, FETCH_HEAD, …) except exclude-style paths.
-			if (isGitInternalPath(uri.fsPath) && !needsIgnored) {
+			const gitInternal = isGitInternalPath(uri.fsPath);
+			const gitMetadata = gitInternal && isGitStatusMetadataPath(uri.fsPath);
+			// Skip .git noise (objects, *.lock, logs) but keep HEAD/index/refs — external commits.
+			if (gitInternal && !needsIgnored && !gitMetadata) {
 				return;
 			}
 			const repo = this.resolveRepoForUri(uri);
@@ -1455,7 +1461,7 @@ export class GitService implements vscode.Disposable {
 				return;
 			}
 			const root = repo.rootUri.fsPath;
-			if (!isGitInternalPath(uri.fsPath)) {
+			if (!gitInternal || gitMetadata) {
 				this.pendingStatusRoots.add(root);
 			}
 			if (needsIgnored) {
@@ -1563,11 +1569,11 @@ export class GitService implements vscode.Disposable {
 			// Note: do NOT call the built-in 'git.refresh' command here. Without a repository
 			// argument it opens a "Choose a repository" quick pick in multi-repo workspaces.
 			if (repos.length) {
-				await Promise.all(repos.map((repo) => repo.status().catch(() => undefined)));
+				await Promise.all(repos.map((repo) => this.statusRepository(repo)));
 				const dropped = await Promise.all(repos.map((repo) => this.dropPhantomIndexAdds(repo)));
 				const again = repos.filter((_, i) => dropped[i]);
 				if (again.length) {
-					await Promise.all(again.map((repo) => repo.status().catch(() => undefined)));
+					await Promise.all(again.map((repo) => this.statusRepository(repo)));
 				}
 			}
 
@@ -3361,6 +3367,23 @@ export class GitService implements vscode.Disposable {
 		}
 	}
 
+	/** `git status` via vscode.git; retry briefly on a live index.lock, never delete it. */
+	private async statusRepository(repo: Repository): Promise<void> {
+		const maxAttempts = 6;
+		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+			try {
+				await repo.status();
+				return;
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				if (!isIndexLockError(message) || attempt === maxAttempts) {
+					return;
+				}
+				await sleep(40 * attempt);
+			}
+		}
+	}
+
 	/** Retry briefly when another git process (often VS Code's) holds index.lock. */
 	private async execGitWithIndexLockRetry(
 		cwd: string,
@@ -3666,6 +3689,7 @@ export class GitService implements vscode.Disposable {
 		this.repoDisposables.forEach((d) => d.dispose());
 		this.repoDisposables = [];
 		if (!this.api) {
+			this.disposeGitMetadataWatchers();
 			return;
 		}
 		for (const repo of this.api.repositories) {
@@ -3682,6 +3706,76 @@ export class GitService implements vscode.Disposable {
 				this.repoDisposables.push(repo.onDidCommit(() => this.scheduleRefresh()));
 			}
 		}
+		this.syncGitMetadataWatchers();
+	}
+
+	/**
+	 * Watch .git HEAD / index / refs so IDEA (or git CLI) commits surface without
+	 * a manual refresh. Idempotent: bindRepositoryEvents runs on every status flush.
+	 */
+	private syncGitMetadataWatchers(): void {
+		if (!this.api) {
+			this.disposeGitMetadataWatchers();
+			return;
+		}
+		const wanted = new Map<string, string>();
+		for (const repo of this.api.repositories) {
+			const root = repo.rootUri.fsPath;
+			wanted.set(normalizePathKey(root), root);
+		}
+		for (const [key, disposable] of this.gitMetaWatchers) {
+			if (!wanted.has(key)) {
+				disposable.dispose();
+				this.gitMetaWatchers.delete(key);
+			}
+		}
+		for (const [key, root] of wanted) {
+			if (this.gitMetaWatchers.has(key)) {
+				continue;
+			}
+			this.gitMetaWatchers.set(key, this.watchGitMetadata(root));
+		}
+	}
+
+	private disposeGitMetadataWatchers(): void {
+		for (const disposable of this.gitMetaWatchers.values()) {
+			disposable.dispose();
+		}
+		this.gitMetaWatchers.clear();
+	}
+
+	private watchGitMetadata(repoRoot: string): vscode.Disposable {
+		const gitDir = resolveDotGitDir(repoRoot);
+		if (!gitDir) {
+			return new vscode.Disposable(() => undefined);
+		}
+		const dirs = [gitDir];
+		const commonDir = resolveGitCommonDir(gitDir);
+		if (commonDir && normalizePathKey(commonDir) !== normalizePathKey(gitDir)) {
+			dirs.push(commonDir);
+		}
+		const refresh = (uri: vscode.Uri) => {
+			if (isGitLockOrTempPath(uri.fsPath)) {
+				return;
+			}
+			this.scheduleRootsStatus([repoRoot]);
+		};
+		const disposables: vscode.Disposable[] = [];
+		for (const dir of dirs) {
+			const base = vscode.Uri.file(dir);
+			for (const glob of ['HEAD', 'index', 'packed-refs', 'FETCH_HEAD', 'refs/**'] as const) {
+				const watcher = vscode.workspace.createFileSystemWatcher(
+					new vscode.RelativePattern(base, glob)
+				);
+				disposables.push(
+					watcher,
+					watcher.onDidChange(refresh),
+					watcher.onDidCreate(refresh),
+					watcher.onDidDelete(refresh)
+				);
+			}
+		}
+		return vscode.Disposable.from(...disposables);
 	}
 
 	private toChangeItem(change: Change, root: string, staged: boolean): ChangeItem {
@@ -4118,6 +4212,71 @@ function isPathInsideRoot(fsPath: string, root: string): boolean {
 function isGitInternalPath(fsPath: string): boolean {
 	const normalized = fsPath.replace(/\\/g, '/');
 	return /(?:^|\/)\.git(?:\/|$)/.test(normalized);
+}
+
+/** Live Git lock/temp files — never treat as a status signal, and never delete them. */
+function isGitLockOrTempPath(fsPath: string): boolean {
+	const base = path.basename(fsPath);
+	return base.endsWith('.lock') || base.endsWith('.tmp');
+}
+
+/**
+ * .git files that mean another client changed repo state (commit / fetch / branch).
+ * Excludes objects, logs, and *.lock (index.lock must be waited out, not deleted).
+ */
+function isGitStatusMetadataPath(fsPath: string): boolean {
+	if (isGitLockOrTempPath(fsPath)) {
+		return false;
+	}
+	const normalized = fsPath.replace(/\\/g, '/');
+	if (
+		/(?:^|\/)\.git\/(?:worktrees\/[^/]+\/)?(HEAD|index|packed-refs|FETCH_HEAD)$/i.test(
+			normalized
+		)
+	) {
+		return true;
+	}
+	return /(?:^|\/)\.git\/(?:worktrees\/[^/]+\/)?refs\//i.test(normalized);
+}
+
+/** `.git` directory, or the gitdir pointed to by a worktree `.git` file. */
+function resolveDotGitDir(repoRoot: string): string | undefined {
+	const dotGit = path.join(repoRoot, '.git');
+	try {
+		const stat = statSync(dotGit);
+		if (stat.isDirectory()) {
+			return dotGit;
+		}
+		if (!stat.isFile()) {
+			return undefined;
+		}
+		const text = readFileSync(dotGit, 'utf8');
+		const match = /^\s*gitdir:\s*(.+)\s*$/m.exec(text);
+		if (!match) {
+			return undefined;
+		}
+		const gitDir = match[1].trim();
+		return path.isAbsolute(gitDir) ? gitDir : path.resolve(repoRoot, gitDir);
+	} catch {
+		return undefined;
+	}
+}
+
+/** Worktree git dirs store refs in the main `.git` via `commondir`. */
+function resolveGitCommonDir(gitDir: string): string | undefined {
+	const commondirFile = path.join(gitDir, 'commondir');
+	if (!existsSync(commondirFile)) {
+		return undefined;
+	}
+	try {
+		const raw = readFileSync(commondirFile, 'utf8').trim();
+		if (!raw) {
+			return undefined;
+		}
+		return path.isAbsolute(raw) ? raw : path.resolve(gitDir, raw);
+	} catch {
+		return undefined;
+	}
 }
 
 /** Create/delete/.gitignore-style paths may change the ignored list. */
