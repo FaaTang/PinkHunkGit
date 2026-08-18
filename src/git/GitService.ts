@@ -374,10 +374,12 @@ export class GitService implements vscode.Disposable {
 			if (this.softAutofetchTimer) {
 				return;
 			}
-			this.lastSoftAutofetchAt = Date.now();
+			// Trigger an immediate first fetch on startup, then keep the normal period.
+			this.lastSoftAutofetchAt = 0;
 			this.softAutofetchTimer = setInterval(() => {
 				void this.pollSoftAutofetch();
 			}, GitService.SOFT_AUTOFETCH_MS);
+			void this.pollSoftAutofetch();
 			return;
 		}
 		if (this.softAutofetchTimer) {
