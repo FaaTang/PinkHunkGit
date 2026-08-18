@@ -49,7 +49,7 @@ npm run package
 - 仅 Changes 分组在分支名后显示 `N↓` / `N↑`，点击可拉取该仓库或打开 Push；Unversioned / Ignored 不显示这两项，数量与分支列仍与 Changes 对齐
 - Fast Push（Commit and Push ▾ 下拉）：可选 AI 生成说明 → 提交 → 可选自动 `v*` tag 递增 → 可选推送并自动合并
 - AI 生成提交信息：按系统/提示词强制**简体中文**标题与 bullet；可配置可选前缀与强制生成提示词（Workspace / Global，支持 Clear Global）。勾选 Force generation prompt 后，提示词会注入生成流程，并在生成后由代码强制落实；`yyyyMMdd` / `YYYYMMDD` 按本机当天展开（如 `vyyyyMMdd#000` → `v20260812#000`）。会拒绝空泛的「更新 N 个文件」类标题，回退时按 staged diffs 概括具体改动
-- 软独占 Git（默认开）：在工作区关闭内置 `git.autofetch` / `git.autorefresh`，降低 `index.lock` 冲突，同时保持 `vscode.git` 启用以供本插件 API。可在设置 **Pink Hunk Git: Soft Exclusive Git** 或命令 **Toggle Soft Exclusive Git** 开关。Commit 面板可见时，除文件监视外还会约每 1.5 秒刷新当前仓库状态，避免本地改动延迟出现。另外会监视 `.git/HEAD`、`index` 与 `refs`，因此 IDEA 等外部客户端提交后会自动跟上，无需手动刷新
+- 软独占 Git（默认开）：在工作区关闭内置 `git.autofetch` / `git.autorefresh`，降低 `index.lock` 冲突，同时保持 `vscode.git` 启用以供本插件 API。可在设置 **Pink Hunk Git: Soft Exclusive Git** 或命令 **Toggle Soft Exclusive Git** 开关。Commit 面板可见时，除文件监视外还会约每 1.5 秒刷新当前仓库状态，避免本地改动延迟出现。另外会约每 3 分钟静默 fetch 各仓库的 upstream（与 VS Code 默认 `git.autofetchPeriod` 相同），以更新 `N↓` / `N↑`。还会监视 `.git/HEAD`、`index` 与 `refs`，因此 IDEA 等外部客户端提交后会自动跟上，无需手动刷新
 - Clone Repository 对话框（仿 IDEA）：粘贴 HTTPS/SSH URL、选择目录后执行 `git clone`
 - 一次拉取并更新当前工作区内的所有 Git 仓库
 - 快捷键安装按钮（写入用户 `keybindings.json`）

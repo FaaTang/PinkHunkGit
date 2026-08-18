@@ -115,8 +115,14 @@ export class GitService implements vscode.Disposable {
 	private commitPanelVisible = false;
 	/** Replaces git.autorefresh: status the active repo while the Commit panel is visible. */
 	private softRefreshPollTimer: ReturnType<typeof setInterval> | undefined;
+	/** Replaces git.autofetch: fetch upstreams so ahead/behind (N↓) stay current. */
+	private softAutofetchTimer: ReturnType<typeof setInterval> | undefined;
+	private softAutofetchInFlight = false;
+	private lastSoftAutofetchAt = 0;
 	/** ~1.5s matches built-in autorefresh feel without dual-client lock races. */
 	private static readonly SOFT_REFRESH_POLL_MS = 1_500;
+	/** Matches VS Code `git.autofetchPeriod` default (180s). */
+	private static readonly SOFT_AUTOFETCH_MS = 180_000;
 	private pendingDiffAdvance: { repoRoot: string; path: string } | undefined;
 	private pendingDiffRetreat: { repoRoot: string; path: string } | undefined;
 	private diffNavDecorationType: vscode.TextEditorDecorationType | undefined;
@@ -246,6 +252,7 @@ export class GitService implements vscode.Disposable {
 		// Soft exclusive relies on our watchers — mount sooner than the deferred cold start.
 		this.scheduleFileWatchers(isSoftExclusiveEnabled() ? 500 : 3_000);
 		this.syncSoftRefreshPoll();
+		this.syncSoftAutofetch();
 		logExtension(`Git init: background warmup scheduled | since start: ${Date.now() - t0}ms`);
 	}
 
@@ -337,6 +344,7 @@ export class GitService implements vscode.Disposable {
 	setCommitPanelVisible(visible: boolean): void {
 		this.commitPanelVisible = visible;
 		this.syncSoftRefreshPoll();
+		this.syncSoftAutofetch();
 	}
 
 	private syncSoftRefreshPoll(): void {
@@ -353,6 +361,99 @@ export class GitService implements vscode.Disposable {
 		if (this.softRefreshPollTimer) {
 			clearInterval(this.softRefreshPollTimer);
 			this.softRefreshPollTimer = undefined;
+		}
+	}
+
+	/**
+	 * Soft exclusive replaces git.autofetch (disabled to avoid index.lock races).
+	 * Same 3-minute period as VS Code's default `git.autofetchPeriod`.
+	 */
+	private syncSoftAutofetch(): void {
+		const want = isSoftExclusiveEnabled() && this.initState === 'ready';
+		if (want) {
+			if (this.softAutofetchTimer) {
+				return;
+			}
+			this.lastSoftAutofetchAt = Date.now();
+			this.softAutofetchTimer = setInterval(() => {
+				void this.pollSoftAutofetch();
+			}, GitService.SOFT_AUTOFETCH_MS);
+			return;
+		}
+		if (this.softAutofetchTimer) {
+			clearInterval(this.softAutofetchTimer);
+			this.softAutofetchTimer = undefined;
+		}
+	}
+
+	/** Silent `git fetch` of each repo's upstream so `HEAD.behind` (N↓) can update. */
+	private async pollSoftAutofetch(options?: { overdueOnly?: boolean }): Promise<void> {
+		if (!isSoftExclusiveEnabled() || this.initState !== 'ready') {
+			return;
+		}
+		if (this.refreshSuspended > 0 || this.softAutofetchInFlight) {
+			return;
+		}
+		if (!vscode.window.state.focused) {
+			return;
+		}
+		if (
+			options?.overdueOnly &&
+			Date.now() - this.lastSoftAutofetchAt < GitService.SOFT_AUTOFETCH_MS
+		) {
+			return;
+		}
+		const repos = this.api?.repositories ?? [];
+		if (!repos.length) {
+			return;
+		}
+		this.softAutofetchInFlight = true;
+		this.lastSoftAutofetchAt = Date.now();
+		try {
+			const fetchedRoots: string[] = [];
+			for (const repo of repos) {
+				if (this.refreshSuspended > 0) {
+					break;
+				}
+				if (await this.fetchUpstreamSilent(repo)) {
+					fetchedRoots.push(repo.rootUri.fsPath);
+				}
+			}
+			if (fetchedRoots.length) {
+				this.scheduleRootsStatus(fetchedRoots);
+			}
+		} finally {
+			this.softAutofetchInFlight = false;
+		}
+	}
+
+	/** Fetch the tracked upstream only — enough for ahead/behind, no auth UI. */
+	private async fetchUpstreamSilent(repo: Repository): Promise<boolean> {
+		const upstream = repo.state.HEAD?.upstream;
+		if (!upstream?.remote) {
+			return false;
+		}
+		const root = repo.rootUri.fsPath;
+		const args = this.withSessionProxyArgs(
+			upstream.name
+				? ['fetch', '--quiet', upstream.remote, upstream.name]
+				: ['fetch', '--quiet', upstream.remote]
+		);
+		try {
+			await execFile(this.gitExecutable, args, {
+				cwd: root,
+				maxBuffer: 10 * 1024 * 1024,
+				env: {
+					...process.env,
+					GIT_TERMINAL_PROMPT: '0',
+					GIT_OPTIONAL_LOCKS: '0',
+				},
+			});
+			return true;
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			logExtension(`Soft autofetch failed (${this.repoDisplayName(root)}): ${message}`);
+			return false;
 		}
 	}
 
@@ -426,9 +527,15 @@ export class GitService implements vscode.Disposable {
 					this._onDidChange.fire();
 				});
 			}),
+			vscode.window.onDidChangeWindowState((state) => {
+				if (state.focused) {
+					void this.pollSoftAutofetch({ overdueOnly: true });
+				}
+			}),
 			vscode.workspace.onDidChangeConfiguration((e) => {
 				if (e.affectsConfiguration(SOFT_EXCLUSIVE_SETTING)) {
 					this.syncSoftRefreshPoll();
+					this.syncSoftAutofetch();
 				}
 			})
 		);
@@ -709,6 +816,10 @@ export class GitService implements vscode.Disposable {
 		if (this.softRefreshPollTimer) {
 			clearInterval(this.softRefreshPollTimer);
 			this.softRefreshPollTimer = undefined;
+		}
+		if (this.softAutofetchTimer) {
+			clearInterval(this.softAutofetchTimer);
+			this.softAutofetchTimer = undefined;
 		}
 		this.disposeGitMetadataWatchers();
 		this.repoDisposables.forEach((d) => d.dispose());
