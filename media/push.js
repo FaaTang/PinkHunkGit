@@ -554,13 +554,29 @@
     return String(repoRoot || '').replace(/\\/g, '/').toLowerCase();
   }
 
+  function targetHasUnpushedCommits(target) {
+    if ((target?.commits?.length ?? 0) > 0) {
+      return true;
+    }
+    return typeof target?.ahead === 'number' && Number.isFinite(target.ahead) && target.ahead > 0;
+  }
+
   function defaultCheckedRoots() {
+    // Explicit host selection (N↑, Commit and Push, conflict resume) wins.
     if (payload.selectionRepoRoots?.length) {
       return new Set(payload.selectionRepoRoots.map(normalizeRepoRoot));
     }
     if (payload.pendingRepoRoots?.length) {
       return new Set(payload.pendingRepoRoots.map(normalizeRepoRoot));
     }
+    // Generic open: check every repo that still has local commits to push.
+    const withCommits = payload.targets
+      .filter(targetHasUnpushedCommits)
+      .map((t) => normalizeRepoRoot(t.repoRoot));
+    if (withCommits.length) {
+      return new Set(withCommits);
+    }
+    // Nothing pending — keep focus on the active repo (Push stays disabled unless Push tags).
     const active = payload.activeRepoRoot || payload.targets[0]?.repoRoot;
     if (active) {
       return new Set([normalizeRepoRoot(active)]);
