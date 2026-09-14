@@ -1554,8 +1554,18 @@ button.danger {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--bg) 55%, rgba(0, 0, 0, 0.45));
+  /* Opaque so first-paint never shows an empty Git/Changes shell underneath. */
+  background: var(--bg);
   pointer-events: auto;
+}
+
+/* Operation busy (commit/push): dim chrome but keep context visible. */
+body.panel-busy:not(.panel-booting) .panel-loading-overlay {
+  background: color-mix(in srgb, var(--bg) 55%, rgba(0, 0, 0, 0.45));
+}
+
+body.panel-booting #app {
+  visibility: hidden;
 }
 
 .panel-loading-box {

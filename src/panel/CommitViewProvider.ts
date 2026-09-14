@@ -190,6 +190,9 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				const mediaVersion = this.getMediaVersion();
 				if (mediaVersion !== this.loadedMediaVersion) {
 					this.loadedMediaVersion = mediaVersion;
+					// Fresh HTML boots with Loading overlay; force the next snapshot through.
+					this.panelLoading = true;
+					this.lastSnapshotFingerprint = '';
 					try {
 						webviewView.webview.html = this.getHtml(webviewView.webview);
 					} catch {
@@ -811,7 +814,20 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 	 * is idle; newly opened roots are handled in GitService background init.
 	 */
 	private async softRefreshAndPush(): Promise<void> {
-		await this.waitForGitInit();
+		const initPending = this.git.isInitPending();
+		// Also cover HTML reload (panelLoading already true) so overlay clears after paint.
+		const showLoading = initPending || this.panelLoading;
+		if (showLoading) {
+			this.panelLoading = true;
+			await this.pushSnapshot();
+		}
+		try {
+			await this.waitForGitInit();
+		} finally {
+			if (showLoading) {
+				this.panelLoading = false;
+			}
+		}
 		await this.pushSnapshot();
 		if (!this.git.isDiscovering()) {
 			this.git.scheduleActiveRepoStatus();
@@ -920,6 +936,10 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 				case 'ready':
 					// Status refresh is owned by resolveWebviewView / visibility / reveal.
 					// Avoid a duplicate full status+ignored pass on every webview bootstrap.
+					// Webview just booted — keep Loading until we have a real snapshot.
+					if (this.git.isInitPending() || this.panelLoading) {
+						this.panelLoading = true;
+					}
 					await this.pushSnapshot();
 					await this.postFastPushSettings();
 					await this.postCommitMessagePrefixSettings();
@@ -1266,7 +1286,7 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
   <link rel="stylesheet" href="${styleUri}" />
   <title>Commit</title>
 </head>
-<body class="sidebar-mode">
+<body class="sidebar-mode panel-busy panel-booting">
   <div id="app">
     <div class="panel-toolbar">
       <span class="toolbar-title">Git</span>
@@ -1518,11 +1538,11 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
     </div>
   </div>
 
-  <div id="panelLoadingOverlay" class="panel-loading-overlay hidden" aria-live="polite" aria-busy="true">
+  <div id="panelLoadingOverlay" class="panel-loading-overlay" aria-live="polite" aria-busy="true">
     <div class="panel-loading-box">
       <div class="panel-loading-spinner" aria-hidden="true"></div>
       <div class="panel-loading-copy">
-        <div id="panelLoadingTitle" class="panel-loading-title">Working…</div>
+        <div id="panelLoadingTitle" class="panel-loading-title">Loading Git…</div>
         <div id="panelLoadingProgress" class="panel-loading-progress hidden">0/0</div>
         <div id="panelLoadingBar" class="panel-loading-bar hidden" aria-hidden="true">
           <div id="panelLoadingBarFill" class="panel-loading-bar-fill"></div>

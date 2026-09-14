@@ -132,11 +132,13 @@
   let groupByModule = webviewState.groupByModule !== false;
   let showIgnoredFiles = webviewState.showIgnoredFiles !== false;
   let workspace = {
-    ok: true,
+    ok: false,
+    loading: true,
+    hint: 'Loading Git…',
     repositories: [],
-    active: { ok: true, rootPath: '', name: '', staged: [], unstaged: [], unversioned: [] },
+    active: { ok: false, rootPath: '', name: '', staged: [], unstaged: [], unversioned: [] },
     activeRepoRoot: '',
-    busy: false,
+    busy: true,
   };
   const collapsedGroups = new Set(webviewState.collapsedGroups || []);
   /**
@@ -1989,6 +1991,7 @@
       panelLoadingOverlay.classList.toggle('hidden', !busy);
     }
     if (!busy) {
+      document.body.classList.remove('panel-booting');
       setRefreshBusy(false);
       clearFastPushProgress();
       if (panelLoadingTitle) {
@@ -4551,14 +4554,18 @@
 
         const active = workspace.active || {};
         if (workspace.loading) {
-          // Global Working overlay covers first paint; skip the thin top banner.
+          // Boot / Git init: opaque overlay, hide empty shell.
+          document.body.classList.add('panel-booting');
           showBanner('');
-        } else if (workspace.error) {
-          showBanner(workspace.error, 'error');
-        } else if (active.hint) {
-          showBanner(active.hint, 'info');
         } else {
-          showBanner('');
+          document.body.classList.remove('panel-booting');
+          if (workspace.error) {
+            showBanner(workspace.error, 'error');
+          } else if (active.hint) {
+            showBanner(active.hint, 'info');
+          } else {
+            showBanner('');
+          }
         }
 
         setBusy(
@@ -4685,5 +4692,7 @@
   });
 
   updateCommitActionTitles();
+  // First paint: keep Loading until the host snapshot arrives (avoid empty Git/Changes shell).
+  setBusy(true, 'Loading Git…');
   post({ type: 'ready' });
 })();

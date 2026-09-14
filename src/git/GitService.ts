@@ -205,6 +205,9 @@ export class GitService implements vscode.Disposable {
 
 		this.bindRepositoryEvents();
 		this.setupEditorListeners();
+		// Mark discovery before unblocking so 0-repo workspaces keep Loading
+		// (avoids a tick of "not a Git repository" between ready and discover).
+		this.discovering = true;
 		// Unblock the Commit panel immediately — do not wait for discovery/status.
 		this.initState = 'ready';
 		this._onDidChange.fire();
@@ -216,8 +219,6 @@ export class GitService implements vscode.Disposable {
 
 	/** Discover missing roots; status only newly opened repos (skip redundant full status). */
 	private async completeInitInBackground(t0: number): Promise<void> {
-		this.discovering = true;
-		this._onDidChange.fire();
 		let openedRoots: string[] = [];
 		try {
 			openedRoots = await this.ensureWorkspaceRepositoriesDiscovered();
