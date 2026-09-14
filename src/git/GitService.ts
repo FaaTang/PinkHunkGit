@@ -1757,7 +1757,7 @@ export class GitService implements vscode.Disposable {
 				await this.runGitApi(repo, 'add', this.formatPaths(paths), () => repo.add(paths));
 			} catch (err) {
 				const detail = err instanceof Error ? err.message : String(err);
-				errors.push(`[${this.repoDisplayName(root)}] ${detail}`);
+				errors.push(this.formatRepoError(this.repoDisplayName(root), detail));
 			}
 		}
 		if (errors.length) {
@@ -1888,7 +1888,7 @@ export class GitService implements vscode.Disposable {
 				}
 			} catch (err) {
 				const detail = err instanceof Error ? err.message : String(err);
-				errors.push(`[${snap.name}] ${detail}`);
+				errors.push(this.formatRepoError(snap.name, detail));
 			}
 		}
 
@@ -1941,7 +1941,7 @@ export class GitService implements vscode.Disposable {
 				);
 			} catch (err) {
 				const detail = err instanceof Error ? err.message : String(err);
-				errors.push(`[${this.repoDisplayName(root)}] ${detail}`);
+				errors.push(this.formatRepoError(this.repoDisplayName(root), detail));
 			}
 		}
 		if (errors.length) {
@@ -2006,7 +2006,7 @@ export class GitService implements vscode.Disposable {
 				});
 			} catch (err) {
 				const detail = err instanceof Error ? err.message : String(err);
-				errors.push(`[${name}] ${detail}`);
+				errors.push(this.formatRepoError(name, detail));
 			}
 		}
 
@@ -2571,7 +2571,7 @@ export class GitService implements vscode.Disposable {
 				committed.push({ name: snap.name, rootPath: snap.rootPath, branch: snap.branch });
 			} catch (err) {
 				const detail = err instanceof Error ? err.message : String(err);
-				errors.push(`[${snap.name}] ${detail}`);
+				errors.push(this.formatRepoError(snap.name, detail));
 			}
 		}
 		if (errors.length) {
@@ -3670,8 +3670,9 @@ export class GitService implements vscode.Disposable {
 	}
 
 	/**
-	 * `git add` relative paths in a single repository. On pathspec failure, retry
-	 * file-by-file so one missing path cannot abort the rest of that repo.
+	 * Stage relative paths in one repository.
+	 * Existing files: `git add`. Missing files (tracked deletions): `git rm --ignore-unmatch`
+	 * so already-staged deletions (gone from index AND disk) are a no-op instead of pathspec.
 	 */
 	private async stageRelativePathsInRepo(
 		repoRoot: string,
@@ -3681,34 +3682,35 @@ export class GitService implements vscode.Disposable {
 		if (!relatives.length) {
 			return;
 		}
-		const addArgs = force ? ['add', '-f', '--'] : ['add', '--'];
-		try {
-			for (const args of chunkGitArgs(addArgs, relatives)) {
+		const existing: string[] = [];
+		const missing: string[] = [];
+		for (const rel of relatives) {
+			const fsPath = path.join(repoRoot, ...rel.split('/'));
+			if (existsSync(fsPath)) {
+				existing.push(rel);
+			} else {
+				missing.push(rel);
+			}
+		}
+		if (existing.length) {
+			const addArgs = force ? ['add', '-f', '--'] : ['add', '--'];
+			for (const args of chunkGitArgs(addArgs, existing)) {
 				await this.execGitWithIndexLockRetry(repoRoot, args);
 			}
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			if (!isPathspecError(message)) {
-				throw err;
-			}
-			const failed: string[] = [];
-			for (const rel of relatives) {
-				try {
-					await this.execGitWithIndexLockRetry(repoRoot, [...addArgs, rel]);
-				} catch (oneErr) {
-					const oneMsg = oneErr instanceof Error ? oneErr.message : String(oneErr);
-					if (isPathspecError(oneMsg)) {
-						failed.push(rel);
-						continue;
-					}
-					throw oneErr;
-				}
-			}
-			if (failed.length) {
-				throw new Error(
-					`fatal: pathspec did not match any files: ${failed.join(', ')} (repo: ${repoRoot})`
-				);
-			}
+		}
+		if (missing.length) {
+			await this.stageMissingPathsAsDeletions(repoRoot, missing);
+		}
+	}
+
+	/**
+	 * Record working-tree deletions. `git add -- deleted` fails with pathspec once the
+	 * path is already removed from the index (`D ` staged). `git rm --ignore-unmatch`
+	 * stages remaining index entries and is a no-op for already-staged deletions.
+	 */
+	private async stageMissingPathsAsDeletions(repoRoot: string, relatives: string[]): Promise<void> {
+		for (const args of chunkGitArgs(['rm', '--ignore-unmatch', '-q', '--'], relatives)) {
+			await this.execGitWithIndexLockRetry(repoRoot, args);
 		}
 	}
 
@@ -3995,6 +3997,15 @@ export class GitService implements vscode.Disposable {
 			throw new Error(`File is not inside a Git repository: ${fsPath}`);
 		}
 		return repo;
+	}
+
+	private formatRepoError(name: string, detail: string): string {
+		const prefix = `[${name}] `;
+		const trimmed = detail.trim();
+		if (trimmed.startsWith(prefix) || trimmed.startsWith(`[${name}]`)) {
+			return trimmed;
+		}
+		return `${prefix}${trimmed}`;
 	}
 
 	/**
@@ -4778,10 +4789,6 @@ export function bumpTrailingVTag(tagName: string | undefined): string | undefine
 
 function isIndexLockError(message: string): boolean {
 	return /index\.lock/i.test(message) || /Another git process seems to be running/i.test(message);
-}
-
-function isPathspecError(message: string): boolean {
-	return /pathspec .+ did not match any files/i.test(message);
 }
 
 function sleep(ms: number): Promise<void> {
