@@ -376,8 +376,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			if (!checkedChanges.length && !(unversionedPaths?.length)) {
 				throw new Error('Select files to include before generating a commit message.');
 			}
-			await this.git.applyCommitSelection(checkedChanges);
-			await this.stageUnversionedPaths(unversionedPaths);
+			const all = [...checkedChanges, ...(unversionedPaths ?? [])];
+			await this.git.applyCommitSelection(all, { forcePaths: unversionedPaths ?? [] });
 			await this.git.refresh();
 			const generated = await this.git.generateCommitMessageWithAi(
 				checkedChanges,
@@ -442,8 +442,8 @@ export class CommitViewProvider implements vscode.WebviewViewProvider {
 			});
 		};
 
-		await this.git.applyCommitSelection(checkedChanges);
-		await this.stageUnversionedPaths(unversionedPaths);
+		const all = [...checkedChanges, ...(unversionedPaths ?? [])];
+		await this.git.applyCommitSelection(all, { forcePaths: unversionedPaths ?? [] });
 		await this.git.refresh();
 
 		report('Preparing commit message…');

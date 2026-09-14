@@ -122,7 +122,7 @@
       "activitybar": [
         {
           "id": "copyIdeaGitUi",
-          "title": "Commit",
+          "title": "Pink Hunk Git",
           "icon": "media/commit.svg"
         }
       ]
@@ -132,9 +132,9 @@
         {
           "type": "webview",
           "id": "copyIdeaGitUi.commitView",
-          "name": "Commit",
+          "name": "Pink Hunk Git",
           "icon": "media/commit.svg",
-          "contextualTitle": "Commit"
+          "contextualTitle": "Pink Hunk Git"
         }
       ]
     },

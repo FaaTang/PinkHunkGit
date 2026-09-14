@@ -1743,18 +1743,25 @@ export class GitService implements vscode.Disposable {
 			}
 		}
 
+		const errors: string[] = [];
 		for (const [repo, paths] of byRepo) {
-			if (options?.force) {
-				const relatives = paths.map((fsPath) =>
-					path.relative(repo.rootUri.fsPath, fsPath).replace(/\\/g, '/')
-				);
-				for (const args of chunkGitArgs(['add', '-f', '--'], relatives)) {
-					await this.execGitWithIndexLockRetry(repo.rootUri.fsPath, args);
+			const root = repo.rootUri.fsPath;
+			try {
+				// Always derive relatives under THIS repo — never reuse another root's paths.
+				const relatives = paths.map((fsPath) => this.relativePathInsideRepo(root, fsPath));
+				if (options?.force) {
+					await this.stageRelativePathsInRepo(root, relatives, true);
+					await this.runGitApi(repo, 'status', '', () => repo.status().catch(() => undefined));
+					continue;
 				}
-				await this.runGitApi(repo, 'status', '', () => repo.status().catch(() => undefined));
-				continue;
+				await this.runGitApi(repo, 'add', this.formatPaths(paths), () => repo.add(paths));
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				errors.push(`[${this.repoDisplayName(root)}] ${detail}`);
 			}
-			await this.runGitApi(repo, 'add', this.formatPaths(paths), () => repo.add(paths));
+		}
+		if (errors.length) {
+			throw new Error(errors.join('\n'));
 		}
 	}
 
@@ -1769,21 +1776,53 @@ export class GitService implements vscode.Disposable {
 	 * Apply Commit-panel checkboxes to the Git index (IDEA-style: WYSIWYG).
 	 * Always re-adds checked paths from disk so a stale index (e.g. after Generate Message
 	 * or mid-flight file writes) cannot leave working-tree edits out of the next commit.
+	 * Each repository is staged independently — relative paths never cross repo roots.
 	 */
 	async applyCommitSelection(
 		checked: Array<{ repoRoot: string; path: string }>,
-		options?: { force?: boolean }
+		options?: {
+			force?: boolean;
+			forcePaths?: Array<{ repoRoot: string; path: string }>;
+			/** When set, only these roots are staged/unstaged (other repos are left alone). */
+			restrictToRoots?: string[];
+		}
 	): Promise<void> {
 		const workspace = this.getWorkspaceSnapshot();
 		if (!workspace.ok) {
 			throw new Error(workspace.error ?? 'Repository unavailable');
 		}
 
-		const force = !!options?.force;
+		const restrict = options?.restrictToRoots;
+		const knownRoots = workspace.repositories
+			.filter((r) => r.ok)
+			.map((r) => r.rootPath);
+		const orphan = checked.find((entry) => {
+			if (restrict && !restrict.some((root) => pathsEqual(entry.repoRoot, root))) {
+				return false;
+			}
+			return !knownRoots.some((root) => pathsEqual(entry.repoRoot, root));
+		});
+		if (orphan) {
+			throw new Error(
+				`Selected file is not in an open Git repository: ${orphan.path} (${orphan.repoRoot})`
+			);
+		}
+
+		const forceAll = !!options?.force;
+		const forceKeys = new Set(
+			(options?.forcePaths ?? []).map(
+				(entry) =>
+					`${normalizePathKey(entry.repoRoot)}|${normalizePathKey(entry.path.replace(/\\/g, '/'))}`
+			)
+		);
 		const rootsTouched = new Set<string>();
+		const errors: string[] = [];
 
 		for (const snap of workspace.repositories) {
 			if (!snap.ok) {
+				continue;
+			}
+			if (restrict && !restrict.some((root) => pathsEqual(root, snap.rootPath))) {
 				continue;
 			}
 
@@ -1795,44 +1834,66 @@ export class GitService implements vscode.Disposable {
 			);
 			const repo = this.requireRepoByRoot(snap.rootPath);
 			const relativeToStage: string[] = [];
+			const forceRelatives: string[] = [];
+			const normalRelatives: string[] = [];
 			const toUnstage: string[] = [];
 			const seenStage = new Set<string>();
 
-			for (const entry of checkedEntries) {
-				const rel = entry.path.replace(/\\/g, '/');
-				const key = normalizePathKey(rel);
-				if (seenStage.has(key)) {
-					continue;
+			try {
+				for (const entry of checkedEntries) {
+					const rel = this.normalizeRepoRelativePath(snap.rootPath, entry.path);
+					const key = normalizePathKey(rel);
+					if (seenStage.has(key)) {
+						continue;
+					}
+					seenStage.add(key);
+					relativeToStage.push(rel);
+					const forceThis =
+						forceAll ||
+						forceKeys.has(`${normalizePathKey(snap.rootPath)}|${key}`);
+					if (forceThis) {
+						forceRelatives.push(rel);
+					} else {
+						normalRelatives.push(rel);
+					}
 				}
-				seenStage.add(key);
-				relativeToStage.push(rel);
-			}
-			for (const item of snap.staged) {
-				const key = normalizePathKey(item.path);
-				if (checkedSet.has(key)) {
-					continue;
+				for (const item of snap.staged) {
+					const key = normalizePathKey(item.path);
+					if (checkedSet.has(key)) {
+						continue;
+					}
+					toUnstage.push(item.fsPath);
 				}
-				toUnstage.push(item.fsPath);
-			}
 
-			if (relativeToStage.length) {
-				for (const rel of relativeToStage) {
-					await this.ensureSaved(path.join(snap.rootPath, ...rel.split('/')));
+				if (relativeToStage.length) {
+					for (const rel of relativeToStage) {
+						await this.ensureSaved(path.join(snap.rootPath, ...rel.split('/')));
+					}
+					// Prefer `git add --` with relative paths: vscode `repo.add` has dropped
+					// some paths in multi-root / binary refresh races, which breaks WYSIWYG.
+					// Only force-add unversioned/ignored paths for THIS repo.
+					if (normalRelatives.length) {
+						await this.stageRelativePathsInRepo(snap.rootPath, normalRelatives, false);
+					}
+					if (forceRelatives.length) {
+						await this.stageRelativePathsInRepo(snap.rootPath, forceRelatives, true);
+					}
+					rootsTouched.add(snap.rootPath);
 				}
-				// Prefer `git add --` with relative paths: vscode `repo.add` has dropped
-				// some paths in multi-root / binary refresh races, which breaks WYSIWYG.
-				const addArgs = force ? ['add', '-f', '--'] : ['add', '--'];
-				for (const args of chunkGitArgs(addArgs, relativeToStage)) {
-					await this.execGitWithIndexLockRetry(snap.rootPath, args);
+				if (toUnstage.length) {
+					await this.runGitApi(repo, 'revert (unstage)', this.formatPaths(toUnstage), () =>
+						repo.revert(toUnstage)
+					);
+					rootsTouched.add(snap.rootPath);
 				}
-				rootsTouched.add(snap.rootPath);
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				errors.push(`[${snap.name}] ${detail}`);
 			}
-			if (toUnstage.length) {
-				await this.runGitApi(repo, 'revert (unstage)', this.formatPaths(toUnstage), () =>
-					repo.revert(toUnstage)
-				);
-				rootsTouched.add(snap.rootPath);
-			}
+		}
+
+		if (errors.length) {
+			throw new Error(errors.join('\n'));
 		}
 
 		if (!rootsTouched.size) {
@@ -1854,21 +1915,44 @@ export class GitService implements vscode.Disposable {
 		// One retry covers index.lock / watcher races right after external writes (icons, etc.).
 		for (const group of this.groupSelectedPathsByRepo(stillDirty)) {
 			const root = group.repo.rootUri.fsPath;
-			for (const rel of group.relativePaths) {
-				await this.ensureSaved(path.join(root, ...rel.replace(/\\/g, '/').split('/')));
+			const normalRelatives: string[] = [];
+			const forceRelatives: string[] = [];
+			for (const raw of group.relativePaths) {
+				const rel = this.normalizeRepoRelativePath(root, raw);
+				await this.ensureSaved(path.join(root, ...rel.split('/')));
+				const forceThis =
+					forceAll ||
+					forceKeys.has(`${normalizePathKey(root)}|${normalizePathKey(rel)}`);
+				if (forceThis) {
+					forceRelatives.push(rel);
+				} else {
+					normalRelatives.push(rel);
+				}
 			}
-			const addArgs = force ? ['add', '-f', '--'] : ['add', '--'];
-			for (const args of chunkGitArgs(addArgs, group.relativePaths.map((p) => p.replace(/\\/g, '/')))) {
-				await this.execGitWithIndexLockRetry(root, args);
+			try {
+				if (normalRelatives.length) {
+					await this.stageRelativePathsInRepo(root, normalRelatives, false);
+				}
+				if (forceRelatives.length) {
+					await this.stageRelativePathsInRepo(root, forceRelatives, true);
+				}
+				await this.runGitApi(group.repo, 'status', '', () =>
+					group.repo.status().catch(() => undefined)
+				);
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				errors.push(`[${this.repoDisplayName(root)}] ${detail}`);
 			}
-			await this.runGitApi(group.repo, 'status', '', () => group.repo.status().catch(() => undefined));
+		}
+		if (errors.length) {
+			throw new Error(errors.join('\n'));
 		}
 
 		const stillDirtyAfterRetry = await this.findCheckedPathsStillUnstaged(checked);
 		if (stillDirtyAfterRetry.length) {
 			const sample = stillDirtyAfterRetry
 				.slice(0, 8)
-				.map((e) => e.path)
+				.map((e) => `${path.basename(e.repoRoot)}:${e.path}`)
 				.join(', ');
 			const more =
 				stillDirtyAfterRetry.length > 8 ? ` (+${stillDirtyAfterRetry.length - 8} more)` : '';
@@ -1891,10 +1975,50 @@ export class GitService implements vscode.Disposable {
 		if (!all.length) {
 			throw new Error('No files selected for commit.');
 		}
-		// Include unversioned/ignored with -f in the same pass so we never unstage
-		// tracked checked files while adding unversioned ones.
-		await this.applyCommitSelection(all, { force: (unversionedPaths?.length ?? 0) > 0 });
-		return this.commitAllStaged(message);
+		const trimmed = message.trim();
+		if (!trimmed) {
+			throw new Error('Commit message cannot be empty.');
+		}
+
+		const grouped = this.groupSelectedPathsByRepo(all);
+		const committed: CommitRepoResult[] = [];
+		const errors: string[] = [];
+		const perRepoMessage = parseMultiRepoCommitMessage(trimmed);
+
+		for (const group of grouped) {
+			const root = group.repo.rootUri.fsPath;
+			const name = this.repoDisplayName(root);
+			const entries = all.filter((entry) => pathsEqual(entry.repoRoot, root));
+			const forcePaths = (unversionedPaths ?? []).filter((entry) =>
+				pathsEqual(entry.repoRoot, root)
+			);
+			try {
+				await this.applyCommitSelection(entries, {
+					forcePaths,
+					restrictToRoots: [root],
+				});
+				const repoMessage = (perRepoMessage.get(normalizePathKey(root)) || trimmed).trim();
+				await this.commitOneRepo(group.repo, name, repoMessage);
+				committed.push({
+					name,
+					rootPath: root,
+					branch: group.repo.state.HEAD?.name,
+				});
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				errors.push(`[${name}] ${detail}`);
+			}
+		}
+
+		if (!committed.length) {
+			throw new Error(errors.join('\n') || 'No files selected for commit.');
+		}
+		if (errors.length) {
+			throw new Error(
+				`Committed ${committed.map((c) => c.name).join(', ')}. Failed:\n${errors.join('\n')}`
+			);
+		}
+		return committed;
 	}
 
 	/** Checked paths whose working tree still differs from the index (add did not stick). */
@@ -2137,15 +2261,16 @@ export class GitService implements vscode.Disposable {
 		const all = [...checkedChanges, ...(unversionedPaths ?? [])];
 		for (const entry of all) {
 			const repo = this.requireRepoByRoot(entry.repoRoot);
+			const rel = this.normalizeRepoRelativePath(repo.rootUri.fsPath, entry.path);
 			const key = normalizePathKey(repo.rootUri.fsPath);
 			const existing = grouped.get(key);
 			if (existing) {
-				if (!existing.relativePaths.some((p) => pathsEqual(p, entry.path))) {
-					existing.relativePaths.push(entry.path);
+				if (!existing.relativePaths.some((p) => pathsEqual(p, rel))) {
+					existing.relativePaths.push(rel);
 				}
 				continue;
 			}
-			grouped.set(key, { repo, relativePaths: [entry.path] });
+			grouped.set(key, { repo, relativePaths: [rel] });
 		}
 		return [...grouped.values()];
 	}
@@ -2436,17 +2561,38 @@ export class GitService implements vscode.Disposable {
 		}
 
 		const committed: CommitRepoResult[] = [];
+		const errors: string[] = [];
 		const perRepoMessage = parseMultiRepoCommitMessage(trimmed);
 		for (const snap of targets) {
-			const repo = this.requireRepoByRoot(snap.rootPath);
-			const repoMessage = (perRepoMessage.get(normalizePathKey(snap.rootPath)) || trimmed).trim();
-			const detail = `message="${this.summarizeCommitMessage(repoMessage)}"`;
-			await this.runGitApi(repo, 'commit', detail, () =>
-				repo.commit(repoMessage, { postCommitCommand: null })
-			);
-			committed.push({ name: snap.name, rootPath: snap.rootPath, branch: snap.branch });
+			try {
+				const repo = this.requireRepoByRoot(snap.rootPath);
+				const repoMessage = (perRepoMessage.get(normalizePathKey(snap.rootPath)) || trimmed).trim();
+				await this.commitOneRepo(repo, snap.name, repoMessage);
+				committed.push({ name: snap.name, rootPath: snap.rootPath, branch: snap.branch });
+			} catch (err) {
+				const detail = err instanceof Error ? err.message : String(err);
+				errors.push(`[${snap.name}] ${detail}`);
+			}
+		}
+		if (errors.length) {
+			const done = committed.length
+				? `Committed ${committed.map((c) => c.name).join(', ')}. `
+				: '';
+			throw new Error(`${done}${errors.join('\n')}`.trim());
 		}
 		return committed;
+	}
+
+	private async commitOneRepo(repo: Repository, name: string, message: string): Promise<void> {
+		await this.runGitApi(repo, 'status', '', () => repo.status().catch(() => undefined));
+		const snap = this.buildSnapshotForRepo(repo);
+		if (!snap.ok || !snap.staged.length) {
+			throw new Error(`No staged files to commit in ${name}.`);
+		}
+		const detail = `message="${this.summarizeCommitMessage(message)}"`;
+		await this.runGitApi(repo, 'commit', detail, () =>
+			repo.commit(message, { postCommitCommand: null })
+		);
 	}
 
 	async commit(message: string): Promise<CommitRepoResult[]> {
@@ -3477,7 +3623,11 @@ export class GitService implements vscode.Disposable {
 			const stdout = bufferToString(e.stdout).trim();
 			const output = combineGitOutput(stdout, stderr);
 			logGitFail(err, Date.now() - started, output);
-			throw new Error(stderr || stdout || e.message || String(err));
+			const gitMessage = stderr || stdout || e.message || String(err);
+			if (/pathspec .+ did not match any files/i.test(gitMessage)) {
+				throw new Error(`${gitMessage} (repo: ${cwd})`);
+			}
+			throw new Error(gitMessage);
 		}
 	}
 
@@ -3515,6 +3665,49 @@ export class GitService implements vscode.Disposable {
 					throw err;
 				}
 				await sleep(40 * attempt);
+			}
+		}
+	}
+
+	/**
+	 * `git add` relative paths in a single repository. On pathspec failure, retry
+	 * file-by-file so one missing path cannot abort the rest of that repo.
+	 */
+	private async stageRelativePathsInRepo(
+		repoRoot: string,
+		relatives: string[],
+		force: boolean
+	): Promise<void> {
+		if (!relatives.length) {
+			return;
+		}
+		const addArgs = force ? ['add', '-f', '--'] : ['add', '--'];
+		try {
+			for (const args of chunkGitArgs(addArgs, relatives)) {
+				await this.execGitWithIndexLockRetry(repoRoot, args);
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			if (!isPathspecError(message)) {
+				throw err;
+			}
+			const failed: string[] = [];
+			for (const rel of relatives) {
+				try {
+					await this.execGitWithIndexLockRetry(repoRoot, [...addArgs, rel]);
+				} catch (oneErr) {
+					const oneMsg = oneErr instanceof Error ? oneErr.message : String(oneErr);
+					if (isPathspecError(oneMsg)) {
+						failed.push(rel);
+						continue;
+					}
+					throw oneErr;
+				}
+			}
+			if (failed.length) {
+				throw new Error(
+					`fatal: pathspec did not match any files: ${failed.join(', ')} (repo: ${repoRoot})`
+				);
 			}
 		}
 	}
@@ -3787,16 +3980,53 @@ export class GitService implements vscode.Disposable {
 			if (repo) {
 				return repo;
 			}
+			// Never fall back to the active repo: that silently runs relative paths
+			// (e.g. fsx/word_doc_test.go) in the wrong cwd and yields pathspec errors.
+			throw new Error(`Git repository not found: ${repoRoot}`);
 		}
 		return this.requireActiveRepo();
 	}
 
 	private requireRepoForFsPath(fsPath: string): Repository {
-		const repo = this.api?.getRepository(vscode.Uri.file(fsPath));
+		// Prefer longest-root match so deleted / brand-new paths still resolve correctly
+		// in multi-root workspaces (vscode.git getRepository can miss them).
+		const repo = this.resolveRepoForUri(vscode.Uri.file(fsPath));
 		if (!repo) {
-			throw new Error('File is not inside a Git repository.');
+			throw new Error(`File is not inside a Git repository: ${fsPath}`);
 		}
 		return repo;
+	}
+
+	/**
+	 * Normalize a repo-relative path and reject absolute / traversal paths so one
+	 * repository's selection can never be applied under another repo's cwd.
+	 */
+	private normalizeRepoRelativePath(repoRoot: string, relativePath: string): string {
+		const raw = (relativePath || '').trim();
+		if (!raw) {
+			throw new Error(`Empty path for repository ${repoRoot}`);
+		}
+		if (path.isAbsolute(raw) || /^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith('/')) {
+			throw new Error(`Absolute path is not allowed for repository ${repoRoot}: ${raw}`);
+		}
+		const rel = raw.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+		if (!rel || rel === '.' || rel.split('/').some((part) => part === '..')) {
+			throw new Error(`Path escapes repository ${repoRoot}: ${raw}`);
+		}
+		const fsPath = path.resolve(repoRoot, ...rel.split('/'));
+		if (!isPathInsideRoot(fsPath, repoRoot)) {
+			throw new Error(`Path escapes repository ${repoRoot}: ${raw}`);
+		}
+		return rel;
+	}
+
+	/** Relative path for an absolute fsPath that must remain inside the given repo. */
+	private relativePathInsideRepo(repoRoot: string, fsPath: string): string {
+		if (!isPathInsideRoot(fsPath, repoRoot)) {
+			throw new Error(`File is outside repository ${repoRoot}: ${fsPath}`);
+		}
+		const rel = path.relative(repoRoot, fsPath).replace(/\\/g, '/');
+		return this.normalizeRepoRelativePath(repoRoot, rel);
 	}
 
 	private bindRepositoryEvents(): void {
@@ -4548,6 +4778,10 @@ export function bumpTrailingVTag(tagName: string | undefined): string | undefine
 
 function isIndexLockError(message: string): boolean {
 	return /index\.lock/i.test(message) || /Another git process seems to be running/i.test(message);
+}
+
+function isPathspecError(message: string): boolean {
+	return /pathspec .+ did not match any files/i.test(message);
 }
 
 function sleep(ms: number): Promise<void> {
