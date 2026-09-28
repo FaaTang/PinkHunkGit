@@ -2881,7 +2881,7 @@ export class GitService implements vscode.Disposable {
 			const raw = await this.queryGit(root, ['diff', '--name-only', 'HEAD', upstreamRef]);
 			incomingChanged = raw
 				.split('\n')
-				.map((line) => line.trim())
+				.map((line) => unescapeGitPath(line.trim()).replace(/\\/g, '/'))
 				.filter(Boolean);
 		} catch {
 			return [];
@@ -4144,36 +4144,39 @@ export class GitService implements vscode.Disposable {
 	}
 }
 
-/** Decode porcelain path (possibly C-quoted). */
+/**
+ * Decode a Git C-quoted path (core.quotepath).
+ * Octal escapes are UTF-8 bytes (e.g. `\345\225\206` → 商), not Latin-1 code points.
+ */
 function unescapeGitPath(raw: string): string {
 	const trimmed = raw.trim();
 	if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) {
 		return trimmed;
 	}
 	const inner = trimmed.slice(1, -1);
-	let out = '';
+	const bytes: number[] = [];
 	for (let i = 0; i < inner.length; i += 1) {
 		const ch = inner[i];
 		if (ch !== '\\') {
-			out += ch;
+			bytes.push(ch.charCodeAt(0) & 0xff);
 			continue;
 		}
 		const next = inner[i + 1];
 		if (next === undefined) {
-			out += '\\';
+			bytes.push(0x5c);
 			break;
 		}
 		if (next === 'n') {
-			out += '\n';
+			bytes.push(0x0a);
 			i += 1;
 		} else if (next === 't') {
-			out += '\t';
+			bytes.push(0x09);
 			i += 1;
 		} else if (next === 'r') {
-			out += '\r';
+			bytes.push(0x0d);
 			i += 1;
 		} else if (next === '"' || next === '\\') {
-			out += next;
+			bytes.push(next.charCodeAt(0) & 0xff);
 			i += 1;
 		} else if (next >= '0' && next <= '7') {
 			let oct = next;
@@ -4186,14 +4189,14 @@ function unescapeGitPath(raw: string): string {
 				oct += d;
 				consumed += 1;
 			}
-			out += String.fromCharCode(parseInt(oct, 8));
+			bytes.push(parseInt(oct, 8) & 0xff);
 			i += consumed;
 		} else {
-			out += next;
+			bytes.push(next.charCodeAt(0) & 0xff);
 			i += 1;
 		}
 	}
-	return out;
+	return Buffer.from(bytes).toString('utf8');
 }
 
 function statusLetter(status: Status): string {
@@ -4474,9 +4477,10 @@ function parseCommitNameStatus(raw: string): Array<{ path: string; status: strin
 		if (!pathPart) {
 			continue;
 		}
-		// Renames: R100\told\tnew  or show as "old => new"
+		// Renames: R100\told\tnew — unescape before normalizing separators, otherwise
+		// Git's `\345\225\206` (UTF-8 octal for 中文) becomes fake path segments `345/225/206`.
 		const paths = pathPart.split('\t').filter(Boolean);
-		const filePath = (paths[paths.length - 1] || pathPart).replace(/\\/g, '/');
+		const filePath = unescapeGitPath(paths[paths.length - 1] || pathPart).replace(/\\/g, '/');
 		const status = statusRaw.charAt(0) || 'M';
 		files.push({ path: filePath, status });
 	}
