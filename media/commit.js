@@ -2330,11 +2330,12 @@
     folderSvg.setAttribute('width', '14');
     folderSvg.setAttribute('height', '14');
     folderSvg.setAttribute('focusable', 'false');
+    // Soft filled folder — closer to IDEA Local Changes weight at 14px.
     const folderPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     folderPath.setAttribute('fill', 'currentColor');
     folderPath.setAttribute(
       'd',
-      'M1.5 3.5A1.5 1.5 0 0 1 3 2h3.2c.3 0 .6.1.8.3L8.2 3.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3.5Z'
+      'M1.5 3.75A1.25 1.25 0 0 1 2.75 2.5h3.1c.28 0 .54.1.74.28L7.7 3.8c.1.09.22.14.35.14H13.25A1.25 1.25 0 0 1 14.5 5.2v6.55A1.25 1.25 0 0 1 13.25 13H2.75A1.25 1.25 0 0 1 1.5 11.75V3.75Z'
     );
     folderSvg.appendChild(folderPath);
     folderIcon.appendChild(folderSvg);
@@ -3209,7 +3210,7 @@
       folderPath.setAttribute('fill', 'currentColor');
       folderPath.setAttribute(
         'd',
-        'M1.5 3.5A1.5 1.5 0 0 1 3 2h3.2c.3 0 .6.1.8.3L8.2 3.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5H3A1.5 1.5 0 0 1 1.5 12V3.5Z'
+        'M1.5 3.75A1.25 1.25 0 0 1 2.75 2.5h3.1c.28 0 .54.1.74.28L7.7 3.8c.1.09.22.14.35.14H13.25A1.25 1.25 0 0 1 14.5 5.2v6.55A1.25 1.25 0 0 1 13.25 13H2.75A1.25 1.25 0 0 1 1.5 11.75V3.75Z'
       );
       folderSvg.appendChild(folderPath);
       folderIcon.appendChild(folderSvg);

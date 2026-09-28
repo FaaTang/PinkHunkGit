@@ -18,10 +18,11 @@
   --modified: var(--vscode-gitDecoration-modifiedResourceForeground, #d29922);
   --deleted: var(--vscode-gitDecoration-deletedResourceForeground, #f85149);
   --untracked: var(--vscode-gitDecoration-untrackedResourceForeground, #3fb950);
-  /* IDEA Commit panel (Darcula): lighter blue / coral, medium-blue selection */
-  --changes-file-name: #6dabf5;
-  --unversioned-file-name: #da8870;
-  --ignored-file-name: #8c8c8c;
+  /* IDEA-like name colors, one step deeper / less washed than pale mix */
+  --changes-file-name: #4f93dc;
+  --unversioned-file-name: #c87866;
+  --ignored-file-name: #8a8a8a;
+  --folder-icon: color-mix(in srgb, #c9b06a 72%, var(--vscode-icon-foreground, var(--fg)));
   --file-row-selected-bg: #3f6794;
   --file-row-hover-bg: color-mix(in srgb, var(--fg) 6%, transparent);
   --diff-add-bg: color-mix(in srgb, var(--added) 18%, transparent);
@@ -580,7 +581,7 @@ body.sidebar-mode .file-list {
   padding: 4px 10px 2px 20px;
   font-size: 12px;
   font-weight: 600;
-  opacity: 0.92;
+  opacity: 1;
 }
 
 .repo-subgroup-title.collapsible {
@@ -737,7 +738,7 @@ body.panel-busy .repo-sync-btn {
 }
 
 .repo-subgroup.focused .repo-subgroup-name {
-  color: var(--vscode-gitDecoration-modifiedResourceForeground, var(--modified));
+  color: var(--changes-file-name);
 }
 
 .repo-subgroup.collapsed {
@@ -769,8 +770,8 @@ body.panel-busy .repo-sync-btn {
   padding-left: calc(8px + (var(--tree-depth, 0) * 14px));
   border-radius: 4px;
   font-size: 12px;
-  font-weight: 600;
-  opacity: 0.92;
+  font-weight: 500;
+  opacity: 1;
   cursor: pointer;
   user-select: none;
 }
@@ -813,8 +814,8 @@ body.panel-busy .repo-sync-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--vscode-icon-foreground, var(--vscode-foreground));
-  opacity: 0.85;
+  color: var(--folder-icon);
+  opacity: 0.95;
 }
 
 .dir-group-icon svg {
@@ -829,6 +830,7 @@ body.panel-busy .repo-sync-btn {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--fg);
 }
 
 .dir-group-count {
@@ -898,6 +900,7 @@ body.panel-busy .repo-sync-btn {
   letter-spacing: -0.02em;
   flex-shrink: 0;
   user-select: none;
+  opacity: 0.9;
 }
 
 .file-type-icon.mid {
@@ -910,8 +913,8 @@ body.panel-busy .repo-sync-btn {
 }
 
 .file-type-icon.folder {
-  color: var(--vscode-icon-foreground, var(--vscode-foreground));
-  opacity: 0.85;
+  color: var(--folder-icon);
+  opacity: 0.95;
 }
 
 .file-type-icon.folder svg {
@@ -941,13 +944,13 @@ body.panel-busy .repo-sync-btn {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .file-name {
   flex-shrink: 0;
-  font-weight: 600;
-  font-size: 14px;
+  font-weight: 500;
+  font-size: 13px;
   color: var(--fg);
 }
 
