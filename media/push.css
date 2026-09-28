@@ -405,7 +405,8 @@ body.is-commit-split-resizing * {
   width: 14px;
   height: 14px;
   flex-shrink: 0;
-  color: #e2b340;
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
+  opacity: 0.85;
 }
 
 .push-dir-icon svg {

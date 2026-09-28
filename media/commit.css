@@ -813,8 +813,8 @@ body.panel-busy .repo-sync-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #e2b340;
-  opacity: 0.95;
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
+  opacity: 0.85;
 }
 
 .dir-group-icon svg {
@@ -910,7 +910,8 @@ body.panel-busy .repo-sync-btn {
 }
 
 .file-type-icon.folder {
-  color: #e2b340;
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
+  opacity: 0.85;
 }
 
 .file-type-icon.folder svg {
