@@ -562,7 +562,7 @@
   }
 
   function defaultCheckedRoots() {
-    // Explicit host selection (N↑, Commit and Push, conflict resume) wins.
+    // Explicit host selection (Commit and Push, conflict resume) wins.
     if (payload.selectionRepoRoots?.length) {
       return new Set(payload.selectionRepoRoots.map(normalizeRepoRoot));
     }

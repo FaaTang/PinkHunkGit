@@ -2679,7 +2679,7 @@
     const { repoRoot, groupId, unversionedGroup, category, ignoredGroup } = groupContext;
 
     head.addEventListener('mousedown', (e) => {
-      if (e.button !== 0 || e.target.closest('input') || e.target.closest('.repo-sync-btn')) {
+      if (e.button !== 0 || e.target.closest('input')) {
         return;
       }
       if (e.target.closest('.group-title-chevron') || e.target.closest('.repo-subgroup-chevron') || e.target.closest('.dir-group-chevron')) {
@@ -2698,7 +2698,7 @@
         e.preventDefault();
         return;
       }
-      if (e.target.closest('input') || e.target.closest('.repo-sync-btn')) {
+      if (e.target.closest('input')) {
         return;
       }
       const onChevron =
@@ -2722,7 +2722,7 @@
         e.preventDefault();
         return;
       }
-      if (e.target.closest('input') || e.target.closest('.repo-sync-btn')) {
+      if (e.target.closest('input')) {
         return;
       }
       if (e.target.closest('.group-title-chevron') || e.target.closest('.repo-subgroup-chevron') || e.target.closest('.dir-group-chevron')) {
@@ -2734,7 +2734,7 @@
     });
 
     head.addEventListener('contextmenu', (e) => {
-      if (e.target.closest('input') || e.target.closest('.repo-sync-btn')) {
+      if (e.target.closest('input')) {
         return;
       }
       e.preventDefault();
@@ -2876,97 +2876,6 @@
     return wrap;
   }
 
-  /**
-   * Ahead/behind Pull / Push after the branch badge — Changes rows only.
-   * Unversioned / Ignored keep empty slots so count + branch stay column-aligned.
-   */
-  function renderRepoSyncControls(repo) {
-    const hasUpstream = !!(repo && repo.upstream);
-    const behind =
-      typeof repo?.behind === 'number' && Number.isFinite(repo.behind) ? Math.max(0, repo.behind) : hasUpstream ? 0 : null;
-    const ahead =
-      typeof repo?.ahead === 'number' && Number.isFinite(repo.ahead) ? Math.max(0, repo.ahead) : hasUpstream ? 0 : null;
-    if (behind === null && ahead === null) {
-      return null;
-    }
-
-    const wrap = document.createElement('span');
-    wrap.className = 'repo-sync';
-    wrap.setAttribute('role', 'group');
-    wrap.setAttribute('aria-label', 'Pull / Push');
-
-    const pullBtn = document.createElement('button');
-    pullBtn.type = 'button';
-    pullBtn.className = 'repo-sync-btn repo-sync-pull';
-    const behindCount = behind ?? 0;
-    pullBtn.textContent = `${behindCount}\u2193`;
-    pullBtn.dataset.repoRoot = repo.rootPath;
-    if (behindCount > 0) {
-      pullBtn.classList.add('has-count');
-    }
-    if (!hasUpstream) {
-      pullBtn.disabled = true;
-      pullBtn.title = 'No upstream branch configured';
-    } else {
-      pullBtn.title =
-        behindCount === 1
-          ? `Pull 1 commit from ${repo.upstream}`
-          : `Pull ${behindCount} commits from ${repo.upstream}`;
-      pullBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (workspace.busy || generatingMessage || pullBtn.disabled) {
-          return;
-        }
-        post({ type: 'pullRepo', repoRoot: repo.rootPath });
-      });
-    }
-
-    const pushBtn = document.createElement('button');
-    pushBtn.type = 'button';
-    pushBtn.className = 'repo-sync-btn repo-sync-push';
-    const aheadCount = ahead ?? 0;
-    pushBtn.textContent = `${aheadCount}\u2191`;
-    pushBtn.dataset.repoRoot = repo.rootPath;
-    if (aheadCount > 0) {
-      pushBtn.classList.add('has-count');
-    }
-    if (!hasUpstream && aheadCount === 0) {
-      pushBtn.disabled = true;
-      pushBtn.title = 'No upstream branch configured';
-    } else {
-      pushBtn.title =
-        aheadCount === 1
-          ? `Push 1 commit${repo.upstream ? ` to ${repo.upstream}` : ''}`
-          : `Push ${aheadCount} commits${repo.upstream ? ` to ${repo.upstream}` : ''}`;
-      pushBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (workspace.busy || generatingMessage || pushBtn.disabled) {
-          return;
-        }
-        post({ type: 'openPushDialog', repoRoot: repo.rootPath });
-      });
-    }
-
-    wrap.appendChild(pullBtn);
-    wrap.appendChild(pushBtn);
-    return wrap;
-  }
-
-  function renderRepoSyncSlot(repo, groupId) {
-    const slot = document.createElement('span');
-    slot.className = 'repo-sync-slot';
-    if (groupId !== 'changes') {
-      return slot;
-    }
-    const syncEl = renderRepoSyncControls(repo);
-    if (syncEl) {
-      slot.appendChild(syncEl);
-    }
-    return slot;
-  }
-
   function renderRepoSubgroup(repo, items, groupId, unversionedGroup, focusedRoot, ignoredGroup = false) {
     const wrap = document.createElement('div');
     wrap.className = 'repo-subgroup';
@@ -3028,6 +2937,7 @@
     const name = document.createElement('span');
     name.className = 'repo-subgroup-name';
     name.textContent = repo.name;
+    name.title = repo.name;
 
     const meta = document.createElement('div');
     meta.className = 'repo-subgroup-meta';
@@ -3049,7 +2959,6 @@
       badge.title = '';
     }
     meta.appendChild(badge);
-    meta.appendChild(renderRepoSyncSlot(repo, groupId));
 
     head.appendChild(selectAll);
     head.appendChild(chevron);
@@ -3249,7 +3158,7 @@
           e.preventDefault();
           return;
         }
-        if (e.target.closest('input') || e.target.closest('.repo-sync-btn')) {
+        if (e.target.closest('input')) {
           return;
         }
         if (e.target.closest('.dir-group-chevron')) {
@@ -3270,7 +3179,7 @@
           e.preventDefault();
           return;
         }
-        if (e.target.closest('input') || e.target.closest('.repo-sync-btn')) {
+        if (e.target.closest('input')) {
           return;
         }
         if (e.target.closest('.dir-group-chevron')) {
@@ -3282,7 +3191,7 @@
       });
 
       head.addEventListener('contextmenu', (e) => {
-        if (e.target.closest('input') || e.target.closest('.repo-sync-btn')) {
+        if (e.target.closest('input')) {
           return;
         }
         e.preventDefault();
@@ -3424,7 +3333,7 @@
         e.preventDefault();
         return;
       }
-      if (e.target.closest('input') || e.target.closest('.repo-sync-btn')) {
+      if (e.target.closest('input')) {
         return;
       }
       handleFileSelectionClick(e, entry, groupContext, indexInGroup);
@@ -3436,7 +3345,7 @@
         e.preventDefault();
         return;
       }
-      if (e.target.closest('input') || e.target.closest('.repo-sync-btn')) {
+      if (e.target.closest('input')) {
         return;
       }
       e.preventDefault();
