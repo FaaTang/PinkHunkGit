@@ -43,7 +43,7 @@ npm run package
 ## Features
 
 - Dedicated Commit panel in the Activity Bar
-- Changes / Unversioned Files groups (IDEA-style); repositories collapsed by default (categories stay open); Unversioned / Ignored hide repositories with no files; Expand All / Collapse All apply to the selected group, repository, or folder — with a confirm dialog when none is selected
+- Changes / Unversioned Files groups (IDEA-style); repositories collapsed by default (categories stay open); Unversioned / Ignored hide repositories with no files; only repositories under current workspace folders are listed (linked worktrees outside the workspace, e.g. Cursor Agent checkouts, are hidden); Expand All / Collapse All apply to the selected group, repository, or folder — with a confirm dialog when none is selected
 - Check files to include in commit; right-click for Diff / Rollback / Open File / Reveal in Explorer
 - Commit / Commit and Push; multi-repo switching
 - Per-repository row shows name + color icon, selected/total file count, and branch (IDEA-style three fields)

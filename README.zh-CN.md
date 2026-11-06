@@ -43,7 +43,7 @@ npm run package
 ## 功能
 
 - 左侧独立 Commit 面板（Activity Bar）
-- Changes / Unversioned Files 分组（仿 IDEA）；默认按仓库收起（分组展开）；Unversioned / Ignored 在仓库无文件时不显示该仓库；全部展开 / 全部收起作用于当前选中的分组、仓库或文件夹，未选中时二次确认后作用于全部
+- Changes / Unversioned Files 分组（仿 IDEA）；默认按仓库收起（分组展开）；Unversioned / Ignored 在仓库无文件时不显示该仓库；仅列出落在当前工作区文件夹内的仓库（隐藏 Cursor Agent 等挂在工作区外的 linked worktree）；全部展开 / 全部收起作用于当前选中的分组、仓库或文件夹，未选中时二次确认后作用于全部
 - 勾选纳入提交；右键 Diff / 回滚 / 打开文件 / 定位资源管理器
 - Commit / Commit and Push；多仓库切换
 - 仓库行仅显示三维信息：仓库名 + 颜色图标、已勾选/总文件数、分支（仿 IDEA）

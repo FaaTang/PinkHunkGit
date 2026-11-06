@@ -406,7 +406,7 @@ export class GitService implements vscode.Disposable {
 		) {
 			return;
 		}
-		const repos = this.api?.repositories ?? [];
+		const repos = this.listWorkspaceRepositories();
 		if (!repos.length) {
 			return;
 		}
@@ -1025,17 +1025,37 @@ export class GitService implements vscode.Disposable {
 	}
 
 	getRepositoryCount(): number {
-		return this.api?.repositories.length ?? 0;
+		return this.listWorkspaceRepositories().length;
 	}
 
 	getRepositoryList(): Array<{ rootPath: string; name: string }> {
-		if (!this.api) {
-			return [];
-		}
-		return this.api.repositories.map((repo) => ({
+		return this.listWorkspaceRepositories().map((repo) => ({
 			rootPath: repo.rootUri.fsPath,
 			name: this.repoDisplayName(repo.rootUri.fsPath),
 		}));
+	}
+
+	/**
+	 * Repositories that belong to the current workspace folders.
+	 * vscode.git also opens linked worktrees outside the workspace (e.g. Cursor
+	 * agent checkouts under ~/.cursor/worktrees) — hide those from the Commit UI.
+	 */
+	private listWorkspaceRepositories(): Repository[] {
+		if (!this.api) {
+			return [];
+		}
+		return this.api.repositories.filter((repo) =>
+			this.isRepoInWorkspaceFolders(repo.rootUri.fsPath)
+		);
+	}
+
+	/** True when repo root is a workspace folder or nested under one. */
+	private isRepoInWorkspaceFolders(root: string): boolean {
+		const folders = vscode.workspace.workspaceFolders;
+		if (!folders?.length) {
+			return true;
+		}
+		return folders.some((folder) => isPathInsideRoot(root, folder.uri.fsPath));
 	}
 
 	async pullAllRepositories(
@@ -1046,7 +1066,7 @@ export class GitService implements vscode.Disposable {
 			throw new Error('VS Code Git extension is not available.');
 		}
 
-		let repositories = [...this.api.repositories];
+		let repositories = this.listWorkspaceRepositories();
 		if (repoRoots?.length) {
 			const wanted = new Set(repoRoots.map((root) => root.replace(/\\/g, '/').toLowerCase()));
 			repositories = repositories.filter((repo) =>
@@ -1093,7 +1113,7 @@ export class GitService implements vscode.Disposable {
 	}
 
 	setActiveRepository(root: string): void {
-		const repo = this.api?.repositories.find((r) => pathsEqual(r.rootUri.fsPath, root));
+		const repo = this.listWorkspaceRepositories().find((r) => pathsEqual(r.rootUri.fsPath, root));
 		if (!repo) {
 			throw new Error('Repository not found in workspace.');
 		}
@@ -1103,10 +1123,12 @@ export class GitService implements vscode.Disposable {
 
 	getActiveRepository(): Repository | undefined {
 		this.ensureActiveRepository();
-		if (!this.api || !this.activeRepoRoot) {
+		if (!this.activeRepoRoot) {
 			return undefined;
 		}
-		return this.api.repositories.find((r) => pathsEqual(r.rootUri.fsPath, this.activeRepoRoot!));
+		return this.listWorkspaceRepositories().find((r) =>
+			pathsEqual(r.rootUri.fsPath, this.activeRepoRoot!)
+		);
 	}
 
 	/** True until `init()` reaches API-ready (success path) or fails. */
@@ -1152,7 +1174,7 @@ export class GitService implements vscode.Disposable {
 			};
 		}
 
-		const repos = this.api.repositories;
+		const repos = this.listWorkspaceRepositories();
 		if (!repos.length) {
 			// Still hunting for roots — avoid flashing "not a Git repository".
 			if (this.discovering) {
@@ -1160,6 +1182,15 @@ export class GitService implements vscode.Disposable {
 					ok: false,
 					loading: true,
 					hint: 'Loading Git...',
+					repositories: [],
+					active: emptyActive,
+				};
+			}
+			// vscode.git may still hold external linked worktrees; treat as empty workspace.
+			if (this.api.repositories.length > 0) {
+				return {
+					ok: false,
+					error: 'No Git repository inside the current workspace folders.',
 					repositories: [],
 					active: emptyActive,
 				};
@@ -1202,14 +1233,13 @@ export class GitService implements vscode.Disposable {
 	}
 
 	private ensureActiveRepository(): void {
-		if (!this.api?.repositories.length) {
+		const repos = this.listWorkspaceRepositories();
+		if (!repos.length) {
 			return;
 		}
 
 		if (this.pinnedRepoRoot) {
-			const pinned = this.api.repositories.find((r) =>
-				pathsEqual(r.rootUri.fsPath, this.pinnedRepoRoot!)
-			);
+			const pinned = repos.find((r) => pathsEqual(r.rootUri.fsPath, this.pinnedRepoRoot!));
 			if (pinned) {
 				this.activeRepoRoot = pinned.rootUri.fsPath;
 				return;
@@ -1218,13 +1248,13 @@ export class GitService implements vscode.Disposable {
 		}
 
 		const fromEditor = this.repoForUri(vscode.window.activeTextEditor?.document.uri);
-		if (fromEditor) {
+		if (fromEditor && this.isRepoInWorkspaceFolders(fromEditor.rootUri.fsPath)) {
 			this.activeRepoRoot = fromEditor.rootUri.fsPath;
 			return;
 		}
 
 		const current = this.activeRepoRoot
-			? this.api.repositories.find((r) => pathsEqual(r.rootUri.fsPath, this.activeRepoRoot!))
+			? repos.find((r) => pathsEqual(r.rootUri.fsPath, this.activeRepoRoot!))
 			: undefined;
 		if (current) {
 			return;
@@ -1248,19 +1278,19 @@ export class GitService implements vscode.Disposable {
 		];
 		for (const uri of candidates) {
 			const repo = this.repoForUri(uri);
-			if (repo) {
+			if (repo && this.isRepoInWorkspaceFolders(repo.rootUri.fsPath)) {
 				return repo;
 			}
 		}
 
 		for (const folder of vscode.workspace.workspaceFolders ?? []) {
 			const repo = this.api.getRepository(folder.uri);
-			if (repo) {
+			if (repo && this.isRepoInWorkspaceFolders(repo.rootUri.fsPath)) {
 				return repo;
 			}
 		}
 
-		return this.api.repositories[0];
+		return this.listWorkspaceRepositories()[0];
 	}
 
 	private buildSnapshotForRepo(repo: Repository): RepoSnapshot {
@@ -1400,15 +1430,16 @@ export class GitService implements vscode.Disposable {
 
 	/** Refresh ignored-file cache (traditional mode: dirs as single entries). */
 	async refreshIgnoredFiles(repoRoots?: string[]): Promise<void> {
-		if (!this.api?.repositories.length) {
+		const workspaceRepos = this.listWorkspaceRepositories();
+		if (!workspaceRepos.length) {
 			this.ignoredByRoot.clear();
 			return;
 		}
 		const repos = repoRoots?.length
-			? this.api.repositories.filter((repo) =>
+			? workspaceRepos.filter((repo) =>
 					repoRoots.some((root) => pathsEqual(repo.rootUri.fsPath, root))
 				)
-			: [...this.api.repositories];
+			: workspaceRepos;
 		if (!repos.length) {
 			return;
 		}
@@ -1667,7 +1698,8 @@ export class GitService implements vscode.Disposable {
 		this.pendingIgnoredRoots.clear();
 
 		const run = (async () => {
-			if (!this.api?.repositories.length) {
+			const workspaceRepos = this.listWorkspaceRepositories();
+			if (!workspaceRepos.length) {
 				this.bindRepositoryEvents();
 				this.ignoredByRoot.clear();
 				this._onDidChange.fire();
@@ -1675,8 +1707,8 @@ export class GitService implements vscode.Disposable {
 			}
 
 			const repos = statusAll
-				? this.api.repositories
-				: this.api.repositories.filter((repo) =>
+				? workspaceRepos
+				: workspaceRepos.filter((repo) =>
 						statusRoots.some((root) => pathsEqual(repo.rootUri.fsPath, root))
 					);
 
@@ -2546,8 +2578,9 @@ export class GitService implements vscode.Disposable {
 
 		// Re-read Git state after applyCommitSelection / add so we don't skip repos
 		// whose files were only staged moments ago (stale snapshot).
-		if (this.api?.repositories.length) {
-			await Promise.all(this.api.repositories.map((repo) => repo.status()));
+		const workspaceRepos = this.listWorkspaceRepositories();
+		if (workspaceRepos.length) {
+			await Promise.all(workspaceRepos.map((repo) => repo.status()));
 		}
 
 		const workspace = this.getWorkspaceSnapshot();
@@ -4047,7 +4080,7 @@ export class GitService implements vscode.Disposable {
 			this.disposeGitMetadataWatchers();
 			return;
 		}
-		for (const repo of this.api.repositories) {
+		for (const repo of this.listWorkspaceRepositories()) {
 			this.repoDisposables.push(
 				repo.state.onDidChange(() => {
 					if (this.refreshSuspended > 0) {
@@ -4074,7 +4107,7 @@ export class GitService implements vscode.Disposable {
 			return;
 		}
 		const wanted = new Map<string, string>();
-		for (const repo of this.api.repositories) {
+		for (const repo of this.listWorkspaceRepositories()) {
 			const root = repo.rootUri.fsPath;
 			wanted.set(normalizePathKey(root), root);
 		}
