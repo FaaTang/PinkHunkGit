@@ -1618,7 +1618,8 @@
   });
   mergeBtn.addEventListener('click', () => {
     if (modalState === 'rejected') {
-      post({ type: 'pushSyncPreview', mode: 'merge', repoRoot: pushRepoRoot || undefined });
+      // One click: merge this repo + remaining siblings (no per-repo preview), then Ask Push.
+      post({ type: 'pushBatchMerge', repoRoot: pushRepoRoot || undefined });
       return;
     }
     if (modalState === 'syncPreview') {

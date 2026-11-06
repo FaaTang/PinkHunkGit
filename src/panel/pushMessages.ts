@@ -123,6 +123,8 @@ export type PushWebviewToHost =
 	| { type: 'pushSyncPreview'; mode: SyncMode; repoRoot?: string }
 	| { type: 'pushSyncConfirm'; mode: SyncMode; repoRoot?: string }
 	| { type: 'pushSync'; mode: SyncMode; repoRoot?: string }
+	/** From Rejected: merge current + remaining repos without per-repo preview; stop at Ask Push. */
+	| { type: 'pushBatchMerge'; repoRoot?: string }
 	| { type: 'syncAbort'; repoRoot?: string }
 	| { type: 'syncContinue'; repoRoot?: string }
 	| { type: 'openConflict'; path: string; repoRoot?: string }

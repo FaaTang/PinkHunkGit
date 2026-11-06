@@ -19,6 +19,13 @@ export class PushDialogProvider implements vscode.Disposable {
 	private pendingPushTags = false;
 	/** When true, remaining roots after conflict resolution resume via pushWithAutoMerge. */
 	private resumeAutoMerge = false;
+	/**
+	 * Batch merge from Rejected (or after conflict Continue / blocker preview confirm):
+	 * keep merging remaining roots, then stop at Ask Push (do not auto-push).
+	 */
+	private resumeBatchMerge = false;
+	/** Roots already merged (or skipped as up-to-date) in the current batch, awaiting Push. */
+	private batchMergePushRoots: string[] = [];
 	private pendingOpenNewTag = false;
 	private webviewReady = false;
 	private readyWaiters: Array<() => void> = [];
@@ -49,6 +56,8 @@ export class PushDialogProvider implements vscode.Disposable {
 		}
 		this.pendingOpenNewTag = !!options?.openNewTag;
 		this.resumeAutoMerge = false;
+		this.resumeBatchMerge = false;
+		this.batchMergePushRoots = [];
 		this.dialogPhase = 'confirm';
 		this.conflictContext = undefined;
 		await this.git.refresh();
@@ -84,6 +93,8 @@ export class PushDialogProvider implements vscode.Disposable {
 				this.applyPendingSelection = false;
 				this.pendingPushTags = false;
 				this.resumeAutoMerge = false;
+				this.resumeBatchMerge = false;
+				this.batchMergePushRoots = [];
 				this.pendingOpenNewTag = false;
 				this.webviewReady = false;
 				this.conflictContext = undefined;
@@ -243,6 +254,8 @@ export class PushDialogProvider implements vscode.Disposable {
 		this.applyPendingSelection = false;
 		this.pendingPushTags = false;
 		this.resumeAutoMerge = false;
+		this.resumeBatchMerge = false;
+		this.batchMergePushRoots = [];
 		this.pendingOpenNewTag = false;
 		this.webviewReady = false;
 	}
@@ -328,6 +341,8 @@ export class PushDialogProvider implements vscode.Disposable {
 						? [...this.pendingPushRoots]
 						: undefined;
 					this.resumeAutoMerge = false;
+					this.resumeBatchMerge = false;
+					this.batchMergePushRoots = [];
 					if (remaining?.length) {
 						await this.show({ pendingPushRoots: remaining });
 					} else {
@@ -378,6 +393,11 @@ export class PushDialogProvider implements vscode.Disposable {
 				case 'pushSyncPreview':
 					await this.runSyncPreview(msg.mode, msg.repoRoot);
 					break;
+				case 'pushBatchMerge':
+					await this.withBusy(async () => {
+						await this.runBatchMergeThenAskPush(msg.repoRoot);
+					}, 'Merging…');
+					break;
 				case 'pushSyncConfirm':
 				case 'pushSync':
 					await this.withBusy(async () => {
@@ -393,6 +413,8 @@ export class PushDialogProvider implements vscode.Disposable {
 							? [...this.pendingPushRoots]
 							: undefined;
 						this.resumeAutoMerge = false;
+						this.resumeBatchMerge = false;
+						this.batchMergePushRoots = [];
 						if (remaining?.length) {
 							await this.show({ pendingPushRoots: remaining });
 						} else {
@@ -743,6 +765,145 @@ export class PushDialogProvider implements vscode.Disposable {
 		await this.handleSyncResult(result, repoRoot);
 	}
 
+	/**
+	 * Rejected → Merge: merge the current repo and all remaining siblings without
+	 * per-repo preview. Stop at Ask Push when every merge is clean.
+	 */
+	private async runBatchMergeThenAskPush(startRoot?: string): Promise<void> {
+		const siblings = this.pendingPushRoots?.length ? [...this.pendingPushRoots] : [];
+		const queue: string[] = [];
+		const seed =
+			startRoot ||
+			this.git.getWorkspaceSnapshot().active.rootPath ||
+			undefined;
+		if (seed) {
+			queue.push(seed);
+		}
+		for (const root of siblings) {
+			if (!queue.some((item) => this.sameRoot(item, root))) {
+				queue.push(root);
+			}
+		}
+		if (!queue.length) {
+			this.post({ type: 'error', message: 'No repository to merge.' });
+			return;
+		}
+		this.resumeBatchMerge = true;
+		this.batchMergePushRoots = [];
+		await this.processBatchMergeQueue(queue);
+	}
+
+	private async processBatchMergeQueue(queue: string[]): Promise<void> {
+		for (let i = 0; i < queue.length; i++) {
+			const root = queue[i];
+			const remaining = queue.slice(i + 1);
+			this.pendingPushRoots = remaining.length ? remaining : undefined;
+
+			try {
+				this.git.setActiveRepository(root);
+			} catch {
+				// keep current
+			}
+
+			await this.git.refresh();
+			const snap =
+				this.git.getWorkspaceSnapshot().repositories.find((r) => this.sameRoot(r.rootPath, root)) ??
+				this.git.getWorkspaceSnapshot().active;
+			const label = snap.name || root;
+			const blockers = await this.git.getMergeBlockers(root);
+			if (blockers.length) {
+				// Need manual review for this repo; keep batch flag so Confirm continues the queue.
+				this.resumeBatchMerge = true;
+				await this.runSyncPreview('merge', root);
+				return;
+			}
+
+			const behind = snap.behind ?? 0;
+			if (behind > 0) {
+				this.post({ type: 'busy', busy: true, message: `Merging ${label}…` });
+				let syncResult: Awaited<ReturnType<GitService['syncWithUpstream']>>;
+				try {
+					syncResult = await this.git.syncWithUpstream('merge', root);
+				} finally {
+					this.post({ type: 'busy', busy: true, message: 'Merging…' });
+				}
+				if (syncResult.status === 'conflict') {
+					this.resumeBatchMerge = true;
+					await this.handleSyncResult(syncResult, root);
+					return;
+				}
+				if (syncResult.status === 'failed') {
+					this.resumeBatchMerge = false;
+					this.batchMergePushRoots = [];
+					this.postPushRejected(syncResult.message, root);
+					return;
+				}
+			}
+
+			if (!this.batchMergePushRoots.some((item) => this.sameRoot(item, root))) {
+				this.batchMergePushRoots.push(root);
+			}
+		}
+
+		this.resumeBatchMerge = false;
+		await this.showAskPushForBatch([...this.batchMergePushRoots]);
+	}
+
+	private rememberBatchMergedRoot(repoRoot?: string): void {
+		if (!repoRoot) {
+			return;
+		}
+		if (!this.batchMergePushRoots.some((item) => this.sameRoot(item, repoRoot))) {
+			this.batchMergePushRoots.push(repoRoot);
+		}
+	}
+
+	private async showAskPushForBatch(roots: string[]): Promise<void> {
+		const unique = roots.filter(
+			(root, index, all) => all.findIndex((item) => this.sameRoot(item, root)) === index
+		);
+		if (!unique.length) {
+			this.resumeBatchMerge = false;
+			this.batchMergePushRoots = [];
+			await this.sendState();
+			return;
+		}
+
+		const first = unique[0];
+		const rest = unique.slice(1);
+		this.pendingPushRoots = rest.length ? rest : undefined;
+		this.resumeAutoMerge = false;
+		this.resumeBatchMerge = false;
+		this.batchMergePushRoots = [];
+		this.conflictContext = undefined;
+		this.dialogPhase = 'alt';
+
+		try {
+			this.git.setActiveRepository(first);
+		} catch {
+			// keep current
+		}
+		await this.git.refresh();
+		const ctx = this.git.getPushContext();
+		const count = unique.length;
+		const summary =
+			count === 1
+				? `Merge completed. Push to ${ctx.upstream || 'remote'} now?`
+				: `Merged ${count} repositories. Push to remote now?`;
+		this.post({
+			type: 'showAskPush',
+			payload: {
+				repoRoot: first,
+				repoName: ctx.repoName,
+				branch: ctx.branch,
+				upstream: ctx.upstream,
+				ahead: ctx.ahead,
+				behind: ctx.behind,
+				summary,
+			},
+		});
+	}
+
 	private async handleSyncResult(
 		result: Awaited<ReturnType<GitService['syncWithUpstream']>>,
 		repoRoot?: string
@@ -770,14 +931,29 @@ export class PushDialogProvider implements vscode.Disposable {
 		}
 
 		if (result.status === 'failed') {
+			this.resumeBatchMerge = false;
+			this.batchMergePushRoots = [];
 			vscode.window.showErrorMessage(result.message);
 			this.postPushRejected(result.message, resolvedRoot);
 			return;
 		}
 
+		this.conflictContext = undefined;
+
+		// Batch merge path: record this root, then merge remaining siblings before Ask Push.
+		if (this.resumeBatchMerge && result.mode === 'merge') {
+			this.rememberBatchMergedRoot(resolvedRoot);
+			const remaining = this.pendingPushRoots?.length ? [...this.pendingPushRoots] : [];
+			if (remaining.length) {
+				await this.processBatchMergeQueue(remaining);
+				return;
+			}
+			await this.showAskPushForBatch([...this.batchMergePushRoots]);
+			return;
+		}
+
 		const modeLabel = result.mode === 'merge' ? 'Merge' : 'Rebase';
 		this.dialogPhase = 'alt';
-		this.conflictContext = undefined;
 		this.post({
 			type: 'showAskPush',
 			payload: {
